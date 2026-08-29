@@ -17,7 +17,20 @@ def main(argv=None):
     s.add_argument("--no-dispatcher", action="store_true", help="serve without the background dispatcher")
     s.add_argument("--interval", type=float, default=30.0, help="dispatcher tick seconds")
     sub.add_parser("wm", help="engine CLI passthrough: hermes-hq wm <args>")
+    im = sub.add_parser("import", help="import a legacy Work Manager dir (wm.db + runs/) into the hq home")
+    im.add_argument("src_dir")
+    im.add_argument("--force", action="store_true", help="replace an existing non-empty hq.db (a backup is kept)")
+    im.add_argument("--no-runs", action="store_true", help="skip copying runs/ artifacts")
     a = p.parse_args(argv)
+    if a.cmd == "import":
+        import json
+        from backend.importer import import_wm, ImportError_
+        try:
+            print(json.dumps(import_wm(a.src_dir, force=a.force, copy_runs=not a.no_runs), indent=2))
+        except ImportError_ as e:
+            print("import refused: %s" % e, file=sys.stderr)
+            return 2
+        return 0
     if a.cmd == "serve":
         import uvicorn
         from backend.app import create_app

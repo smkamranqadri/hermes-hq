@@ -2,7 +2,7 @@
 
 Decisions: snapshot the live WM now and cut over at the end of Group 1 (not before); reads before writes; Tasks page = list by default grouped by human state, board optional, newest first.
 
-## 1a Read — ACTIVE
+## 1a Read — DONE 2026-08-29 (see State for proof)
 Scope
 - `hermes-hq import <wm-dir>`: copy `wm.db` → `hq.db`, copy `runs/` minus `runs/worktrees/`, rewrite `/opt/data/work-manager/` prefixes in `runs.brief_path`, `runs.result_paths`, `runs.workdir`. Idempotent; refuses non-empty `hq.db` without `--force`. Never edits data.
 - `backend/status.py`: engine status → human state + reason (single source; UI `status.ts` mirrors it, test asserts agreement).
@@ -18,5 +18,5 @@ Acceptance
 
 Out of scope: writes, Overview, Agents, Chat, Files, cron/cutover, data cleanup.
 
-## 1b Write — NEXT
+## 1b Write — NEXT (not planned in detail yet; run the plan command)
 Create project, create task, goal create/plan/release, mark-ready, approve, owner feedback → rework, retry failed, dispatcher pause/resume. Then cutover: fresh re-import, disable old crons (`wm-dispatch`, `wm completion watchdog`, `wm-planning-pickup`), enable new dispatcher.

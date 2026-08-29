@@ -4,6 +4,10 @@ import { TopBar, TABS, TOOLS } from './components/TopBar'
 import { StatusBadge } from './components/StatusBadge'
 import { GlassCard, PageHeader } from './components/GlassCard'
 import { usePageTitle } from './usePageTitle'
+import { Projects } from './pages/Projects'
+import { ProjectDetail } from './pages/ProjectDetail'
+import { Tasks } from './pages/Tasks'
+import { TaskDetail } from './pages/TaskDetail'
 
 function Placeholder({ title }: { title: string }) {
   usePageTitle(title)
@@ -43,7 +47,11 @@ export default function App() {
       <TopBar />
       <main>
         <Routes>
-          {[...TABS, ...TOOLS].map(([label, to]) => <Route key={to} path={to} element={<Placeholder title={label} />} />)}
+          {[...TABS, ...TOOLS].filter(([, to]) => to !== '/projects' && to !== '/tasks').map(([label, to]) => <Route key={to} path={to} element={<Placeholder title={label} />} />)}
+          <Route path="/projects" element={<Projects />} />
+          <Route path="/projects/:slug" element={<ProjectDetail />} />
+          <Route path="/tasks" element={<Tasks />} />
+          <Route path="/tasks/:id" element={<TaskDetail />} />
           <Route path="/system" element={<System />} />
         </Routes>
       </main>
