@@ -18,5 +18,28 @@ Acceptance
 
 Out of scope: writes, Overview, Agents, Chat, Files, cron/cutover, data cleanup.
 
-## 1b Write — NEXT (not planned in detail yet; run the plan command)
-Create project, create task, goal create/plan/release, mark-ready, approve, owner feedback → rework, retry failed, dispatcher pause/resume. Then cutover: fresh re-import, disable old crons (`wm-dispatch`, `wm completion watchdog`, `wm-planning-pickup`), enable new dispatcher.
+## 1b Write + cutover — ACTIVE (approved 2026-08-29)
+Decisions: password auth ships before any write is exposed; "unblock" for `blocked` = Reply→rework (owner feedback threaded into the next brief), Retry/Take-over secondary; failed/stalled → Retry primary; cutover only at a quiet moment with the owner present.
+
+Phases
+1. **Writes + auth (backend)** — `backend/auth.py`: `HERMES_HQ_PASSWORD` or generated (printed on serve + `$HERMES_HQ_HOME/password` 0600), `POST /api/login|logout`, signed cookie session, CSRF header on mutating requests, all `/api/*` behind login. Write routes, each a thin call into `core.wm_store`:
+   `POST /api/projects`, `/api/project/{slug}` (name/desc), `/api/project/{slug}/archive`;
+   `POST /api/goals`, `/api/goal/{id}/plan|planned|release|abandon`;
+   `POST /api/tasks` (project, title, desc, DoD, assignee, goal, review_policy, is_code, deps), `/api/task/{id}/mark-ready|feedback|retry|manual|assign`;
+   `POST /api/system/pause|resume|dispatch`.
+2. **UI** — login screen; New Project / New Task modals; goal card actions by status; Task detail action row from `human.action`; SYSTEM pause/resume/dispatch-now; toast + refetch after each write; confirms on release/retry/manual/pause; "snapshot mode" banner until cutover.
+3. **Cutover runbook** (owner present):
+   1. Old WM: `cd /opt/data/work-manager && ./wm status` → no `running` tasks; wait otherwise.
+   2. `hermes-hq import /opt/data/work-manager --force` (backup kept).
+   3. Disable Hermes crons `wm-dispatch`, `wm completion watchdog`, `wm-planning-pickup` (`hermes cron list` → pause/delete); note their ids for rollback.
+   4. Restart `hermes-hq serve` with dispatcher enabled but paused (`wm_meta.paused=1`).
+   5. Unpause from SYSTEM; watch first tick in `/api/system.dispatcher`; dispatch one small real task; confirm its run gets a session id.
+   6. Rollback = re-enable the crons; old WM untouched on disk.
+
+Acceptance
+- 401 without login; 200 after; POST without CSRF → 403.
+- UI-created project+task visible via `hermes-hq wm task show`; mark-ready→ready; feedback on a blocked task→rework with text stored; retry→ready; manual→manual; pause→tick reports paused. All writes appear in activity + transitions.
+- Screenshots: login, New Task modal, blocked Task detail action row, SYSTEM controls.
+- Cutover: crons disabled, dispatcher alive, real task dispatched with session id on the new side.
+
+Out of scope: Overview, agents page, chat, goal edit, project delete, multi-user.

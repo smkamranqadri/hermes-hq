@@ -26,6 +26,9 @@ Live WM (`/opt/data/work-manager/`, crons `wm-dispatch`, `wm completion watchdog
 ## Read API (Group 1a)
 `backend/api.py` (`/api/projects?archived`, `/api/project/{slug}`, `/api/goals`, `/api/tasks`, `/api/task/{id}`) over `backend/readers.py` (ported read-only reader) and `backend/tasks.py` (human-state envelope: active projects only, `stateOptions` ignore the state filter, order = state group then `updated_at DESC`). `backend/status.py` is the single mapping; `frontend/src/status.ts` mirrors it and `tests/backend/test_status.py` fails if they diverge. Every task payload carries `human: {state, reason, action}`; the UI never derives state itself.
 
+## Auth + unblock rules (decided 2026-08-29)
+Single password (`HERMES_HQ_PASSWORD`, else generated → serve log + `$HERMES_HQ_HOME/password`), cookie session, CSRF header on mutating requests, everything under `/api/*` behind login. Plain HTTP on LAN/Tailscale is accepted for a single owner; HTTPS is a reverse-proxy concern. Unblock semantics: `blocked` → primary action is owner feedback (→ `rework`, comment threaded into next brief); `failed`/`stalled` → `retry_task` (→ `ready`); `mark_manual` takes a task out of the queue. Writes only ever call `core.wm_store` functions.
+
 ## Engine rules carried over (non-negotiable)
 - Every task belongs to a project with a valid `primary_path` (default `/opt/data/projects/<slug>`, root configurable).
 - One persistent Hermes session per task run; session id must be deterministic, never "newest session".
