@@ -1,14 +1,14 @@
 import { useState } from 'react'
 import clsx from 'clsx'
 import { Menu } from './Menu'
-import { THEMES, FONT_GROUPS, MONO_FONTS, applyTheme, applyFonts, readThemePref, readFontPref, type ThemePref, type FontPref } from '../theme'
+import { THEMES, FONTS, applyTheme, applyFonts, readThemePref, readFontPref, type ThemePref, type FontId } from '../theme'
 
 // Theme swatches with descriptions + font groups, modelled on the Hermes dashboard picker.
 export function AppearanceMenu() {
   const [theme, setTheme] = useState<ThemePref>(() => readThemePref())
-  const [fonts, setFonts] = useState<FontPref>(() => readFontPref())
+  const [font, setFont] = useState<FontId>(() => readFontPref())
   const pickTheme = (t: ThemePref) => { setTheme(t); applyTheme(t) }
-  const pickFont = (patch: Partial<FontPref>) => { const next = { ...fonts, ...patch }; setFonts(next); applyFonts(next) }
+  const pickFont = (id: FontId) => { setFont(id); applyFonts(id) }
   const row = (active: boolean, onClick: () => void, children: React.ReactNode, cls?: string) => (
     <button type="button" onClick={onClick}
       className={clsx('flex w-full items-center gap-3 rounded-md px-2.5 py-1.5 text-left hover:bg-raised', active && 'bg-raised', cls)}>
@@ -34,14 +34,10 @@ export function AppearanceMenu() {
         </>))}
         <div className="my-2 border-t border-line" />
         <p className="px-2.5 pb-1 font-mono text-[10px] uppercase tracking-widest text-muted">Font</p>
-        {FONT_GROUPS.map(g => (
-          <div key={g.group}>
-            <p className="px-2.5 pt-2 pb-0.5 font-mono text-[9px] uppercase tracking-widest text-muted/70">{g.group}</p>
-            {g.fonts.map(f => row(fonts.body === f.id, () => pickFont({ body: f.id }), <span style={{ fontFamily: f.stack }} className="text-sm">{f.label}</span>))}
-          </div>
-        ))}
-        <p className="px-2.5 pt-2 pb-0.5 font-mono text-[9px] uppercase tracking-widest text-muted/70">Mono</p>
-        {MONO_FONTS.map(f => row(fonts.mono === f.id, () => pickFont({ mono: f.id }), <span style={{ fontFamily: f.stack }} className="text-sm">{f.label}</span>))}
+        {FONTS.map(f => row(font === f.id, () => pickFont(f.id), (
+          <span><span className="block text-sm" style={{ fontFamily: f.body }}>{f.label}</span>
+            <span className="block text-[11px] text-muted">{f.desc}</span></span>
+        )))}
       </div>
     </Menu>
   )

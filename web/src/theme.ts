@@ -11,30 +11,16 @@ export const THEMES = [
 export type ThemeId = (typeof THEMES)[number]['id']
 export type ThemePref = ThemeId | 'system'
 
-export const FONT_GROUPS: { group: string; fonts: { id: string; label: string; stack: string }[] }[] = [
-  { group: 'Sans', fonts: [
-    { id: 'system-sans', label: 'System Sans', stack: 'ui-sans-serif, system-ui, -apple-system, "Segoe UI", sans-serif' },
-    { id: 'inter', label: 'Inter', stack: '"Inter", ui-sans-serif, system-ui, sans-serif' },
-    { id: 'ibm-plex-sans', label: 'IBM Plex Sans', stack: '"IBM Plex Sans", ui-sans-serif, system-ui, sans-serif' },
-    { id: 'work-sans', label: 'Work Sans', stack: '"Work Sans", ui-sans-serif, system-ui, sans-serif' },
-    { id: 'atkinson', label: 'Atkinson Hyperlegible', stack: '"Atkinson Hyperlegible", ui-sans-serif, system-ui, sans-serif' },
-    { id: 'dm-sans', label: 'DM Sans', stack: '"DM Sans", ui-sans-serif, system-ui, sans-serif' },
-  ]},
-  { group: 'Serif', fonts: [
-    { id: 'system-serif', label: 'System Serif', stack: 'ui-serif, Georgia, "Times New Roman", serif' },
-    { id: 'spectral', label: 'Spectral', stack: '"Spectral", ui-serif, Georgia, serif' },
-    { id: 'fraunces', label: 'Fraunces', stack: '"Fraunces", ui-serif, Georgia, serif' },
-    { id: 'source-serif', label: 'Source Serif 4', stack: '"Source Serif 4", ui-serif, Georgia, serif' },
-  ]},
-]
-export const MONO_FONTS = [
-  { id: 'system-mono', label: 'System Mono', stack: 'ui-monospace, Menlo, Consolas, monospace' },
-  { id: 'jetbrains-mono', label: 'JetBrains Mono', stack: '"JetBrains Mono", ui-monospace, Menlo, monospace' },
-  { id: 'ibm-plex-mono', label: 'IBM Plex Mono', stack: '"IBM Plex Mono", ui-monospace, Menlo, monospace' },
-  { id: 'space-mono', label: 'Space Mono', stack: '"Space Mono", ui-monospace, Menlo, monospace' },
-]
-export const DEFAULT_FONTS = { body: 'inter', mono: 'jetbrains-mono' }
-export type FontPref = { body: string; mono: string }
+// One font choice. Bundled: Inter + JetBrains Mono (identical on every device).
+// "System" entries use whatever the viewing device has installed.
+export const FONTS = [
+  { id: 'default', label: 'Theme default', desc: 'Inter for text, JetBrains Mono for code', body: '"Inter", ui-sans-serif, system-ui, sans-serif', mono: '"JetBrains Mono", ui-monospace, Menlo, monospace' },
+  { id: 'jetbrains-mono', label: 'JetBrains Mono', desc: 'Mono everywhere', body: '"JetBrains Mono", ui-monospace, Menlo, monospace', mono: '"JetBrains Mono", ui-monospace, Menlo, monospace' },
+  { id: 'system-sans', label: 'System Sans', desc: 'Device sans-serif', body: 'ui-sans-serif, system-ui, -apple-system, "Segoe UI", sans-serif', mono: '"JetBrains Mono", ui-monospace, Menlo, monospace' },
+  { id: 'system-serif', label: 'System Serif', desc: 'Device serif', body: 'ui-serif, Georgia, "Times New Roman", serif', mono: '"JetBrains Mono", ui-monospace, Menlo, monospace' },
+  { id: 'system-mono', label: 'System Mono', desc: 'Device monospace everywhere', body: 'ui-monospace, Menlo, Consolas, monospace', mono: 'ui-monospace, Menlo, Consolas, monospace' },
+] as const
+export type FontId = (typeof FONTS)[number]['id']
 
 const KEY = 'hq-theme', FKEY = 'hq-fonts'
 const get = (k: string) => { try { return localStorage.getItem(k) } catch { return null } }
@@ -53,18 +39,17 @@ export function applyTheme(pref: ThemePref) {
   document.documentElement.setAttribute('data-theme', resolveTheme(pref))
   set(KEY, pref)
 }
-export function readFontPref(): FontPref {
+export function readFontPref(): FontId {
   const q = new URLSearchParams(window.location.search).get('font')
-  const stored = (() => { try { return JSON.parse(get(FKEY) || '{}') } catch { return {} } })()
-  return { ...DEFAULT_FONTS, ...stored, ...(q ? { body: q } : {}) }
+  if (q) { set(FKEY, q); return q as FontId }
+  return (get(FKEY) as FontId) || 'default'
 }
-export function applyFonts(pref: FontPref) {
-  const body = FONT_GROUPS.flatMap(g => g.fonts).find(f => f.id === pref.body) ?? FONT_GROUPS[0].fonts[1]
-  const mono = MONO_FONTS.find(f => f.id === pref.mono) ?? MONO_FONTS[1]
+export function applyFonts(id: FontId) {
+  const f = FONTS.find(x => x.id === id) ?? FONTS[0]
   const root = document.documentElement.style
-  root.setProperty('--hq-font-body', body.stack)
-  root.setProperty('--hq-font-mono', mono.stack)
-  set(FKEY, JSON.stringify(pref))
+  root.setProperty('--hq-font-body', f.body)
+  root.setProperty('--hq-font-mono', f.mono)
+  set(FKEY, f.id)
 }
 export function initAppearance() {
   applyTheme(readThemePref())
