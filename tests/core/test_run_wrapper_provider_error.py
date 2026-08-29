@@ -31,7 +31,7 @@ import sys
 import tempfile
 
 HERE = os.path.dirname(os.path.abspath(__file__))
-ENGINE = os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "..", "hq", "engine"); sys.path.insert(0, ENGINE)
+ENGINE = os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "..", "backend", "core"); sys.path.insert(0, ENGINE)
 
 TMP = os.path.realpath(tempfile.mkdtemp(prefix="wm_provider_err_"))
 RUNS = os.path.join(TMP, "runs")
