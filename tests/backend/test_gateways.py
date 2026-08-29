@@ -114,3 +114,28 @@ def test_refusals(env):
     with pytest.raises(ValueError, match="not enabled"):
         gw.ensure_running("coder", db_path=store.DEFAULT_DB_PATH)
     assert gw.credentials("orchestrator") == (8642, "rootkey")               # default: read, never written
+
+
+NO_SERVICE_HERMES = FAKE_HERMES.replace(
+    "  start)", "  start) echo 'Error: no gateway service installed for this profile' >&2; exit 1;;\n  run)").replace(
+    "PY\n    echo $! > \"$pidf\";;", "PY\n    wait;;").replace("<<'PY' &", "<<'PY' &")
+# `run` must stay in the foreground like the real CLI: exec the server and wait on it.
+
+
+def test_spawns_gateway_when_no_service(env, tmp_path):
+    """Bare host: `gateway start` fails (no service) -> hermes-hq owns a `gateway run` child."""
+    c, store, gw, root = env
+    shim = tmp_path / "hermes-shim"; shim.write_text(NO_SERVICE_HERMES)
+    db = store.DEFAULT_DB_PATH
+    gw.set_enabled("coder", True, db_path=db)
+    pid = gw._spawned_pid("coder", db)
+    assert pid and gw.healthy("coder")
+    assert (root / "cli.log").read_text().splitlines() == ["coder start", "coder run"]
+    con = store._connect(db); det = con.execute("SELECT detail FROM activity WHERE action='gateway_start'").fetchone()[0]; con.close()
+    assert "spawned pid" in det and "no gateway service" in det
+    assert gw.stop_started(db_path=db) == ["coder"]                  # serve exit kills our child
+    time.sleep(0.3)
+    assert not gw.healthy("coder") and gw._spawned_pid("coder", db) == 0
+    with pytest.raises(OSError):
+        os.kill(pid, 0)
+    assert "coder stop" not in (root / "cli.log").read_text()        # never asked a non-existent service
