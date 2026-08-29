@@ -4,10 +4,11 @@
 **hermes-hq is the live control plane since 2026-08-29 13:40 UTC.** `hermes-hq serve --host 0.0.0.0 --port 9010 --interval 20` with the dispatcher ON (log `/opt/data/hermes-hq-serve.log`, password `/opt/data/hermes-hq/password`). Old WM crons paused (not deleted): `dfe30ff9e8bf` wm-dispatch, `040334fe79ae` wm completion watchdog, `b84db989076d` wm-planning-pickup. Rollback = `hermes cron resume <id>` ×3 and stop hermes-hq; old `/opt/data/work-manager/` untouched. Legacy dashboard :9009 still up but stale.
 
 ## Now
-Idle. Group 2 DONE 2026-08-29 (Overview, Activity, run-log tail; "in review" quick filter dropped — the Working lane already shows it). Owner put project `wm-dashboard` on hold: #98 stopped (run #215 killed + finalized), task `manual`, project archived.
+Task: **Group 3a** (plan approved 2026-08-29, `kis/intent/Group3Plan.md`). Not started. Order: stop-run → templates extract → agents API → gateway supervisor → Agents UI.
+Verification: pytest (stop on fake wrapper, install on scratch HERMES_HOME, gateway supervisor with fake process), real gateway start for coder on this box, Playwright.
 
 ## Next
-Plan Group 3 (Agents page from `hermes profile list` + templates; open/resume a task's real session as chat). Small write to add first: **Stop run** action (pause → kill wrapper+child → `mark_stalled` → `mark_manual`) — today that needed a hand script.
+Group 3b Chat (SSE proxy + Chat page), then Group 4 direct chat scopes.
 
 ## Blocker
 None.
