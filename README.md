@@ -52,8 +52,8 @@ for t in tests/core/test_*.py; do HERMES_HQ_HOME=/tmp/hq-test python3 "$t"; done
 ## Layout
 
 ```
+core/             the engine: store, dispatcher, run wrapper, wm CLI (no web deps)
 backend/          FastAPI service (app.py), CLI (cli.py), in-process dispatcher
-backend/core/     the engine: store, dispatcher, run wrapper, wm CLI
 frontend/         Vite + React 19 + Tailwind 4 UI → built into backend/static
 tests/core/       engine test suite
 kis/              project memory (knowledge / intent / state) — read state first

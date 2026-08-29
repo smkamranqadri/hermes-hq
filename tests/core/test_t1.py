@@ -16,7 +16,7 @@ import sqlite3
 import sys
 import tempfile
 
-sys.path.insert(0, os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "..", "backend", "core"))
+sys.path.insert(0, os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "..", "core"))
 import wm_store as store  # noqa: E402
 
 DB = os.environ.get("WORK_MANAGER_TEST_DB") or os.path.join(

@@ -49,7 +49,7 @@ import sys
 import time
 
 try:
-    from backend.core import wm_store as store
+    from core import wm_store as store
 except ImportError:  # run as a bare script from the engine dir
     import wm_store as store
 
