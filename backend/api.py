@@ -1,7 +1,7 @@
 """Read API for Group 1a. Every handler is read-only over hq.db."""
 from fastapi import APIRouter, HTTPException, Query
 
-from backend import overview as ov, readers, sysinfo, tasks as tq
+from backend import agents as ag, overview as ov, readers, sysinfo, tasks as tq
 from core import wm_store
 
 router = APIRouter(prefix="/api")
@@ -67,3 +67,21 @@ def activity(project: str | None = None, agent: str | None = None, task_id: int 
 @router.get("/run/{run_id}/log")
 def run_log(run_id: int, offset: int = Query(0, ge=0)):
     return ov.run_log(run_id, offset)
+
+
+@router.get("/agents")
+def agents():
+    return {"agents": ag.list_agents(_db()), "templates": ag.list_templates()}
+
+
+@router.get("/agents/templates")
+def agent_templates():
+    return {"templates": ag.list_templates()}
+
+
+@router.get("/agent/{name}")
+def agent(name: str):
+    try:
+        return ag.agent_detail(name, _db())
+    except ValueError:
+        raise HTTPException(404, "no such agent")
