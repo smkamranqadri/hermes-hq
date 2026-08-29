@@ -4,9 +4,9 @@ import logging
 import threading
 import time
 
-from hermes_hq.engine import wm_dispatch, wm_store
+from hq.engine import wm_dispatch, wm_store
 
-log = logging.getLogger("hermes_hq.dispatcher")
+log = logging.getLogger("hq.dispatcher")
 
 
 class DispatcherLoop:

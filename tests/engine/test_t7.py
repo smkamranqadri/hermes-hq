@@ -13,7 +13,7 @@
 #  8. backup + prune ops work and keep task/project history.
 #  9. code-task worktree isolation: is_code task in a git repo gets run.workdir+branch.
 import contextlib, io, json, os, shutil, sqlite3, subprocess, sys, tempfile, time
-BASE = os.path.dirname(os.path.abspath(__file__)); ENGINE = os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "..", "hermes_hq", "engine"); sys.path.insert(0, ENGINE)
+BASE = os.path.dirname(os.path.abspath(__file__)); ENGINE = os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "..", "hq", "engine"); sys.path.insert(0, ENGINE)
 import wm_store as store, wm_dispatch as dispatch, wm_cli  # noqa: E402
 
 TMP = tempfile.mkdtemp(prefix="wm_t7_")

@@ -1,7 +1,7 @@
 # hermes-hq — Technical Knowledge
 
 ## Architecture (decided 2026-08-29)
-- **One Python service** (`hermes_hq` package, FastAPI) that: contains the engine (`hermes_hq/engine/` = moved `wm_store`/`wm_dispatch`/`wm_run_agent`), runs the dispatcher as an in-process background loop (no Hermes cron), exposes REST + WebSocket events, and serves the built React UI.
+- **One Python service** (`hq` package, FastAPI) that: contains the engine (`hq/engine/` = moved `wm_store`/`wm_dispatch`/`wm_run_agent`), runs the dispatcher as an in-process background loop (no Hermes cron), exposes REST + WebSocket events, and serves the built React UI.
 - **Frontend**: React 19 + Vite + Tailwind 4. Top bar (glass, bordered): **Overview · Projects · Tasks · Agents · Chat**; right side **Tools** menu (Files · Terminal · Memory · Skills · MCP · Schedules), theme picker, LIVE/PAUSED dot, SYSTEM. Reviews live inside Tasks + Task detail; Activity inside Overview feed + Project detail. (Supersedes the 7-tab IA in `hermes-work-manager/design/IA_FLOWS.md`; decided 2026-08-29.)
 - **Theming**: all colors are `--hq-*` CSS vars per `[data-theme]` in `web/src/index.css`, exposed to Tailwind via `@theme inline`. Six fixed themes, no OS-follow: violet (default, WM tokens), nous, nous-light (only light theme, from workspace `claude-nous-light`), bronze, slate, hermes (palettes from hermes-workspace `styles.css`). Pref in `localStorage['hq-theme']`; `?theme=<id>` overrides (used for screenshots).
 - **Fonts**: only Inter + JetBrains Mono bundled (`web/public/fonts`, no CDN, no `@fontsource`). One font choice: JetBrains Mono (default, everywhere), Inter, System Sans/Serif/Mono. Pref in `localStorage['hq-fonts']`; `?font=<id>` overrides. Why: the app renders on each viewer's device, so only bundled fonts look identical; owner wants JetBrains.
@@ -21,7 +21,7 @@ Engine keeps its precise state machine (`planned, waiting_approval, ready, runni
 - **Done** = done, manual/archived
 
 ## Legacy WM snapshot
-Live WM (`/opt/data/work-manager/`, crons `wm-dispatch`, `wm completion watchdog`, `wm-planning-pickup`) keeps running until Group 1b cutover. hermes-hq works on an imported copy with dispatcher off; `hermes-hq import` rewrites `/opt/data/work-manager/` path prefixes and skips `runs/worktrees/`. Human state is derived at read time from engine status (`hermes_hq/status.py`), never stored.
+Live WM (`/opt/data/work-manager/`, crons `wm-dispatch`, `wm completion watchdog`, `wm-planning-pickup`) keeps running until Group 1b cutover. hermes-hq works on an imported copy with dispatcher off; `hermes-hq import` rewrites `/opt/data/work-manager/` path prefixes and skips `runs/worktrees/`. Human state is derived at read time from engine status (`hq/status.py`), never stored.
 
 ## Engine rules carried over (non-negotiable)
 - Every task belongs to a project with a valid `primary_path` (default `/opt/data/projects/<slug>`, root configurable).
@@ -31,6 +31,6 @@ Live WM (`/opt/data/work-manager/`, crons `wm-dispatch`, `wm completion watchdog
 - Liveness = process state + Hermes session `last_activity_at` + timeout.
 
 ## Environment (this box)
-Repo layout: `hermes_hq/` (app.py, cli.py, dispatcher.py, engine/, static/ = built UI), `web/` (Vite+React), `tests/engine/`.
+Repo layout: `hq/` (app.py, cli.py, dispatcher.py, engine/, static/ = built UI), `web/` (Vite+React), `tests/engine/`.
 
 Hermes v0.20.5 at `/opt/hermes`, `HERMES_HOME=/opt/data`, profiles under `/opt/data/profiles/`, gateway :8642, Hermes dashboard :9119, legacy WM dashboard :9009. Node 26, Python 3.13, no pnpm.

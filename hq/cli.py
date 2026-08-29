@@ -7,7 +7,7 @@ import sys
 def main(argv=None):
     argv = list(sys.argv[1:] if argv is None else argv)
     if argv and argv[0] == "wm":
-        from hermes_hq.engine import wm_cli
+        from hq.engine import wm_cli
         return wm_cli.main(argv[1:])
     p = argparse.ArgumentParser(prog="hermes-hq")
     sub = p.add_subparsers(dest="cmd", required=True)
@@ -20,7 +20,7 @@ def main(argv=None):
     a = p.parse_args(argv)
     if a.cmd == "serve":
         import uvicorn
-        from hermes_hq.app import create_app
+        from hq.app import create_app
         uvicorn.run(create_app(dispatcher_enabled=not a.no_dispatcher, interval=a.interval),
                     host=a.host, port=a.port, log_level="info")
         return 0

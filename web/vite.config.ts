@@ -4,6 +4,6 @@ import tailwindcss from '@tailwindcss/vite'
 
 export default defineConfig({
   plugins: [react(), tailwindcss()],
-  build: { outDir: '../hermes_hq/static', emptyOutDir: true },
+  build: { outDir: '../hq/static', emptyOutDir: true },
   server: { proxy: { '/api': 'http://127.0.0.1:9010' } },
 })
