@@ -7,6 +7,7 @@ from fastapi.responses import FileResponse, JSONResponse
 from fastapi.staticfiles import StaticFiles
 
 from backend import __version__
+from backend.api import router as api_router
 from backend.dispatcher import DispatcherLoop
 from core import wm_store
 
@@ -26,6 +27,7 @@ def create_app(dispatcher_enabled: bool = True, interval: float = 30.0) -> FastA
         dispatcher.stop()
 
     app = FastAPI(title="hermes-hq", version=__version__, lifespan=lifespan)
+    app.include_router(api_router)
 
     @app.get("/api/health")
     def health():

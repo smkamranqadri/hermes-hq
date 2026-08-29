@@ -21,7 +21,10 @@ Engine keeps its precise state machine (`planned, waiting_approval, ready, runni
 - **Done** = done, manual/archived
 
 ## Legacy WM snapshot
-Live WM (`/opt/data/work-manager/`, crons `wm-dispatch`, `wm completion watchdog`, `wm-planning-pickup`) keeps running until Group 1b cutover. hermes-hq works on an imported copy with dispatcher off; `hermes-hq import` rewrites `/opt/data/work-manager/` path prefixes and skips `runs/worktrees/`. Human state is derived at read time from engine status (`hq/status.py`), never stored.
+Live WM (`/opt/data/work-manager/`, crons `wm-dispatch`, `wm completion watchdog`, `wm-planning-pickup`) keeps running until Group 1b cutover. hermes-hq works on an imported copy with dispatcher off; `hermes-hq import <dir>` snapshots via SQLite backup API, rewrites the source-dir prefix wherever it appears in `runs.brief_path/workdir/result_paths/completion` and `tasks.result_path/result_paths` (free-text `runs.error/notes` untouched), skips `runs/worktrees/`, refuses a non-empty `hq.db` without `--force` (which keeps a backup). Human state is derived at read time from engine status (`hq/status.py`), never stored.
+
+## Read API (Group 1a)
+`backend/api.py` (`/api/projects?archived`, `/api/project/{slug}`, `/api/goals`, `/api/tasks`, `/api/task/{id}`) over `backend/readers.py` (ported read-only reader) and `backend/tasks.py` (human-state envelope: active projects only, `stateOptions` ignore the state filter, order = state group then `updated_at DESC`). `backend/status.py` is the single mapping; `frontend/src/status.ts` mirrors it and `tests/backend/test_status.py` fails if they diverge. Every task payload carries `human: {state, reason, action}`; the UI never derives state itself.
 
 ## Engine rules carried over (non-negotiable)
 - Every task belongs to a project with a valid `primary_path` (default `/opt/data/projects/<slug>`, root configurable).

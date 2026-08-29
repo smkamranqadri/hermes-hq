@@ -1,0 +1,68 @@
+import { useState } from 'react'
+import { Link, useParams } from 'react-router-dom'
+import clsx from 'clsx'
+import { useProject, ago, when } from '../api'
+import { GlassCard } from '../components/GlassCard'
+import { TaskRow } from '../components/TaskRow'
+import { Empty, Loading, Chip, Crumbs, Label, Agent } from '../components/ui'
+import { usePageTitle } from '../usePageTitle'
+
+const TABS = ['tasks', 'goals', 'runs', 'activity'] as const
+const GOAL_TONE: Record<string, string> = { draft: 'text-muted', planning: 'text-needsyou', planned: 'text-queued', released: 'text-working' }
+
+export function ProjectDetail() {
+  const { slug = '' } = useParams()
+  const q = useProject(slug)
+  const p = q.data
+  usePageTitle(p?.name ?? slug)
+  const [tab, setTab] = useState<(typeof TABS)[number]>('tasks')
+  if (q.isLoading) return <section className="mx-auto max-w-6xl p-6"><Loading /></section>
+  if (q.isError || !p) return <section className="mx-auto max-w-6xl p-6"><Empty error title={`Could not load /api/project/${slug}`} note={String(q.error ?? '404')} /></section>
+  const pct = p.tasks_total ? Math.round(100 * p.tasks_done / p.tasks_total) : 0
+  const stuck = p.tasks.filter(t => t.human?.state === 'needsyou')
+  return (
+    <section className="mx-auto max-w-6xl p-4 sm:p-6">
+      <Crumbs items={[['Projects', '/projects'], [p.name]]} />
+      <div className="mb-5 flex flex-wrap items-end justify-between gap-3">
+        <div>
+          <h1 className="text-xl font-semibold tracking-tight">{p.name} {!!p.archived && <Chip>archived</Chip>}</h1>
+          <p className="mt-1 font-mono text-[11px] text-muted">{p.primary_path}</p>
+          {p.description && <p className="mt-2 max-w-2xl text-sm text-muted">{p.description}</p>}
+        </div>
+        <div className="flex gap-2">
+          {[['tasks', `${p.tasks_done}/${p.tasks_total}`], ['runs', String(p.runs.length)], ['goals', `${p.goals.filter(g => g.status === 'released').length}/${p.goals.length}`]].map(([k, v]) => (
+            <GlassCard key={k} className="min-w-20 py-2 text-center"><p className="font-mono text-lg font-semibold">{v}</p><Label>{k}</Label></GlassCard>
+          ))}
+        </div>
+      </div>
+      <div className="mb-5 h-1 overflow-hidden rounded-full bg-inset"><div className="h-full bg-working" style={{ width: `${pct}%` }} /></div>
+      {stuck.length > 0 && (
+        <div className="mb-5">
+          <Label>Needs you · {stuck.length}</Label>
+          <div className="mt-2 flex flex-col gap-2">{stuck.map(t => <TaskRow key={t.id} t={t} showProject={false} />)}</div>
+        </div>
+      )}
+      <div className="mb-3 flex gap-1 rounded-full border border-line bg-glass p-0.5 w-fit">
+        {TABS.map(t => <button key={t} onClick={() => setTab(t)} className={clsx('rounded-full px-3 py-1 font-mono text-[10px] uppercase', tab === t ? 'bg-fg text-bg' : 'text-muted hover:text-fg')}>{t}</button>)}
+      </div>
+      {tab === 'tasks' && (p.tasks.length ? <div className="flex flex-col gap-2">{[...p.tasks].sort((a, b) => (b.updated_at ?? b.created_at) - (a.updated_at ?? a.created_at)).map(t => <TaskRow key={t.id} t={t} showProject={false} />)}</div> : <Empty title="No tasks" />)}
+      {tab === 'goals' && (p.goals.length ? <div className="grid gap-3 sm:grid-cols-2">{p.goals.map(g => (
+        <GlassCard key={g.id}>
+          <div className="flex items-start justify-between gap-2"><h3 className="text-sm font-semibold">#{g.id} {g.title}</h3><span className={clsx('font-mono text-[10px] uppercase', GOAL_TONE[g.status])}>{g.status}</span></div>
+          {g.description && <p className="mt-1 text-xs text-muted">{g.description}</p>}
+          <p className="mt-2 font-mono text-[10px] text-muted">{g.tasks_done}/{g.tasks_total} tasks done</p>
+        </GlassCard>))}</div> : <Empty title="No goals" />)}
+      {tab === 'runs' && (p.runs.length ? <div className="flex flex-col gap-2">{p.runs.map(r => (
+        <Link key={r.id} to={`/tasks/${r.task_id}`} className="glass flex flex-wrap items-center gap-3 rounded-xl px-4 py-2 text-xs hover:bg-raised">
+          <span className="font-mono text-muted">run #{r.id}</span><Agent name={r.agent_profile} /><span className="text-muted">task #{r.task_id}</span>
+          <span className={clsx('font-mono uppercase', r.status === 'done' ? 'text-working' : r.status === 'running' ? 'text-queued' : 'text-needsyou')}>{r.status}</span>
+          <span className="ml-auto font-mono text-[10px] text-muted">{ago(r.started_at)}</span>
+        </Link>))}</div> : <Empty title="No runs yet" />)}
+      {tab === 'activity' && (p.activity.length ? <GlassCard className="p-0">{p.activity.map(a => (
+        <div key={a.id} className="flex flex-wrap items-center gap-3 border-b border-line-subtle px-4 py-2 text-xs last:border-0">
+          <span className="w-28 shrink-0 font-mono text-[10px] text-muted">{when(a.ts)}</span><Agent name={a.agent_profile} /><span className="font-mono text-muted">{a.action}</span>
+          <span className="min-w-0 flex-1 truncate">{a.task_id ? <Link to={`/tasks/${a.task_id}`} className="hover:text-accent-2">#{a.task_id} </Link> : null}{a.detail}</span>
+        </div>))}</GlassCard> : <Empty title="No activity yet" />)}
+    </section>
+  )
+}
