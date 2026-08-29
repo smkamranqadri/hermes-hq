@@ -6,9 +6,9 @@ from fastapi import FastAPI
 from fastapi.responses import FileResponse, JSONResponse
 from fastapi.staticfiles import StaticFiles
 
-from hq import __version__
-from hq.dispatcher import DispatcherLoop
-from hq.engine import wm_store
+from backend import __version__
+from backend.dispatcher import DispatcherLoop
+from backend.core import wm_store
 
 STATIC_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), "static")
 
@@ -56,6 +56,6 @@ def create_app(dispatcher_enabled: bool = True, interval: float = 30.0) -> FastA
     else:
         @app.get("/", include_in_schema=False)
         def no_ui():
-            return JSONResponse({"error": "UI not built: run `npm run build` in web/"}, status_code=503)
+            return JSONResponse({"error": "UI not built: run `npm run build` in frontend/"}, status_code=503)
 
     return app

@@ -4,9 +4,9 @@ import logging
 import threading
 import time
 
-from hq.engine import wm_dispatch, wm_store
+from backend.core import wm_dispatch, wm_store
 
-log = logging.getLogger("hq.dispatcher")
+log = logging.getLogger("backend.dispatcher")
 
 
 class DispatcherLoop:

@@ -14,11 +14,11 @@ Group 1b Write, then cutover from old WM (see plan).
 None.
 
 ## Known debt
-- `tests/engine/test_t2/t5/t7.py` fail identically in the source repo (goal lifecycle draft→planned changed after they were written). Not caused by the move; fix when touching goal release.
+- `tests/core/test_t2/t5/t7.py` fail identically in the source repo (goal lifecycle draft→planned changed after they were written). Not caused by the move; fix when touching goal release.
 - Mobile top bar stacks into 3 rows (brand / sysbar / tabs); acceptable for now, revisit with Overview.
 
 ## How to run
-See `README.md`. Dev: `.venv/bin/hermes-hq serve --no-dispatcher` + `cd web && npm run dev` (proxies /api to :9010). Legacy WM dashboard still live on :9009 and untouched. Owner drops reference images in `screenshots/` (git-ignored).
+See `README.md`. Dev: `.venv/bin/hermes-hq serve --no-dispatcher` + `cd frontend && npm run dev` (proxies /api to :9010). Legacy WM dashboard still live on :9009 and untouched. Owner drops reference images in `screenshots/` (git-ignored).
 
 ## Proof (Group 0, final)
 - Screenshots at 1440px of `/system?theme=<id>` for violet, nous, nous-light, bronze, slate, hermes, and `?font=jetbrains-mono`: WM-style navbar, glass cards, orbs + grid, 5-state badges all correct; 390px mobile renders.

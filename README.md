@@ -31,7 +31,7 @@ Requires Python ≥ 3.11 with [`uv`](https://github.com/astral-sh/uv), Node ≥ 
 
 ```bash
 uv venv .venv && uv pip install --python .venv/bin/python -e .
-(cd web && npm install && npm run build)     # builds the UI into hq/static
+(cd frontend && npm install && npm run build)     # builds the UI into backend/static
 .venv/bin/hermes-hq serve                     # http://127.0.0.1:9010
 .venv/bin/hermes-hq serve --no-dispatcher     # UI/API only, never launches agents
 .venv/bin/hermes-hq wm status                 # engine CLI passthrough
@@ -39,12 +39,12 @@ uv venv .venv && uv pip install --python .venv/bin/python -e .
 
 State lives at `$HERMES_HOME/hermes-hq/` (`hq.db`, `runs/`); override with `HERMES_HQ_HOME`. Model/provider configuration stays in Hermes — hermes-hq stores no API keys.
 
-Frontend dev loop: `cd web && npm run dev` (proxies `/api` to `:9010`).
+Frontend dev loop: `cd frontend && npm run dev` (proxies `/api` to `:9010`).
 
 ## Tests
 
 ```bash
-for t in tests/engine/test_*.py; do HERMES_HQ_HOME=/tmp/hq-test python3 "$t"; done
+for t in tests/core/test_*.py; do HERMES_HQ_HOME=/tmp/hq-test python3 "$t"; done
 ```
 
 `test_t2/t5/t7` are known-failing (outdated by a goal-lifecycle change in the source project; tracked in `kis/state/current.md`).
@@ -52,9 +52,10 @@ for t in tests/engine/test_*.py; do HERMES_HQ_HOME=/tmp/hq-test python3 "$t"; do
 ## Layout
 
 ```
-hq/        FastAPI service (app.py), CLI (cli.py), in-process dispatcher, engine/
-web/              Vite + React 19 + Tailwind 4 UI → built into hq/static
-tests/engine/     engine test suite
+backend/          FastAPI service (app.py), CLI (cli.py), in-process dispatcher
+backend/core/     the engine: store, dispatcher, run wrapper, wm CLI
+frontend/         Vite + React 19 + Tailwind 4 UI → built into backend/static
+tests/core/       engine test suite
 kis/              project memory (knowledge / intent / state) — read state first
 ```
 
