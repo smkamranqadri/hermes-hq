@@ -78,8 +78,11 @@ def import_wm(src_dir, dest_home=None, force=False, copy_runs=True):
               for t in ("projects", "goals", "tasks", "runs", "reviews", "activity")}
     con.close()
 
-    # 3. runs artifacts (briefs, logs, completions) — skip worktrees
-    copied = 0
+    # 3. runs artifacts (briefs, logs, completions). Worktrees are git checkouts
+    #    whose .git file points back at the project repo, so they are LINKED,
+    #    not copied: rewritten result_paths/workdir must still resolve for
+    #    reviewers reading a prior run's deliverables.
+    copied = linked = 0
     if copy_runs and os.path.isdir(src_runs):
         os.makedirs(dest_runs, exist_ok=True)
         for name in os.listdir(src_runs):
@@ -88,5 +91,14 @@ def import_wm(src_dir, dest_home=None, force=False, copy_runs=True):
                 continue
             shutil.copy2(sp, os.path.join(dest_runs, name))
             copied += 1
+        src_wt = os.path.join(src_runs, "worktrees")
+        if os.path.isdir(src_wt):
+            dest_wt = os.path.join(dest_runs, "worktrees")
+            os.makedirs(dest_wt, exist_ok=True)
+            for name in os.listdir(src_wt):
+                target = os.path.join(dest_wt, name)
+                if not os.path.lexists(target):
+                    os.symlink(os.path.join(src_wt, name), target)
+                    linked += 1
     return {"db": dest_db, "backup": backup, "counts": counts,
-            "paths_rewritten": rewritten, "run_files_copied": copied}
+            "paths_rewritten": rewritten, "run_files_copied": copied, "worktrees_linked": linked}

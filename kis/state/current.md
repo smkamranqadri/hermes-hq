@@ -13,6 +13,8 @@ After 1b: Group 2 Overview (Needs-you first) + Reviews-in-Tasks + Activity feed.
 None.
 
 ## Known debt
+- Cutover side-effect: reviewer run #212 rejected #98 because imported `result_paths` pointed at an uncopied worktree; fixed by symlinking old `runs/worktrees/run-*` into the new runs dir (importer now does this). Coder run #213 was launched on that false rejection — let it finish.
+- `runs/<id>.log` holds only the wrapper's lines; agent transcript is in the Hermes session → Group 3 chat view is where "watch it work" really lands.
 - Mobile polish pass done 2026-08-29 (2-row top bar, compact sysbar, overflow fixes); re-check each new page at 390px.
 - Snapshot-mode writes were discarded by the cutover import (owner's replies on #84/#96 must be redone on the live side if still wanted).
 - The server process must be restarted by hand after backend changes (`pkill -f 'hermes-hq serve'` then the serve line above) — no supervisor yet; add a systemd/s6 unit in the install work.
