@@ -4,7 +4,8 @@
 Foundation scaffold DONE 2026-08-29 (commit on `main`). Engine, service, and UI shell exist; no data views yet.
 
 ## Now
-Idle — next task not started.
+Task: **Group 0 shell polish** (approved 2026-08-29): 6 themes (Violet default, Nous, Bronze, Slate, Hermes, Violet Light) via CSS vars, glass cards/orbs/grid/fonts from WM tokens, top bar = Overview·Projects·Tasks·Agents·Chat + Tools menu (Files·Terminal·Memory·Skills·MCP·Schedules) + theme + SYSTEM. Reviews→Tasks, Activity→Overview/Project.
+Verification: screenshots of every theme at desktop + mobile; Tools menu open.
 
 ## Next
 **Group 1 read views**: `/api/projects`, `/api/tasks`, `/api/task/{id}` over `wm_store` readers (port the reader logic from `../hermes-work-manager/wm-tool/wm_dash/reader.py`, not the HTTP layer), Projects list + Tasks list pages using `StatusBadge`. Then the `wm.db` importer.
