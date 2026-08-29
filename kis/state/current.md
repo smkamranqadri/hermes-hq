@@ -4,10 +4,11 @@
 Group 1a Read DONE 2026-08-29 on `main`. Server on :9010 (`--no-dispatcher`) over an imported snapshot of the live WM at `/opt/data/hermes-hq/hq.db` (imported 2026-08-29 ~11:54; live WM keeps changing).
 
 ## Now
-Idle — Group 1b (writes + cutover) needs a plan before act.
+Task: **Group 1b Write + cutover** (plan approved 2026-08-29, `kis/intent/Group1Plan.md`). Not started. Order: auth → write API + tests → UI → screenshots → cutover runbook with owner.
+Verification: pytest auth/writes on scratch DB, manual walk on :9010 (snapshot mode), headless screenshots, live cutover checks.
 
 ## Next
-Plan Group 1b: create project/task, goal plan/release, mark-ready, feedback→rework, retry, dispatcher pause/resume; then cutover (fresh `hermes-hq import --force`, disable old crons, enable dispatcher). Overview page (Group 2) can follow.
+After 1b: Group 2 Overview (Needs-you first) + Reviews-in-Tasks + Activity feed.
 
 ## Blocker
 None.
