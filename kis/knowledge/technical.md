@@ -46,3 +46,7 @@ Single password (`HERMES_HQ_PASSWORD`, else generated → serve log + `$HERMES_H
 Repo layout: `core/` (engine package: wm_store/wm_dispatch/wm_run_agent/wm_cli, no web deps), `backend/` (package `backend`: app.py, cli.py, dispatcher.py, static/ = built UI), `frontend/` (Vite+React), `tests/core/`. Two top-level packages on purpose (owner choice 2026-08-29): core is standalone and predates the UI.
 
 Hermes v0.20.5 at `/opt/hermes`, `HERMES_HOME=/opt/data`, profiles under `/opt/data/profiles/`, gateway :8642, Hermes dashboard :9119, legacy WM dashboard :9009. Node 26, Python 3.13, no pnpm.
+
+## Hermes CLI on this box
+- `/opt/hermes/bin/hermes` is a `docker exec` privilege-drop shim: it can only read paths under `/opt/data` (`~`). Scratch `HERMES_HOME`s for tests/probes must live there (e.g. `/opt/data/hh-scratch`), never in `/tmp`.
+- `hermes profile create NAME --no-alias --description D` creates `$HERMES_HOME/profiles/NAME/` with `profile.yaml` (description), stock `SOUL.md`, bundled skills, `.env`; no `config.yaml` (inherits root). Templates in `agents/` layer SOUL + specialist skill on top.

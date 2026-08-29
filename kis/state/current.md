@@ -5,7 +5,7 @@
 
 ## Now
 Task: **Group 3a** (plan approved 2026-08-29, `kis/intent/Group3Plan.md`). Order: stop-run → templates extract → agents API → gateway supervisor → Agents UI.
-Ledger: [x] stop-run (done 2026-08-29, see Proof) · [ ] templates extract (next) · [ ] agents API · [ ] gateway supervisor · [ ] Agents UI.
+Ledger: [x] stop-run (done 2026-08-29, see Proof) · [x] templates extract (done 2026-08-29) · [ ] agents API · [ ] gateway supervisor · [ ] Agents UI.
 Verification (rest of 3a): pytest (install on scratch HERMES_HOME, gateway supervisor with fake process), real gateway start for coder on this box, Playwright.
 
 ## Next
@@ -28,6 +28,7 @@ None.
 See `README.md`. Dev: `.venv/bin/hermes-hq serve --no-dispatcher` + `cd frontend && npm run dev` (proxies /api to :9010). Legacy WM dashboard still live on :9009 and untouched. Owner drops reference images in `screenshots/` (git-ignored).
 
 ## Proof (latest)
+- Templates 2026-08-29: `scripts/extract_agent_templates.py` → 6× ok; `cmp` verbatim vs `/opt/data/profiles/*/{SOUL.md,skills/*-specialist/SKILL.md}`; re-run checksums identical; `pytest tests/backend` 22 passed (2 new in `test_templates.py`: every assignee has a well-formed template, extractor idempotent + never copies `.env`). Probe on scratch `HERMES_HOME=/opt/data/hh-scratch`: `hermes profile create probe --no-alias --description …` writes profile.yaml + stock SOUL + 14 bundled skills, no config.yaml.
 - Stop-run 2026-08-29: `pytest tests/backend` 20 passed (3 new in `test_stop.py`: sh+sleep group killed, run failed "stopped by owner", task manual / ready with keep_in_queue, 409 when nothing running, dead-pid case). Scratch serve on :9011 + Playwright: Task detail 1440/390 shows Stop / Stop & re-queue while running, `scrollWidth==390`; clicking Stop → engine manual, run FAILED, activity `task_stopped→task_stalled→task_manual`, `sleep` group gone. Live server restarted (route deployed), health 200.
 - Cutover 2026-08-29 13:40: `import --force` (15/23/98/211/84 rows, backup kept); first tick claimed review 84 → run #212 reviewer with session id captured → rework → coder run launched; `last_error: null`. Old worktrees symlinked (49) after a false rejection traced to uncopied worktree paths.
 - Group 2: `pytest tests/backend` 17 passed (overview stats, unified activity + paging + task filter, run-log incremental tail). Playwright 1440/390: Overview tiles + Needs-you + Working/Queued + feed, Activity page, Task detail log; `scrollWidth == 390` on /, /activity, project and task detail after the overflow fix.

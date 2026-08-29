@@ -1,0 +1,7 @@
+name: reviewer
+description: 'Independent quality-control specialist. Reviews any agent''s work: code and tests, evidence
+  and sources, accuracy and tone, usability, feasibility and completeness.'
+soul: SOUL.md
+skills:
+- reviewer-specialist
+overlay: false
