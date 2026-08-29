@@ -58,3 +58,9 @@ Hermes v0.20.5 at `/opt/hermes`, `HERMES_HOME=/opt/data`, profiles under `/opt/d
 - `/chat/stream` is SSE `event: <name>\ndata: {json}\n\n`; names: `run.started`, `message.started`, `assistant.delta {delta}`, `tool.progress {tool_name,delta}` (reasoning), `tool.started|completed|failed {tool_name,preview,args}`, then completion; every payload carries `session_id`, `run_id`, `seq`, `ts`.
 - Same SessionDB as the CLI: sessions created by `hermes chat` (dispatched runs, title `wm-run-<id>`) are readable/addressable through the gateway (verified 2026-08-29 on coder).
 - `gateway.multiplex_profiles` (off here) would let the default gateway serve `/p/<profile>/…`; with it off, each profile needs its own gateway.
+
+## Frontend build gotchas (learned 2026-08-29)
+- Vite/Tailwind CSS minify keeps only the LAST of a prefixed/unprefixed pair: write `-webkit-backdrop-filter` before `backdrop-filter`, or Chrome (which ignores the `-webkit-` form) gets no blur.
+- `overflow-x: hidden` on `html, body` makes body a scroll container and silently kills `position: sticky`; use `overflow-x: clip`.
+- `npx tsc ... | tail` masks the exit code — chain with `&&` and no pipe when a failure must stop a commit.
+- `hermes-hq` serves `index.html` with `Cache-Control: no-cache`; hashed assets are immutable, so a plain reload picks up new builds.
