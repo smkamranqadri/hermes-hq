@@ -34,8 +34,8 @@ export function Overview() {
             {d.needsyou.length ? <div className="flex flex-col gap-2">{d.needsyou.map(t => <TaskRow key={t.id} t={t} />)}</div>
               : <Empty title="Nothing needs you" note="No blocked, failed, stalled or held tasks in active projects." />}
           </div>
-          <div className="mt-6 grid gap-6 lg:grid-cols-3">
-            <div className="lg:col-span-2">
+          <div className="mt-6 grid min-w-0 gap-6 lg:grid-cols-3">
+            <div className="min-w-0 lg:col-span-2">
               <div className="mb-2 flex items-center gap-2"><StatusBadge human={{ state: 'working' }} compact /><Label>{d.working.length}{d.stats.open_reviews ? ` · ${d.stats.open_reviews} in review` : ''}</Label></div>
               {d.working.length ? <div className="flex flex-col gap-2">{d.working.map(t => (
                 <Link key={t.id} to={`/tasks/${t.id}`} className="glass flex flex-wrap items-center gap-x-3 gap-y-1 rounded-xl px-4 py-3 text-sm hover:bg-raised">
@@ -47,7 +47,7 @@ export function Overview() {
               <div className="mt-6 mb-2 flex items-center gap-2"><StatusBadge human={{ state: 'queued' }} compact /><Label>{d.stats.queued}</Label></div>
               {d.queued.length ? <div className="flex flex-col gap-2">{d.queued.map(t => <TaskRow key={t.id} t={t} />)}</div> : <Empty title="Queue empty" />}
             </div>
-            <div>
+            <div className="min-w-0">
               <div className="mb-2 flex items-center justify-between"><Label>Activity</Label><Link to="/activity" className="font-mono text-[10px] uppercase text-muted hover:text-fg">All →</Link></div>
               <ActivityList events={d.activity} compact />
             </div>
