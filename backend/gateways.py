@@ -1,21 +1,23 @@
 """Per-profile Hermes gateway control (the HTTP API each chat talks to).
 
-hermes-hq lives inside the Hermes s6 container: every profile already has a
-supervised `gateway-<profile>` slot, so this module never spawns gateway
-processes itself. It
+Supervisor-agnostic on purpose: hermes-hq may run on a bare host, under
+systemd/launchd, or inside the Hermes s6 container. It
   * makes sure the profile `.env` has API_SERVER_PORT / API_SERVER_KEY
     (appended, marked `# hermes-hq`, never rewriting the owner's lines),
-  * drives s6 through the CLI: `hermes --profile X gateway start|stop`,
+  * starts a gateway by first asking the platform (`hermes --profile X gateway
+    start` = whatever service manager Hermes installed there) and, when no
+    service exists, running `hermes --profile X gateway run` itself as a
+    detached child it owns (pid kept in wm_meta, killed on stop / serve exit),
   * judges "running" only by a real health probe: GET /v1/models with the key,
-  * idle-stops specialist gateways 15 min after their last chat use,
-  * stops on serve exit whatever it started (default profile excluded).
-The default profile's gateway (:8642) is owned by the container; it is read
-(port/key) but never written, started or stopped.
+  * idle-stops specialist gateways 15 min after their last chat use.
+The default profile's gateway (:8642 unless its .env says otherwise) is
+usually already up; it is only stopped if hermes-hq itself spawned it.
 """
 import json
 import logging
 import os
 import secrets
+import signal
 import subprocess
 import threading
 import time
@@ -64,16 +66,14 @@ def credentials(name):
 
 def ensure_env(name):
     """Append PORT/KEY to a specialist's .env when missing. Returns (port, key)."""
-    if name == store.ORCHESTRATOR_AGENT:
-        return credentials(name)
-    if name not in PORTS:
+    if name != store.ORCHESTRATOR_AGENT and name not in PORTS:
         raise ValueError("unknown profile %r" % name)
     home = _home(name)
     if not os.path.isdir(home):
         raise ValueError("profile %r is not installed (%s)" % (name, home))
     env = read_env(home)
     lines = []
-    if not env.get("API_SERVER_PORT"):
+    if not env.get("API_SERVER_PORT") and name != store.ORCHESTRATOR_AGENT:
         lines.append("API_SERVER_PORT=%d  %s" % (PORTS[name], ENV_MARK))
     if not env.get("API_SERVER_KEY"):
         lines.append("API_SERVER_KEY=%s  %s" % (secrets.token_urlsafe(32), ENV_MARK))
@@ -154,28 +154,88 @@ def touch(name, db_path=None):
     _set_meta("last_used", name, int(time.time()), db_path)
 
 
+def _spawned_pid(name, db_path=None):
+    v = _meta("pid", name, db_path)
+    try:
+        pid = int(v) if v else 0
+    except ValueError:
+        pid = 0
+    if pid <= 0:
+        return 0
+    try:
+        os.kill(pid, 0)
+    except (ProcessLookupError, PermissionError):
+        return 0
+    return pid
+
+
+def _spawn(name):
+    """No service manager for this profile: run the gateway ourselves, detached."""
+    hermes = store.resolve_hermes()
+    cmd = [hermes] + ([] if name == store.ORCHESTRATOR_AGENT else ["--profile", name]) + ["gateway", "run"]
+    env = dict(os.environ, HERMES_HOME=store.hermes_root_home())
+    logdir = os.path.join(store.hq_home(), "gateways"); os.makedirs(logdir, exist_ok=True)
+    with open(os.path.join(logdir, "%s.log" % name), "ab", buffering=0) as logf:
+        try:
+            proc = subprocess.Popen(cmd, env=env, start_new_session=True, stdin=subprocess.DEVNULL,
+                                    stdout=logf, stderr=logf)
+        except OSError as e:
+            raise ValueError("could not run %s: %s" % (" ".join(cmd), e))
+    return proc.pid
+
+
 def start(name, db_path=None):
-    if name == store.ORCHESTRATOR_AGENT:
-        if not healthy(name):
-            raise ValueError("default gateway on :%d is not healthy; it is managed by the container, not hermes-hq" % DEFAULT_PORT)
-        return credentials(name)
+    """Bring a profile's gateway up. Returns (port, key)."""
     port, key = ensure_env(name)
     if healthy(name):
         return port, key
-    _cli(name, "start")
+    how = "service"
+    try:
+        _cli(name, "start")
+    except ValueError as service_err:
+        # No installed service (bare host / no `hermes gateway install`): own the process.
+        pid = _spawn(name)
+        _set_meta("pid", name, pid, db_path)
+        how = "spawned pid %d (service start: %s)" % (pid, str(service_err).splitlines()[-1][:160])
     if not _wait(name, True, START_TIMEOUT):
-        raise ValueError("gateway for %s started but /v1/models on :%d is not healthy after %.0fs" % (name, port, START_TIMEOUT))
+        raise ValueError("gateway for %s was started (%s) but /v1/models on :%d is not healthy after %.0fs"
+                         % (name, how, port, START_TIMEOUT))
     _set_meta("started_by_hq", name, 1, db_path)
     touch(name, db_path)
-    store.log_activity(action="gateway_start", agent_profile=name, detail="port %d" % port, db_path=db_path)
+    store.log_activity(action="gateway_start", agent_profile=name, detail="port %d via %s" % (port, how), db_path=db_path)
     return port, key
 
 
+def _kill(pid, grace=STOP_TIMEOUT):
+    for sig in (signal.SIGTERM, signal.SIGKILL):
+        try:
+            os.killpg(os.getpgid(pid), sig)
+        except (ProcessLookupError, PermissionError):
+            return
+        deadline = time.time() + grace
+        while time.time() < deadline:
+            try:
+                os.waitpid(pid, os.WNOHANG)
+            except ChildProcessError:
+                pass
+            try:
+                os.kill(pid, 0)
+            except ProcessLookupError:
+                return
+            time.sleep(0.2)
+
+
 def stop(name, reason="owner", db_path=None):
-    if name == store.ORCHESTRATOR_AGENT:
-        raise ValueError("the default gateway is not stopped by hermes-hq")
+    """Take a gateway down: kill our own child if we spawned it, else ask the service."""
     was = healthy(name)
-    _cli(name, "stop")
+    pid = _spawned_pid(name, db_path)
+    if pid:
+        _kill(pid)
+        _set_meta("pid", name, 0, db_path)
+    elif name == store.ORCHESTRATOR_AGENT:
+        raise ValueError("the default gateway was not started by hermes-hq; stop it where it was started")
+    else:
+        _cli(name, "stop")
     _wait(name, False, STOP_TIMEOUT)
     _set_meta("started_by_hq", name, 0, db_path)
     if was:
@@ -194,7 +254,7 @@ def ensure_running(name, db_path=None):
 
 def set_enabled(name, enabled, db_path=None):
     if name == store.ORCHESTRATOR_AGENT:
-        raise ValueError("the default profile's gateway is always on")
+        raise ValueError("the default profile's gateway is always enabled for chat")
     if name not in PORTS:
         raise ValueError("unknown profile %r" % name)
     _set_meta("enabled", name, "1" if enabled else "0", db_path)
@@ -233,8 +293,8 @@ def idle_sweep(now=None, idle=IDLE_SECONDS, db_path=None):
 def stop_started(db_path=None):
     """Serve exit: stop the specialist gateways hermes-hq itself brought up."""
     out = []
-    for name in store.SPECIALIST_PROFILES:
-        if _meta("started_by_hq", name, db_path) == "1" and healthy(name):
+    for name in store.ASSIGNEE_PROFILES:
+        if _meta("started_by_hq", name, db_path) == "1" and (healthy(name) or _spawned_pid(name, db_path)):
             try:
                 stop(name, reason="hermes-hq exit", db_path=db_path); out.append(name)
             except ValueError as e:
