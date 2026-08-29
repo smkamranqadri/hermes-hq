@@ -135,8 +135,8 @@
   --color-needsyou: var(--hq-needsyou);
   --color-done: var(--hq-done);
   --color-error: var(--hq-error);
-  --font-sans: "Inter", ui-sans-serif, system-ui, sans-serif;
-  --font-mono: "JetBrains Mono", ui-monospace, Menlo, monospace;
+  --font-sans: var(--hq-font-body, "Inter", ui-sans-serif, system-ui, sans-serif);
+  --font-mono: var(--hq-font-mono, "JetBrains Mono", ui-monospace, Menlo, monospace);
 }
 
 html, body, #root { min-height: 100%; }
@@ -165,3 +165,7 @@ body {
   -webkit-backdrop-filter: blur(20px);
   border: 1px solid var(--hq-border);
 }
+
+@keyframes hq-pulse { 0%,100% { opacity: 1; } 50% { opacity: 0.35; } }
+.hq-dot-live { box-shadow: 0 0 8px currentColor; animation: hq-pulse 2s ease-in-out infinite; }
+.hq-wordmark { letter-spacing: 0.15em; }

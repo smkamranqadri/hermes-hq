@@ -1,7 +1,7 @@
 import { useEffect, useRef, useState, type ReactNode } from 'react'
 
 // Minimal click-outside dropdown used by Tools and the theme picker.
-export function Menu({ button, children, align = 'right' }: { button: ReactNode; children: ReactNode; align?: 'left' | 'right' }) {
+export function Menu({ button, children, align = 'right', keepOpen = false }: { button: ReactNode; children: ReactNode; align?: 'left' | 'right'; keepOpen?: boolean }) {
   const [open, setOpen] = useState(false)
   const ref = useRef<HTMLDivElement>(null)
   useEffect(() => {
@@ -14,10 +14,10 @@ export function Menu({ button, children, align = 'right' }: { button: ReactNode;
   return (
     <div ref={ref} className="relative">
       <button type="button" onClick={() => setOpen(o => !o)} aria-expanded={open}
-        className="rounded-md px-2 py-1 text-xs text-muted hover:bg-raised hover:text-fg">{button}</button>
+        className="rounded-full border border-line bg-glass px-2.5 py-1 font-mono text-[10px] text-muted hover:text-fg">{button}</button>
       {open && (
-        <div onClick={() => setOpen(false)}
-          className={`glass-strong absolute top-full mt-2 min-w-44 rounded-lg p-1 shadow-[0_16px_36px_rgba(0,0,0,0.4)] ${align === 'right' ? 'right-0' : 'left-0'}`}>
+        <div onClick={() => { if (!keepOpen) setOpen(false) }}
+          className={`glass-strong absolute top-full mt-2 min-w-44 rounded-xl p-1 shadow-[0_16px_36px_rgba(0,0,0,0.4)] ${align === 'right' ? 'right-0' : 'left-0'}`}>
           {children}
         </div>
       )}

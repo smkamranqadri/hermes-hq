@@ -5,3 +5,4 @@ node_modules/
 web/dist/
 hermes_hq/static/
 .env
+screenshots/
