@@ -49,7 +49,7 @@ def test_list_and_templates(env):
     assert set(names) == set(store.ASSIGNEE_PROFILES)
     assert names["orchestrator"]["installed"] is True and names["orchestrator"]["overlay_applied"] is False
     assert names["coder"]["installed"] is False and names["coder"]["has_template"] is True
-    assert names["coder"]["gateway"] == {"configured": False, "port": None, "running": None}
+    g = names["coder"]["gateway"]; assert (g["configured"], g["port"], g["enabled"], g["running"]) == (False, None, False, False)
     t = {x["name"]: x for x in d["templates"]}
     assert t["orchestrator"]["overlay"] is True and t["coder"]["skills"] == ["coder-specialist"]
     assert c.get("/api/agent/nobody").status_code == 404

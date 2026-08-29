@@ -5,7 +5,7 @@ from fastapi import APIRouter, HTTPException, Request, Response
 from pydantic import BaseModel, Field
 
 from backend import auth as A
-from backend import agents as ag, stop as stopmod, tasks as tq
+from backend import agents as ag, gateways as gw, stop as stopmod, tasks as tq
 from core import wm_dispatch, wm_store as store
 
 router = APIRouter(prefix="/api")
@@ -216,6 +216,15 @@ def install_agent(body: InstallIn):
 @router.post("/agents/ask-orchestrator")
 def ask_orchestrator(body: AskOrchIn):
     return _engine(ag.ask_orchestrator, body.template, body.project)
+
+
+class GatewayIn(BaseModel):
+    enabled: bool
+
+
+@router.post("/agent/{name}/gateway")
+def agent_gateway(name: str, body: GatewayIn):
+    return {"gateway": _engine(gw.set_enabled, name, body.enabled)}
 
 
 # ---- system ------------------------------------------------------------
