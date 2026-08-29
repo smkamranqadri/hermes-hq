@@ -1,0 +1,2969 @@
+"""wm_store.py — shared SQLite store for the Hermes Work Manager.
+
+Pure stdlib (sqlite3, os, time). No side effects on import; the only side
+effect is the module-level DEFAULT_DB_PATH constant. All functions open
+their own connection and perform writes inside explicit transactions.
+
+Runtime home: <HERMES_HOME>/hermes-hq/hq.db (see hq_home())
+Prerequisites per connection:
+  PRAGMA journal_mode=WAL
+  PRAGMA foreign_keys=ON
+  PRAGMA busy_timeout=5000
+"""
+
+import os
+import re
+import shutil
+import sqlite3
+import sys
+import time
+
+
+def hermes_home():
+    """Root Hermes home (never a profile-shaped dir)."""
+    return os.environ.get("HERMES_HOME") or os.path.expanduser("~/.hermes")
+
+
+def hq_home():
+    """Where hermes-hq keeps its own state: <HERMES_HOME>/hermes-hq."""
+    return os.environ.get("HERMES_HQ_HOME") or os.path.join(hermes_home(), "hermes-hq")
+
+
+DEFAULT_DB_PATH = os.path.join(hq_home(), "hq.db")
+
+
+def resolve_db():
+    return os.environ.get("WM_DB") or DEFAULT_DB_PATH
+
+
+SCHEMA_VERSION = "2"
+
+# Task statuses (validated by the CLI; promoted/held at the app layer).
+#   planned           backlog / spec, NOT released. NEVER auto-runs.
+#   waiting_approval  part of a released plan whose deps are not all done,
+#                     OR explicitly held pending an approval gate. NEVER
+#                     auto-runs. Blocks only itself + its dependents.
+#   ready             released + eligible (deps done). The dispatcher claims.
+#   running / needs_review / rework / done / failed / stalled / blocked / manual
+TASK_STATUSES = (
+    "planned", "waiting_approval", "ready", "running", "needs_review", "rework",
+    "done", "failed", "stalled", "blocked", "manual",
+)
+
+# Goal lifecycle (Phase 6.5). A goal is the approval/release unit and it now
+# passes through a planning stage before it can be approved:
+#   draft     just created. Has no agreed decomposition yet. NOT releasable.
+#   planning  `wm goal plan <id>` ran: a backlog `Plan goal #N` task is parked
+#             for the Orchestrator to decompose the goal into real tasks.
+#   planned   decomposition agreed — the plan is ready for the approval gate.
+#   released  approved by a human/Orchestrator (`wm goal release <id>`);
+#             terminal, and eligible child tasks may proceed.
+GOAL_STATUSES = ("draft", "planning", "planned", "released")
+
+# Whitelisted goal status edges for set_goal_status(). `planned -> released` is
+# deliberately absent: release is the approval gate and belongs to
+# release_goal(), which also re-gates the goal's children. `released` is
+# terminal — nothing leaves it.
+GOAL_TRANSITIONS = (
+    ("draft", "planning"),      # `wm goal plan` / POST /api/goal/{id}/plan
+    ("planning", "planned"),    # decomposition agreed
+    ("planning", "draft"),      # abandon the planning attempt
+)
+
+# Project slugs are identity + route keys (`#project/<slug>`): lowercase
+# alphanumeric plus dashes, never leading with a dash.
+_SLUG_RE = re.compile(r"^[a-z0-9][a-z0-9-]*$")
+
+# ---------------------------------------------------------------------------
+# Runtime paths (T2). All are overridable via env so tests can redirect the
+# real launcher/db/agent at self-contained scratch paths. The dispatcher
+# passes these same values into the wrapper's environment so a background
+# run wrapper and its parent dispatcher always agree on paths (even under a
+# test DB). Defaults are the canonical v1 locations.
+# ---------------------------------------------------------------------------
+_THIS_DIR = os.path.dirname(os.path.abspath(__file__))
+RUNS_DIR = os.path.join(hq_home(), "runs")
+PROFILES_DIR = os.path.join(hermes_home(), "profiles")
+HERMES = shutil.which("hermes") or "/opt/hermes/bin/hermes"
+HERMES_PY = sys.executable
+WM_RUN_AGENT = os.path.join(_THIS_DIR, "wm_run_agent.py")
+
+
+def resolve_runs_dir():
+    return os.environ.get("WM_RUNS_DIR") or RUNS_DIR
+
+
+def resolve_profiles_dir():
+    return os.environ.get("WM_PROFILES_DIR") or PROFILES_DIR
+
+
+# The reserved identity that runs on Hermes' DEFAULT profile: the Orchestrator.
+# `orchestrator` is NOT a profile directory under `profiles/` — Hermes spells
+# the root profile `default`, so every Hermes invocation for this identity uses
+# `--profile default` (DEFAULT_PROFILE) and the ROOT Hermes home. Its sessions
+# are captured from <root>/state.db (e.g. /opt/data/state.db), not from a
+# (nonexistent) profiles/orchestrator/state.db — see agent_session_db_path().
+ORCHESTRATOR_AGENT = "orchestrator"
+
+# Hermes' own name for the root profile. `hermes --profile default ...` resolves
+# HERMES_HOME to the root Hermes home even when the caller's environment already
+# points at a specialist profile (hermes_cli/profiles.resolve_profile_env: a
+# profile-shaped HERMES_HOME means the root is its grandparent). `--profile
+# orchestrator` would abort at launch — there is no such profile.
+DEFAULT_PROFILE = "default"
+
+# The canonical roster the engine coordinates with: the six dispatchable
+# specialist profiles (real directories under `profiles/`) plus the reserved
+# `orchestrator` identity. Used to validate an assignee at the write path so a
+# malformed name can never be handed to `hermes --profile <name>` as if it were
+# a real specialist profile.
+SPECIALIST_PROFILES = ("analyst", "writer", "marketer", "coder", "uiux",
+                       "reviewer")
+ASSIGNEE_PROFILES = (ORCHESTRATOR_AGENT,) + SPECIALIST_PROFILES
+
+
+def validate_assignee(assignee):
+    """Return a validated assignee_profile, or raise ValueError.
+
+    `None`/empty means "unassigned" and is preserved verbatim — legacy rows and
+    fixtures intentionally carry a null assignee, and the dispatcher falls back
+    to its DEFAULT_ASSIGNEE for those. Anything else must be an EXACT member of
+    the canonical roster: matching is case- and whitespace-sensitive on purpose,
+    because a near-miss (`Coder`, `orchestrator `, `orch`) would otherwise be
+    routed straight into `hermes --profile <name>` and die at launch.
+    """
+    if assignee is None:
+        return None
+    if not isinstance(assignee, str):
+        raise ValueError("assignee_profile must be a string, got %r"
+                         % (assignee,))
+    if assignee == "":
+        return None
+    if assignee not in ASSIGNEE_PROFILES:
+        raise ValueError(
+            "unknown assignee profile %r — must be one of %s (or unassigned)"
+            % (assignee, ", ".join(ASSIGNEE_PROFILES)))
+    return assignee
+
+
+def profile_hermes_home(profiles_dir, agent):
+    """The HERMES_HOME an agent's Hermes process runs under, given a profiles
+    dir. Single canonical mapping — symlinks are resolved ONCE here so every
+    caller (engine, run wrapper, dashboard reader) derives byte-identical paths
+    and no two views of the same store diverge.
+
+    Specialist -> <profiles_dir>/<agent>   (i.e. `hermes --profile <agent>`)
+    Orchestrator -> the ROOT home, the parent of the profiles dir
+                    (/opt/data/profiles -> /opt/data), i.e. `--profile default`.
+    """
+    root = os.path.realpath(profiles_dir)
+    if agent == ORCHESTRATOR_AGENT:
+        return os.path.dirname(root)
+    return os.path.join(root, agent)
+
+
+def profile_state_db(profiles_dir, agent):
+    """The Hermes state.db under an agent's home — canonical, symlink-resolved.
+
+    Shared by the engine (agent_session_db_path) and the dashboard reader
+    (wm_dash.reader._profile_db) so a probe, a liveness check and a session
+    listing can never disagree about which file they are reading.
+    """
+    return os.path.join(profile_hermes_home(profiles_dir, agent), "state.db")
+
+
+def hermes_root_home():
+    """The ROOT Hermes home — the `default` profile's HERMES_HOME."""
+    return profile_hermes_home(resolve_profiles_dir(), ORCHESTRATOR_AGENT)
+
+
+def agent_hermes_home(agent):
+    """HERMES_HOME for an agent, against the configured profiles dir."""
+    return profile_hermes_home(resolve_profiles_dir(), agent)
+
+
+def hermes_profile_arg(agent):
+    """The value to pass to `hermes --profile <...>` for an agent.
+
+    The reserved Orchestrator maps to Hermes' `default` profile; every
+    specialist is its own profile name. Callers ALWAYS pass `--profile` — an
+    explicit profile is what stops an inherited specialist `HERMES_HOME` or a
+    sticky `active_profile` from silently capturing an orchestrator run.
+    """
+    return DEFAULT_PROFILE if agent == ORCHESTRATOR_AGENT else agent
+
+
+def agent_session_db_path(agent):
+    """The Hermes state.db holding an agent's sessions, or None-safe path.
+
+    Every specialist agent runs `hermes --profile <agent>`, so its sessions
+    live in `profiles/<agent>/state.db`. The Orchestrator runs on Hermes'
+    DEFAULT profile (`--profile default`), so its sessions live in the DEFAULT
+    store — the sibling of the profiles dir (/opt/data/profiles ->
+    /opt/data/state.db). Misdirecting orchestrator probes into
+    profiles/orchestrator/state.db (which does not exist) was the root cause of
+    orchestrator runs not appearing live and their session_id never being
+    captured.
+    """
+    return profile_state_db(resolve_profiles_dir(), agent)
+
+
+def resolve_hermes():
+    return os.environ.get("WM_HERMES") or HERMES
+
+
+def resolve_py():
+    return os.environ.get("WM_PY") or HERMES_PY
+
+
+def resolve_projects_root():
+    """Projects root boundary for the dashboard's path-containment rule, or
+    None when no boundary is configured (raw CLI mode)."""
+    return os.environ.get("WM_PROJECTS_ROOT") or None
+
+
+def _require_path_contained(path):
+    """Defensive F-1 containment: when a projects_root is configured, reject
+    a primary_path that resolves outside it. When no root is configured
+    (CLI-only, no dashboard env), there is no boundary to enforce."""
+    root = resolve_projects_root()
+    if not root:
+        return
+    root = os.path.realpath(root)
+    if not (path == root or path.startswith(root + os.sep)):
+        raise ValueError(
+            "primary_path %r is outside projects_root %r" % (path, root))
+
+
+def ensure_runs_dir():
+    os.makedirs(resolve_runs_dir(), exist_ok=True)
+
+
+def completion_path(run_id):
+    return os.path.join(resolve_runs_dir(), "%d.completion.json" % run_id)
+
+
+def brief_path(run_id):
+    return os.path.join(resolve_runs_dir(), "%d.brief.txt" % run_id)
+
+
+def run_log_path(run_id):
+    return os.path.join(resolve_runs_dir(), "%d.log" % run_id)
+
+REVIEW_POLICIES = ("none", "required", "optional")
+
+
+def _connect(db_path=None):
+    if db_path is None:
+        db_path = resolve_db()
+    conn = sqlite3.connect(db_path)
+    conn.row_factory = sqlite3.Row
+    conn.execute("PRAGMA foreign_keys=ON")
+    conn.execute("PRAGMA busy_timeout=5000")
+    # WAL is a persistent property of the database file, but set it each
+    # connect to be safe (no-op after the first time).
+    conn.execute("PRAGMA journal_mode=WAL")
+    return conn
+
+
+SCHEMA_SQL = """
+CREATE TABLE IF NOT EXISTS wm_meta (
+    key   TEXT PRIMARY KEY,
+    value TEXT
+);
+
+CREATE TABLE IF NOT EXISTS projects (
+    id            INTEGER PRIMARY KEY,
+    slug          TEXT UNIQUE,
+    name          TEXT,
+    description   TEXT,
+    primary_path  TEXT,
+    created_at    REAL,
+    archived      INTEGER DEFAULT 0
+);
+
+CREATE TABLE IF NOT EXISTS goals (
+    id                 INTEGER PRIMARY KEY,
+    project_id         INTEGER REFERENCES projects(id),
+    title              TEXT,
+    description        TEXT,
+    acceptance_criteria TEXT,
+    status             TEXT,
+    created_at         REAL,
+    updated_at         REAL
+);
+
+CREATE TABLE IF NOT EXISTS tasks (
+    id                 INTEGER PRIMARY KEY,
+    project_id         INTEGER NOT NULL REFERENCES projects(id),
+    goal_id            INTEGER REFERENCES goals(id),
+    title              TEXT,
+    description        TEXT,
+    definition_of_done TEXT,
+    assignee_profile   TEXT,
+    status             TEXT DEFAULT 'planned',
+    review_policy      TEXT DEFAULT 'none',
+    is_code            INTEGER DEFAULT 0,
+    result_path        TEXT,
+    result_paths       TEXT,
+    feedback           TEXT,
+    summary            TEXT,
+    claimed_at         REAL,
+    heartbeat_at       REAL,
+    created_at         REAL,
+    updated_at         REAL
+);
+
+CREATE TABLE IF NOT EXISTS task_deps (
+    task_id            INTEGER REFERENCES tasks(id),
+    depends_on_task_id INTEGER REFERENCES tasks(id),
+    PRIMARY KEY (task_id, depends_on_task_id)
+);
+
+CREATE TABLE IF NOT EXISTS runs (
+    id            INTEGER PRIMARY KEY,
+    task_id       INTEGER REFERENCES tasks(id),
+    agent_profile TEXT,
+    session_id    TEXT,
+    status        TEXT DEFAULT 'running',
+    started_at    REAL,
+    finished_at   REAL,
+    heartbeat_at  REAL,
+    exit_code     INTEGER,
+    error         TEXT,
+    notes         TEXT,
+    completion    TEXT,
+    result_paths  TEXT,
+    workdir       TEXT,
+    branch        TEXT,
+    pid           INTEGER,
+    brief_path    TEXT,
+    review_id     INTEGER
+);
+
+CREATE TABLE IF NOT EXISTS reviews (
+    id              INTEGER PRIMARY KEY,
+    task_id         INTEGER REFERENCES tasks(id),
+    reviewer_profile TEXT,
+    status          TEXT,
+    session_id      TEXT,
+    verdict         TEXT,
+    comments        TEXT,
+    requested_at    REAL,
+    decided_at      REAL,
+    review_policy   TEXT
+);
+
+CREATE TABLE IF NOT EXISTS activity (
+    id           INTEGER PRIMARY KEY,
+    ts           REAL,
+    project_id   INTEGER REFERENCES projects(id),
+    goal_id      INTEGER REFERENCES goals(id),
+    task_id      INTEGER REFERENCES tasks(id),
+    run_id       INTEGER REFERENCES runs(id),
+    agent_profile TEXT,
+    session_id   TEXT,
+    action       TEXT,
+    detail       TEXT,
+    model        TEXT
+);
+
+CREATE TABLE IF NOT EXISTS state_transitions (
+    id          INTEGER PRIMARY KEY,
+    task_id     INTEGER REFERENCES tasks(id),
+    run_id      INTEGER REFERENCES runs(id),
+    ts          REAL,
+    from_status TEXT,
+    to_status   TEXT,
+    detail      TEXT
+);
+
+CREATE INDEX IF NOT EXISTS idx_tasks_project ON tasks(project_id);
+CREATE INDEX IF NOT EXISTS idx_tasks_goal    ON tasks(goal_id);
+CREATE INDEX IF NOT EXISTS idx_tasks_status  ON tasks(status);
+CREATE INDEX IF NOT EXISTS idx_deps_task     ON task_deps(task_id);
+CREATE INDEX IF NOT EXISTS idx_deps_dep      ON task_deps(depends_on_task_id);
+CREATE INDEX IF NOT EXISTS idx_runs_task     ON runs(task_id);
+CREATE INDEX IF NOT EXISTS idx_activity_task ON activity(task_id);
+"""
+
+
+def _table_columns(conn, table):
+    return {r["name"] for r in conn.execute("PRAGMA table_info(%s)" % table)}
+
+
+def _migrate(conn):
+    """Idempotent in-place migrations for pre-existing stores.
+
+    Runs apply to the *live* DB without a destructive table rebuild. Only
+    columns/constraints that can be added cheaply come through here; schema
+    changes that require a rebuild are reflected in SCHEMA_SQL for fresh
+    databases and otherwise enforced at the app layer.
+    """
+    if "completion" not in _table_columns(conn, "runs"):
+        conn.execute("ALTER TABLE runs ADD COLUMN completion TEXT")
+    if "pid" not in _table_columns(conn, "runs"):
+        conn.execute("ALTER TABLE runs ADD COLUMN pid INTEGER")
+    if "brief_path" not in _table_columns(conn, "runs"):
+        conn.execute("ALTER TABLE runs ADD COLUMN brief_path TEXT")
+    if "review_id" not in _table_columns(conn, "runs"):
+        conn.execute("ALTER TABLE runs ADD COLUMN review_id INTEGER")
+    if "is_code" not in _table_columns(conn, "tasks"):
+        conn.execute("ALTER TABLE tasks ADD COLUMN is_code INTEGER DEFAULT 0")
+    if "result_paths" not in _table_columns(conn, "tasks"):
+        conn.execute("ALTER TABLE tasks ADD COLUMN result_paths TEXT")
+    # Phase 6.5.2: readable owner/reviewer feedback on the task itself (the
+    # full-text field surfaced next to Description in the dashboard), written
+    # by owner_feedback / review_verdict(changes_requested). This is the ONLY
+    # schema change in 6.5.2.
+    if "feedback" not in _table_columns(conn, "tasks"):
+        conn.execute("ALTER TABLE tasks ADD COLUMN feedback TEXT")
+    if "result_paths" not in _table_columns(conn, "runs"):
+        conn.execute("ALTER TABLE runs ADD COLUMN result_paths TEXT")
+    if "workdir" not in _table_columns(conn, "runs"):
+        conn.execute("ALTER TABLE runs ADD COLUMN workdir TEXT")
+    if "branch" not in _table_columns(conn, "runs"):
+        conn.execute("ALTER TABLE runs ADD COLUMN branch TEXT")
+    # Phase 6 (CU-5): goals become editable, so they need the same
+    # last-touched stamp tasks already carry. Existing rows keep NULL until
+    # their first edit — a NULL updated_at means "never edited since create".
+    if "updated_at" not in _table_columns(conn, "goals"):
+        conn.execute("ALTER TABLE goals ADD COLUMN updated_at REAL")
+
+
+def init_db(db_path=None):
+    """Create the full schema and seed wm_meta. Idempotent."""
+    conn = _connect(db_path)
+    try:
+        with conn:
+            conn.executescript(SCHEMA_SQL)
+            _migrate(conn)
+            meta = {
+                "schema_version": SCHEMA_VERSION,
+                "concurrency_cap": "3",
+                "stall_seconds": "300",
+                "paused": "0",
+                "retention_days": "180",
+                "backup_dir": os.path.join(resolve_runs_dir(), "backups"),
+                "backup_interval_hours": "24",
+                "code_worktree": "1",
+            }
+            for key, value in meta.items():
+                conn.execute(
+                    "INSERT OR IGNORE INTO wm_meta(key, value) VALUES(?, ?)",
+                    (key, value))
+            # Force the running schema version to the code's current version so
+            # an in-place migration (v1 -> v2) is reflected in meta.
+            conn.execute(
+                "UPDATE wm_meta SET value=? WHERE key='schema_version'",
+                (SCHEMA_VERSION,))
+    finally:
+        conn.close()
+
+
+# ---------------------------------------------------------------------------
+# wm_meta
+# ---------------------------------------------------------------------------
+def append_meta(key, value, db_path=None):
+    """Upsert a wm_meta key (preserving an existing value unless key present)."""
+    conn = _connect(db_path)
+    try:
+        with conn:
+            conn.execute(
+                "INSERT INTO wm_meta(key, value) VALUES(?, ?) "
+                "ON CONFLICT(key) DO UPDATE SET value=excluded.value",
+                (key, value),
+            )
+    finally:
+        conn.close()
+
+
+def get_meta(key, default=None, db_path=None):
+    conn = _connect(db_path)
+    try:
+        row = conn.execute("SELECT value FROM wm_meta WHERE key=?", (key,)).fetchone()
+        return row["value"] if row else default
+    finally:
+        conn.close()
+
+
+# ---------------------------------------------------------------------------
+# projects
+# ---------------------------------------------------------------------------
+def create_project(slug, name, description="", primary_path="", db_path=None):
+    if not _SLUG_RE.fullmatch(str(slug)):
+        raise ValueError(
+            "slug must match ^[a-z0-9][a-z0-9-]*$ (got %r)" % (slug,))
+    if not primary_path or not str(primary_path).strip():
+        raise ValueError(
+            "project requires a non-empty --path / primary_path (the canonical "
+            "working path)")
+    if not os.path.isabs(primary_path):
+        raise ValueError("primary_path must be an absolute directory path")
+    primary_path = os.path.realpath(primary_path)
+    _require_path_contained(primary_path)
+    conn = _connect(db_path)
+    try:
+        with conn:
+            cur = conn.execute(
+                "INSERT INTO projects(slug, name, description, primary_path, created_at) "
+                "VALUES(?, ?, ?, ?, ?)",
+                (slug, name, description, primary_path, time.time()),
+            )
+            pid = cur.lastrowid
+        log_activity(action="project_create", project_id=pid,
+                     agent_profile="cli", detail="slug=%s" % slug, db_path=db_path)
+        return pid
+    finally:
+        conn.close()
+
+
+def update_project(slug, name=None, description=None, primary_path=None,
+                   db_path=None):
+    """Update a project's identity metadata (name / description / primary_path).
+
+    The slug is the immutable identity + route key — it is NEVER updated here
+    (changing it would break `#project/<slug>` links, breadcrumbs and the
+    primary_path convention). Validation mirrors create_project. Every change
+    is a real `project_update` activity row.
+
+    Returns the updated project row as a plain dict. Raises ValueError for a
+    missing slug or invalid field values. A call with no editable fields is a
+    no-op (returns the current row unchanged, no activity).
+    """
+    conn = _connect(db_path)
+    try:
+        row = _require_project(conn, slug)
+        updates = {}
+        if name is not None:
+            name = str(name).strip()
+            if not name:
+                raise ValueError("name must be non-empty")
+            if len(name) > 120:
+                raise ValueError("name must be 120 characters or fewer")
+            updates["name"] = name
+        if description is not None:
+            updates["description"] = str(description).strip()
+        if primary_path is not None:
+            p = str(primary_path).strip()
+            if not p:
+                raise ValueError("primary_path must be non-empty")
+            if not os.path.isabs(p):
+                raise ValueError("primary_path must be an absolute directory path")
+            rp = os.path.realpath(p)
+            _require_path_contained(rp)
+            updates["primary_path"] = rp
+        out = dict(row)
+        if not updates:
+            return out
+        cols = ", ".join("%s = ?" % k for k in updates)
+        with conn:
+            conn.execute("UPDATE projects SET %s WHERE id = ?" % cols,
+                         list(updates.values()) + [row["id"]])
+        out.update(updates)
+        log_activity(action="project_update", project_id=row["id"],
+                     agent_profile="cli",
+                     detail="updated %s" % ", ".join(updates.keys()),
+                     db_path=db_path)
+        return out
+    finally:
+        conn.close()
+
+
+def set_project_archived(slug, flag, db_path=None):
+    """Set a project's archived visibility flag (0 = active, 1 = archived).
+
+    Archiving is an organisation / visibility flag only — it NEVER mutates
+    task / goal / run rows (a dormant project keeps its real status). Logs a
+    real `project_archive` (flag=1) or `project_restore` (flag=0) activity row.
+
+    Returns the updated project row as a plain dict. Raises ValueError for a
+    missing slug.
+    """
+    flag = 1 if flag else 0
+    conn = _connect(db_path)
+    try:
+        row = _require_project(conn, slug)
+        with conn:
+            conn.execute("UPDATE projects SET archived = ? WHERE id = ?",
+                         (flag, row["id"]))
+        out = dict(row)
+        out["archived"] = flag
+        log_activity(action="project_archive" if flag else "project_restore",
+                     project_id=row["id"], agent_profile="cli",
+                     detail="archived=%d" % flag, db_path=db_path)
+        return out
+    finally:
+        conn.close()
+
+
+def list_projects(db_path=None):
+    conn = _connect(db_path)
+    try:
+        return conn.execute(
+            "SELECT * FROM projects ORDER BY archived ASC, created_at ASC"
+        ).fetchall()
+    finally:
+        conn.close()
+
+
+def get_project(project_id=None, slug=None, db_path=None):
+    conn = _connect(db_path)
+    try:
+        if slug is not None:
+            row = conn.execute(
+                "SELECT * FROM projects WHERE slug=?", (slug,)).fetchone()
+        else:
+            row = conn.execute(
+                "SELECT * FROM projects WHERE id=?", (project_id,)).fetchone()
+        return row
+    finally:
+        conn.close()
+
+
+def _require_project(conn, slug):
+    row = conn.execute("SELECT * FROM projects WHERE slug=?", (slug,)).fetchone()
+    if not row:
+        raise ValueError("no project with slug '%s'" % slug)
+    return row
+
+
+# ---------------------------------------------------------------------------
+# goals
+# ---------------------------------------------------------------------------
+def create_goal(project_slug, title, description="", acceptance_criteria="",
+                db_path=None):
+    """Create a goal in `draft` (Phase 6.5).
+
+    A brand-new goal has no agreed decomposition, so it is NOT releasable: it
+    must go through `request_goal_planning` -> `planning` -> `planned` before
+    `release_goal` will accept it. This is the single create-path status.
+    """
+    conn = _connect(db_path)
+    try:
+        with conn:
+            proj = _require_project(conn, project_slug)
+            now = time.time()
+            cur = conn.execute(
+                "INSERT INTO goals(project_id, title, description, "
+                "acceptance_criteria, status, created_at, updated_at) "
+                "VALUES(?,?,?,?,?,?,?)",
+                (proj["id"], title, description, acceptance_criteria,
+                 "draft", now, now),
+            )
+            gid = cur.lastrowid
+        log_activity(action="goal_create", project_id=proj["id"], goal_id=gid,
+                     agent_profile="cli", detail=title, db_path=db_path)
+        return gid
+    finally:
+        conn.close()
+
+
+def update_goal(goal_id, title=None, description=None, acceptance_criteria=None,
+                db_path=None):
+    """Update a DRAFT goal's plan text (title / description / acceptance_criteria).
+
+    The goal's `status` is NEVER touched here — release is the only status
+    transition and it belongs to `release_goal` (the approval gate).
+
+    Phase 6.5.1 (owner decision 1): the goal text is editable ONLY while the
+    goal is `draft`. Once it has been sent to planning the text is the brief the
+    Orchestrator decomposed against, so silently rewriting it would leave the
+    goal's child tasks implementing a scope nobody agreed to — and for a
+    `released` goal it would move the very thing the approval gate approved. A
+    scope change after that point is a NEW goal, not an edit. To re-open a
+    `planning` goal for editing, abandon it back to draft
+    (`set_goal_status(id, 'draft')`).
+
+    Every change bumps `updated_at` and writes a real `goal_update` activity row.
+
+    Returns the updated goal row as a plain dict. Raises ValueError for a
+    missing goal, a non-`draft` goal, or invalid field values. A call with no
+    editable fields is a no-op (returns the current row unchanged, no activity,
+    no timestamp bump) — but it is still refused on a non-draft goal, so the
+    caller never gets a 200-shaped answer for an edit the engine would refuse.
+    """
+    conn = _connect(db_path)
+    try:
+        row = conn.execute("SELECT * FROM goals WHERE id=?", (goal_id,)).fetchone()
+        if row is None:
+            raise ValueError("no goal with id %s" % goal_id)
+        if row["status"] != "draft":
+            raise ValueError("goal %d is '%s' — edit is only allowed while the "
+                             "goal is 'draft'" % (goal_id, row["status"]))
+        updates = {}
+        if title is not None:
+            title = str(title).strip()
+            if not title:
+                raise ValueError("title must be non-empty")
+            if len(title) > 200:
+                raise ValueError("title must be 200 characters or fewer")
+            updates["title"] = title
+        if description is not None:
+            updates["description"] = str(description).strip()
+        if acceptance_criteria is not None:
+            updates["acceptance_criteria"] = str(acceptance_criteria).strip()
+        out = dict(row)
+        if not updates:
+            return out
+        updates["updated_at"] = time.time()
+        cols = ", ".join("%s = ?" % k for k in updates)
+        with conn:
+            conn.execute("UPDATE goals SET %s WHERE id = ?" % cols,
+                         list(updates.values()) + [row["id"]])
+        out.update(updates)
+        log_activity(action="goal_update", project_id=row["project_id"],
+                     goal_id=row["id"], agent_profile="cli",
+                     detail="updated %s" % ", ".join(
+                         k for k in updates if k != "updated_at"),
+                     db_path=db_path)
+        return out
+    finally:
+        conn.close()
+
+
+def set_goal_status(goal_id, new_status, detail=None, db_path=None, force=False):
+    """The ONE whitelisted goal-status mutator (Phase 6.5).
+
+    Moves a goal along the lifecycle `draft -> planning -> planned` (plus the
+    `planning -> draft` abandon edge) and writes a real `goal_status` activity
+    row for every flip. `planned -> released` is NOT here: release is the
+    approval gate and belongs to release_goal(), which also re-gates the goal's
+    child tasks. `released` is terminal.
+
+    `force=True` bypasses the EDGE whitelist only — it is for the one-shot
+    Phase-6.5 `wm goal backfill-draft --apply` (planned-with-0-tasks -> draft),
+    which must still be audited. It never bypasses the status-name validation
+    and it never writes a status outside GOAL_STATUSES.
+
+    Returns the updated goal row as a plain dict. Raises ValueError for an
+    unknown goal, an unknown status, or a disallowed edge.
+    """
+    if new_status not in GOAL_STATUSES:
+        raise ValueError("unknown goal status '%s' — must be one of %s"
+                         % (new_status, ", ".join(GOAL_STATUSES)))
+    conn = _connect(db_path)
+    try:
+        row = conn.execute("SELECT * FROM goals WHERE id=?", (goal_id,)).fetchone()
+        if row is None:
+            raise ValueError("no goal with id %s" % goal_id)
+        old_status = row["status"]
+        if not force and (old_status, new_status) not in GOAL_TRANSITIONS:
+            raise ValueError(
+                "goal %d cannot go '%s' -> '%s' (allowed: %s%s)"
+                % (goal_id, old_status, new_status,
+                   "; ".join("%s -> %s" % e for e in GOAL_TRANSITIONS),
+                   "; planned -> released via release_goal"))
+        now = time.time()
+        closed_task_id = None
+        with conn:
+            conn.execute("UPDATE goals SET status=?, updated_at=? WHERE id=?",
+                         (new_status, now, goal_id))
+            # F-1 (Phase 6.5 review): leaving `planning` ENDS the decomposition
+            # work item, so close the goal's open `Plan goal #N` task in the
+            # same transaction as the flip. Left open it stays `planned` as a
+            # child of this goal, and release_goal — which promotes EVERY child
+            # in ('planned','waiting_approval') — would make it `ready`, at
+            # which point the dispatcher claims it and launches a real
+            # orchestrator run that re-decomposes an already-released goal.
+            # `done` is outside that set, so release skips it.
+            if old_status == "planning" and new_status != "planning":
+                open_task = _open_planning_task(conn, goal_id)
+                if open_task is not None:
+                    _set_task_status(
+                        open_task["id"], "done", _conn=conn,
+                        detail="goal #%d left planning (-> %s); planning task "
+                               "closed" % (goal_id, new_status))
+                    closed_task_id = open_task["id"]
+        out = dict(row)
+        out["status"] = new_status
+        out["updated_at"] = now
+        log_activity(action="goal_status", project_id=row["project_id"],
+                     goal_id=goal_id, agent_profile="cli",
+                     detail=detail or ("goal #%d %s -> %s"
+                                       % (goal_id, old_status, new_status)),
+                     db_path=db_path)
+        if closed_task_id is not None:
+            log_activity(action="goal_planning_closed",
+                         project_id=row["project_id"], goal_id=goal_id,
+                         task_id=closed_task_id,
+                         agent_profile=PLANNING_TASK_PROFILE,
+                         detail="planning task #%d marked `done`: goal #%d went "
+                                "%s -> %s, so the decomposition work item is "
+                                "finished and must never become dispatchable"
+                                % (closed_task_id, goal_id, old_status,
+                                   new_status),
+                         db_path=db_path)
+        return out
+    finally:
+        conn.close()
+
+
+# A planning task is the Orchestrator's decomposition work item for a goal. It
+# is identified by (goal, assignee, title prefix) — no schema change needed.
+PLANNING_TASK_PREFIX = "Plan goal #"
+PLANNING_TASK_PROFILE = "orchestrator"
+# Statuses that mean "this planning task is finished" — anything else counts as
+# an OPEN planning task and makes a second `plan` request idempotent.
+_PLANNING_TASK_CLOSED = ("done", "failed")
+
+
+def _open_planning_task(conn, goal_id):
+    """The goal's open Orchestrator planning task row, or None.
+
+    ACCEPTED HEURISTIC (F-4, Phase 6.5 review): the match is by shape —
+    (goal_id, assignee_profile='orchestrator', title LIKE 'Plan goal #%') — not
+    by an explicit marker, because Phase 6.5 ships with no schema change (no
+    `is_planning_task` column, no migration). A HUMAN-authored task that happens
+    to have all three properties is therefore indistinguishable from a real
+    planning task: a genuine `/plan` on that goal would report
+    `already_planning` and adopt the human's task, and leaving `planning` would
+    mark it `done`. Judged acceptable — the title prefix + the reserved
+    orchestrator assignee are an unlikely accident — but a future phase that
+    adds a column should replace this predicate, not extend it.
+    """
+    return conn.execute(
+        "SELECT * FROM tasks WHERE goal_id=? AND assignee_profile=? "
+        "AND title LIKE ? AND status NOT IN (%s) ORDER BY id LIMIT 1"
+        % ",".join("?" * len(_PLANNING_TASK_CLOSED)),
+        (goal_id, PLANNING_TASK_PROFILE, PLANNING_TASK_PREFIX + "%")
+        + _PLANNING_TASK_CLOSED).fetchone()
+
+
+def request_goal_planning(goal_id, db_path=None):
+    """PLAN a draft goal: park a real decomposition task + flip -> `planning`.
+
+    ONE store ENTRY POINT (Phase 6.5 CU-D) so the HTTP and CLI layers never have
+    to sequence the writes themselves — but NOT one atomic transaction (F-2):
+    create_task, set_goal_status and log_activity each open their own
+    connection, so this creates the planning task and flips the status as three
+    separate store calls:
+
+      1. create_task(... assignee 'orchestrator' ...) — a real `Plan goal #N`
+         task. The goal is still `draft` (i.e. NOT released) at this point, so
+         create_task's own release gate gives it init_status `planned`
+         (backlog). That is load-bearing: a planning task must NEVER be `ready`,
+         because the dispatcher would then auto-run it. set_goal_status closes
+         the task again (-> `done`) when the goal later leaves `planning`, so
+         release_goal cannot promote it.
+      2. set_goal_status(goal_id, 'planning') — audited via `goal_status`.
+      3. a `goal_plan_requested` activity row tying the goal to its task.
+
+    Because those steps are not one transaction, a crash between 1 and 2 leaves
+    an orphan `Plan goal #N` task with the goal still `draft`. The idempotency
+    guard is therefore keyed on the OPEN PLANNING TASK, not on the status: a
+    goal that already has one returns it with already=True and creates no
+    second task, whether the goal is `planning` (normal repeat) or still
+    `draft` (crash retry — the interrupted status flip is completed here). A
+    goal whose planning task was closed gets a fresh one (already=False).
+
+    Returns (goal_row_dict, planning_task_id, already). Raises ValueError for an
+    unknown goal or one that is neither `draft` nor `planning`.
+    """
+    conn = _connect(db_path)
+    try:
+        row = conn.execute("SELECT * FROM goals WHERE id=?", (goal_id,)).fetchone()
+        if row is None:
+            raise ValueError("no goal with id %s" % goal_id)
+        status = row["status"]
+        if status not in ("draft", "planning"):
+            raise ValueError("goal %d is '%s' — only a draft goal can be sent "
+                             "to planning" % (goal_id, status))
+        # F-2: the guard is keyed on the open planning task for BOTH source
+        # statuses, not just `planning`. A crash between create_task and
+        # set_goal_status leaves the task parked with the goal still `draft`;
+        # guarding only the `planning` branch let the retry create a SECOND
+        # planning task for the same goal.
+        existing = _open_planning_task(conn, goal_id)
+        existing_tid = existing["id"] if existing is not None else None
+        slug = title = desc = None
+        if existing_tid is None:
+            proj = conn.execute("SELECT * FROM projects WHERE id=?",
+                                (row["project_id"],)).fetchone()
+            if proj is None:
+                raise ValueError("goal %d has no project" % goal_id)
+            slug = proj["slug"]
+            title = row["title"] or "-"
+            desc = "\n\n".join(p for p in (
+                (row["description"] or "").strip(),
+                ("Acceptance criteria:\n" + row["acceptance_criteria"].strip())
+                if (row["acceptance_criteria"] or "").strip() else "") if p)
+    finally:
+        conn.close()
+
+    if existing_tid is not None and status == "planning":
+        # Plain repeat of a request already fully applied: nothing to write.
+        return dict(row), existing_tid, True
+
+    # create_task / set_goal_status / log_activity each open their own
+    # connection, so nothing above may still hold a write transaction here.
+    if existing_tid is not None:
+        # Crash retry: adopt the orphan task and finish the interrupted flip
+        # (status is still `draft`, so steps 2 and 3 never ran).
+        tid, already = existing_tid, True
+    else:
+        tid, already = create_task(
+            slug,
+            "%s%d: %s" % (PLANNING_TASK_PREFIX, goal_id, title),
+            description=desc,
+            definition_of_done="Goal #%d decomposed into tasks with specialist "
+                               "assignees; goal set to `planned`." % goal_id,
+            assignee_profile=PLANNING_TASK_PROFILE,
+            goal_id=goal_id,
+            db_path=db_path), False
+    if status == "draft":
+        out = set_goal_status(goal_id, "planning",
+                              detail="planning requested (task #%d)" % tid,
+                              db_path=db_path)
+    else:
+        out = dict(row)
+    log_activity(action="goal_plan_requested", project_id=row["project_id"],
+                 goal_id=goal_id, task_id=tid,
+                 agent_profile=PLANNING_TASK_PROFILE,
+                 detail="goal #%d -> planning; planning task #%d %s in the "
+                        "backlog (no agent starts automatically)"
+                        % (goal_id, tid,
+                           "adopted (crash retry)" if already else "parked"),
+                 db_path=db_path)
+    return out, tid, already
+
+
+def get_goal(goal_id, db_path=None):
+    conn = _connect(db_path)
+    try:
+        return conn.execute("SELECT * FROM goals WHERE id=?", (goal_id,)).fetchone()
+    finally:
+        conn.close()
+
+
+def goal_is_released(goal_id, db_path=None):
+    """A goal is 'released' (approved) when its status is 'released'."""
+    if goal_id is None:
+        return False
+    conn = _connect(db_path)
+    try:
+        row = conn.execute("SELECT status FROM goals WHERE id=?", (goal_id,)).fetchone()
+        return bool(row and row["status"] == "released")
+    finally:
+        conn.close()
+
+
+def release_goal(goal_id, db_path=None):
+    """Approve/release a Goal plan -> its eligible child tasks may proceed.
+
+    Sets the goal to 'released'. For each child task of the goal:
+      - deps all done -> becomes `ready` immediately (release is the gate);
+      - deps not done -> becomes `waiting_approval` (released plan; the
+        dispatcher promotes it to `ready` automatically once deps complete).
+    A `planned` task under a *released* goal no longer needs a separate per-task
+    approval to be eligible. Un-released goals leave their tasks `planned`.
+
+    Returns (goal_status, [(task_id, new_status), ...]). Refuses a nonexistent
+    goal, and (Phase 6.5) any goal that is not `planned` — a `draft` or
+    `planning` goal has no agreed plan to approve. An already-`released` goal
+    is NOT refused: explicit re-release is a no-op returning its tasks' current
+    eligible state.
+    """
+    conn = _connect(db_path)
+    try:
+        with conn:
+            g = conn.execute("SELECT * FROM goals WHERE id=?",
+                             (goal_id,)).fetchone()
+            if g is None:
+                raise ValueError("no goal with id %s" % goal_id)
+            if g["status"] == "released":
+                # F-2: idempotent — a re-release is a no-op that reports the
+                # current state of the children without touching them.
+                children = conn.execute(
+                    "SELECT id FROM tasks WHERE goal_id=? ORDER BY id",
+                    (goal_id,)).fetchall()
+                out = []
+                for c in children:
+                    row = conn.execute("SELECT status FROM tasks WHERE id=?",
+                                       (c["id"],)).fetchone()
+                    out.append((c["id"], row["status"] if row else "planned"))
+                log_activity(action="goal_release", goal_id=goal_id,
+                             agent_profile="cli",
+                             detail="goal #%d already released; no-op (idempotent)"
+                                    % goal_id,
+                             db_path=db_path)
+                return "released", out
+            # CU-E (Phase 6.5): valid-source guard. Release is the approval gate
+            # for an AGREED plan, so only a `planned` goal may pass it. A
+            # `draft`/`planning` goal has no decomposition yet — releasing it
+            # approved nothing and (pre-6.5) silently made an empty goal look
+            # shipped.
+            if g["status"] != "planned":
+                raise ValueError(
+                    "goal %d is '%s' — it must be planned before release"
+                    % (goal_id, g["status"]))
+            conn.execute("UPDATE goals SET status='released' WHERE id=?",
+                         (goal_id,))
+            children = conn.execute(
+                "SELECT id FROM tasks WHERE goal_id=? ORDER BY id",
+                (goal_id,)).fetchall()
+            out = []
+            for c in children:
+                row = conn.execute("SELECT status FROM tasks WHERE id=?",
+                                   (c["id"],)).fetchone()
+                cur_st = row["status"] if row else None
+                new_st = cur_st
+                if cur_st in ("planned", "waiting_approval"):
+                    ns = ("ready" if deps_done(c["id"], db_path=db_path)
+                          else "waiting_approval")
+                    _set_task_status(c["id"], ns, db_path=db_path, run_id=None,
+                                     detail="goal %d released" % goal_id,
+                                     _conn=conn)
+                    new_st = ns
+                out.append((c["id"], new_st))
+        log_activity(action="goal_release", goal_id=goal_id,
+                     agent_profile="cli",
+                     detail="goal #%d released/approved; children -> %s"
+                            % (goal_id, "; ".join("#%d=%s" % (i, s)
+                                                  for i, s in out) or "-"),
+                     db_path=db_path)
+        return "released", out
+    finally:
+        conn.close()
+
+
+# ---------------------------------------------------------------------------
+# tasks
+# ---------------------------------------------------------------------------
+def create_task(project_slug, title, description="", definition_of_done="",
+                assignee_profile=None, goal_id=None, review_policy="none",
+                is_code=False, db_path=None):
+    if review_policy not in REVIEW_POLICIES:
+        raise ValueError("review_policy must be one of %s" % (REVIEW_POLICIES,))
+    if not project_slug or not str(project_slug).strip():
+        raise ValueError("task requires a project (project_slug is required; goal is optional)")
+    # L1: the assignee is what the dispatcher hands to `hermes --profile <p>`,
+    # so a malformed name must be rejected HERE (one write path) rather than
+    # silently routed as if it were a specialist profile. Null stays null.
+    assignee_profile = validate_assignee(assignee_profile)
+    conn = _connect(db_path)
+    try:
+        with conn:
+            proj = _require_project(conn, project_slug)
+            released = False
+            if goal_id is not None:
+                g = conn.execute(
+                    "SELECT * FROM goals WHERE id=? AND project_id=?",
+                    (goal_id, proj["id"])).fetchone()
+                if not g:
+                    raise ValueError(
+                        "goal %s does not belong to project '%s'" % (goal_id, project_slug))
+                released = (g["status"] == "released")
+            # Backlog/release gate: a task under an UNRELEASED goal (or goal-less,
+            # i.e. not yet part of an approved plan) is created `planned` — parked,
+            # never auto-runs. Under a RELEASED (approved) goal it is created
+            # `waiting_approval` and becomes `ready` automatically once deps done
+            # (eligible child tasks may continue automatically).
+            now = time.time()
+            init_status = "waiting_approval" if released else "planned"
+            cur = conn.execute(
+                "INSERT INTO tasks(project_id, goal_id, title, description, "
+                "definition_of_done, assignee_profile, status, review_policy, "
+                "is_code, created_at, updated_at) VALUES(?,?,?,?,?,?,?,?,?,?,?)",
+                (proj["id"], goal_id, title, description, definition_of_done,
+                 assignee_profile, init_status, review_policy,
+                 1 if is_code else 0, now, now),
+            )
+            tid = cur.lastrowid
+            conn.execute(
+                "INSERT INTO state_transitions(task_id, run_id, ts, from_status, "
+                "to_status, detail) VALUES(?,NULL,?,NULL,?,?)",
+                (tid, now, init_status, "created (goal released=%s)" % released))
+        log_activity(action="task_create", project_id=proj["id"], goal_id=goal_id,
+                     task_id=tid, agent_profile=assignee_profile,
+                     detail=title, db_path=db_path)
+        return tid
+    finally:
+        conn.close()
+
+
+def list_tasks(project_slug=None, status=None, db_path=None):
+    conn = _connect(db_path)
+    try:
+        sql = ("SELECT t.*, p.slug AS project_slug, g.title AS goal_title "
+               "FROM tasks t "
+               "LEFT JOIN projects p ON p.id = t.project_id "
+               "LEFT JOIN goals g ON g.id = t.goal_id WHERE 1=1")
+        params = []
+        if project_slug is not None:
+            sql += " AND p.slug = ?"
+            params.append(project_slug)
+        if status is not None:
+            sql += " AND t.status = ?"
+            params.append(status)
+        sql += " ORDER BY t.status, t.created_at ASC"
+        return conn.execute(sql, params).fetchall()
+    finally:
+        conn.close()
+
+
+def get_task(task_id, db_path=None):
+    conn = _connect(db_path)
+    try:
+        return conn.execute(
+            "SELECT t.*, p.slug AS project_slug, g.title AS goal_title "
+            "FROM tasks t "
+            "LEFT JOIN projects p ON p.id = t.project_id "
+            "LEFT JOIN goals g ON g.id = t.goal_id "
+            "WHERE t.id = ?", (task_id,)).fetchone()
+    finally:
+        conn.close()
+
+
+def list_deps(depends_on_task_id, db_path=None):
+    """Rows where the given task is the PREDECESSOR (things that depend on it)."""
+    conn = _connect(db_path)
+    try:
+        return conn.execute(
+            "SELECT task_id FROM task_deps WHERE depends_on_task_id=?",
+            (depends_on_task_id,)).fetchall()
+    finally:
+        conn.close()
+
+
+def list_task_deps(task_id, db_path=None):
+    """Rows where the given task is the DEPENDENT (things it depends on)."""
+    conn = _connect(db_path)
+    try:
+        return conn.execute(
+            "SELECT depends_on_task_id FROM task_deps WHERE task_id=?",
+            (task_id,)).fetchall()
+    finally:
+        conn.close()
+
+
+def add_task_dep(task_id, depends_on_task_id, db_path=None):
+    conn = _connect(db_path)
+    try:
+        with conn:
+            conn.execute(
+                "INSERT OR IGNORE INTO task_deps(task_id, depends_on_task_id) "
+                "VALUES(?, ?)", (task_id, depends_on_task_id))
+            conn.execute(
+                "UPDATE tasks SET updated_at=? WHERE id=?", (time.time(), task_id))
+        log_activity(action="task_dep", task_id=task_id,
+                     detail="depends_on=%d" % depends_on_task_id, db_path=db_path)
+    finally:
+        conn.close()
+
+
+def assign_task(task_id, profile, db_path=None):
+    """Re-assign a task, validating against the canonical roster.
+
+    L1: `create_task` is not the only write path for `assignee_profile` — this
+    UPDATE is the other one, and what it stores is what the dispatcher hands to
+    `hermes --profile <p>` (wm_dispatch: `t["assignee_profile"] or
+    DEFAULT_ASSIGNEE`). Validating here too means no caller — CLI, script or
+    future HTTP route — can park a malformed name on a task and have it reach
+    dispatch. Null/empty is preserved as "unassigned" exactly as on create.
+    """
+    profile = validate_assignee(profile)
+    conn = _connect(db_path)
+    try:
+        with conn:
+            cur = conn.execute(
+                "UPDATE tasks SET assignee_profile=?, updated_at=? WHERE id=?",
+                (profile, time.time(), task_id))
+            if cur.rowcount == 0:
+                raise ValueError("no task with id %s" % task_id)
+        log_activity(action="task_assign", task_id=task_id,
+                     agent_profile=profile, db_path=db_path)
+    finally:
+        conn.close()
+
+
+def deps_done(task_id, db_path=None):
+    """True when every predecessor of task_id has status 'done'."""
+    conn = _connect(db_path)
+    try:
+        deps = conn.execute(
+            "SELECT d.depends_on_task_id AS dep, t.status AS status "
+            "FROM task_deps d "
+            "LEFT JOIN tasks t ON t.id = d.depends_on_task_id "
+            "WHERE d.task_id = ?", (task_id,)).fetchall()
+        return all(r["status"] == "done" for r in deps)
+    finally:
+        conn.close()
+
+
+def mark_ready(task_id, db_path=None):
+    """Set a task to 'ready' only if all deps are done; else raise ValueError."""
+    if not deps_done(task_id, db_path=db_path):
+        deps = list_task_deps(task_id, db_path=db_path)
+        raise ValueError(
+            "task %d cannot be marked ready: not all dependencies are done "
+            "(pending deps: %s)" % (task_id, ", ".join(str(d["depends_on_task_id"]) for d in deps)))
+    conn = _connect(db_path)
+    try:
+        with conn:
+            cur = conn.execute(
+                "UPDATE tasks SET status='ready', updated_at=? WHERE id=? AND status != 'done'",
+                (time.time(), task_id))
+            if cur.rowcount == 0:
+                raise ValueError("no task %d (or it is already done)" % task_id)
+            _record_transition_conn(conn, task_id, "ready", from_status="*",
+                                    detail="explicit release (mark-ready)")
+        log_activity(action="task_ready", task_id=task_id, db_path=db_path)
+    finally:
+        conn.close()
+
+
+def claim_task(task_id, db_path=None):
+    """Atomically claim a 'ready'/'rework' task -> 'running'.
+
+    Returns True iff exactly one row was updated (someone else did not
+    win the race). Runs inside a single transaction. 'rework' is claimable
+    so a changes_requested task is automatically re-run on the next tick.
+    """
+    conn = _connect(db_path)
+    try:
+        now = time.time()
+        with conn:
+            cur = conn.execute(
+                "UPDATE tasks SET status='running', claimed_at=?, heartbeat_at=? "
+                "WHERE id=? AND status IN ('ready','rework')",
+                (now, now, task_id))
+            rowcount = cur.rowcount
+            if rowcount == 1:
+                _record_transition_conn(conn, task_id, "running",
+                                        from_status="*", detail="claimed by dispatcher")
+        return rowcount == 1
+    finally:
+        conn.close()
+
+
+def next_ready_tasks(cap, db_path=None):
+    """Return up to `cap` ready/rework tasks, oldest first (by claimed/created)."""
+    conn = _connect(db_path)
+    try:
+        return conn.execute(
+            "SELECT * FROM tasks WHERE status IN ('ready','rework') "
+            "ORDER BY COALESCE(claimed_at, created_at), created_at ASC LIMIT ?",
+            (cap,)).fetchall()
+    finally:
+        conn.close()
+
+
+def complete_run(task_id, status="done", result_path=None, summary=None,
+                 error=None, session_id=None, result_paths=None,
+                 db_path=None, _conn=None):
+    """Record completion of a task's run + the task's resulting status.
+
+    Stores ALL produced artifact paths (not just the first) into
+    tasks.result_paths (JSON) alongside the display `result_path`, and logs a
+    state transition for the task status change.
+    """
+    import json as _json
+    if status not in ("done", "failed", "needs_review", "rework", "stalled",
+                      "blocked", "manual"):
+        raise ValueError("invalid completion status: %s" % status)
+    rp = list(result_paths or [])
+    if result_path is None and rp:
+        result_path = rp[0]
+
+    def _apply(conn):
+        old = conn.execute("SELECT status FROM tasks WHERE id=?",
+                           (task_id,)).fetchone()
+        from_status = old["status"] if old else None
+        updates, params = ["status=?", "updated_at=?"], [status, time.time()]
+        if result_path is not None:
+            updates.append("result_path=?"); params.append(result_path)
+        if rp:
+            updates.append("result_paths=?")
+            params.append(_json.dumps(rp))
+        if summary is not None:
+            updates.append("summary=?"); params.append(summary)
+        params.append(task_id)
+        cur = conn.execute(
+            "UPDATE tasks SET %s WHERE id=?" % ", ".join(updates), params)
+        if cur.rowcount > 0:
+            conn.execute(
+                "INSERT INTO state_transitions(task_id, run_id, ts, "
+                "from_status, to_status, detail) VALUES(?,NULL,?,?,?,?)",
+                (task_id, time.time(), from_status, status,
+                 "completion contract"))
+
+    if _conn is not None:
+        # F-15: the caller owns the transaction. The activity row is written on
+        # the SAME connection — a second connection would block on the caller's
+        # open write transaction.
+        _apply(_conn)
+        _conn.execute(
+            "INSERT INTO activity(ts, project_id, goal_id, task_id, run_id, "
+            "agent_profile, session_id, action, detail, model) "
+            "VALUES(?,?,?,?,?,?,?,?,?,?)",
+            (time.time(), None, None, task_id, None, None, session_id,
+             "task_%s" % status,
+             error or summary or result_path or status, None))
+        return
+    conn = _connect(db_path)
+    try:
+        with conn:
+            _apply(conn)
+        log_activity(action="task_%s" % status, task_id=task_id,
+                     session_id=session_id,
+                     detail=error or summary or result_path or status,
+                     db_path=db_path)
+    finally:
+        conn.close()
+
+
+def log_activity(action, project_id=None, goal_id=None, task_id=None,
+                 run_id=None, agent_profile=None, session_id=None,
+                 detail=None, model=None, ts=None, db_path=None):
+    conn = _connect(db_path)
+    try:
+        with conn:
+            conn.execute(
+                "INSERT INTO activity(ts, project_id, goal_id, task_id, run_id, "
+                "agent_profile, session_id, action, detail, model) "
+                "VALUES(?,?,?,?,?,?,?,?,?,?)",
+                (ts if ts is not None else time.time(), project_id, goal_id,
+                 task_id, run_id, agent_profile, session_id, action, detail, model))
+    finally:
+        conn.close()
+
+
+def record_transition(task_id, to_status, run_id=None, from_status=None,
+                      detail=None, db_path=None):
+    """Append a row to state_transitions (a durable, non-prunable by default
+    record of every meaningful task state change: becoming ready, released,
+    waiting for approval, done, etc.).
+
+    This is the authoritative 'meaningful state transition' log (requirement 7).
+    It is NOT swept by `wm prune` unless the matching run is very old (see
+    prune_history) — it survives activity-retention cleanup.
+    """
+    conn = _connect(db_path)
+    try:
+        with conn:
+            conn.execute(
+                "INSERT INTO state_transitions(task_id, run_id, ts, from_status, "
+                "to_status, detail) VALUES(?,?,?,?,?,?)",
+                (task_id, run_id, time.time(), from_status, to_status, detail))
+    finally:
+        conn.close()
+
+
+def list_transitions(task_id=None, limit=50, db_path=None):
+    """State-transition history for a task (newest first), or globally."""
+    conn = _connect(db_path)
+    try:
+        if task_id is not None:
+            return conn.execute(
+                "SELECT * FROM state_transitions WHERE task_id=? ORDER BY id DESC LIMIT ?",
+                (task_id, limit)).fetchall()
+        return conn.execute(
+            "SELECT * FROM state_transitions ORDER BY id DESC LIMIT ?",
+            (limit,)).fetchall()
+    finally:
+        conn.close()
+
+
+def _set_task_status(task_id, new_status, db_path=None, run_id=None,
+                     detail=None, _conn=None):
+    """Update a task's status + updated_at and record a transition.
+
+    Supports being passed an already-open connection (_conn) so callers inside
+    a larger transaction record the transition atomically with the state change.
+    Returns True if the row was updated.
+    """
+    if _conn is not None:
+        old = _conn.execute("SELECT status FROM tasks WHERE id=?",
+                            (task_id,)).fetchone()
+        from_status = old["status"] if old else None
+        cur = _conn.execute(
+            "UPDATE tasks SET status=?, updated_at=? WHERE id=?",
+            (new_status, time.time(), task_id))
+        changed = cur.rowcount > 0
+        if changed:
+            _record_transition_conn(_conn, task_id, new_status, run_id=run_id,
+                                    from_status=from_status, detail=detail)
+        return changed
+    conn = _connect(db_path)
+    try:
+        old = conn.execute("SELECT status FROM tasks WHERE id=?",
+                           (task_id,)).fetchone()
+        from_status = old["status"] if old else None
+        with conn:
+            cur = conn.execute(
+                "UPDATE tasks SET status=?, updated_at=? WHERE id=?",
+                (new_status, time.time(), task_id))
+            changed = cur.rowcount > 0
+            if changed:
+                conn.execute(
+                    "INSERT INTO state_transitions(task_id, run_id, ts, "
+                    "from_status, to_status, detail) VALUES(?,?,?,?,?,?)",
+                    (task_id, run_id, time.time(), from_status, new_status, detail))
+        return changed
+    finally:
+        conn.close()
+
+
+def _record_transition_conn(conn, task_id, to_status, run_id=None,
+                            from_status=None, detail=None):
+    conn.execute(
+        "INSERT INTO state_transitions(task_id, run_id, ts, from_status, "
+        "to_status, detail) VALUES(?,?,?,?,?,?)",
+        (task_id, run_id, time.time(), from_status, to_status, detail))
+
+
+def set_paused(paused, db_path=None):
+    append_meta("paused", "1" if paused else "0", db_path=db_path)
+    log_activity(action="pause" if paused else "resume",
+                 agent_profile="cli", db_path=db_path)
+
+
+# ---------------------------------------------------------------------------
+# T2 — run lifecycle
+# ---------------------------------------------------------------------------
+def get_run(run_id, db_path=None):
+    conn = _connect(db_path)
+    try:
+        return conn.execute("SELECT * FROM runs WHERE id=?", (run_id,)).fetchone()
+    finally:
+        conn.close()
+
+
+def get_task_last_run(task_id, db_path=None):
+    """Latest run for a task that actually captured a session_id (or None).
+
+    Used for handoff context and `wm session`: the parent's resume target is
+    the most recent run that carries a real session. Ordering by id DESC is
+    deterministic per task (id is monotonically increasing), NOT a global
+    'newest row' guess.
+    """
+    conn = _connect(db_path)
+    try:
+        return conn.execute(
+            "SELECT * FROM runs WHERE task_id=? AND session_id IS NOT NULL "
+            "AND session_id != '' AND review_id IS NULL ORDER BY id DESC LIMIT 1",
+            (task_id,)).fetchone()
+    finally:
+        conn.close()
+
+
+def get_resume_command(agent, session_id):
+    """Resume command for a session: `hermes --profile <p> --resume <sid>`.
+
+    `<p>` is the agent's REAL Hermes profile: a specialist is its own profile,
+    and the reserved Orchestrator is Hermes' `default` profile. Emitting
+    `--profile orchestrator` produced a command that aborts at launch ("Profile
+    'orchestrator' does not exist"), so the owner could never open an
+    orchestrator run's session from a brief, `wm session` or the dashboard.
+
+    Returns None when either half is missing rather than interpolating a `None`
+    token into a command the owner might paste.
+    """
+    if not session_id or not agent:
+        return None
+    return "hermes --profile %s --resume %s" % (
+        hermes_profile_arg(agent), session_id)
+
+
+def start_run(task_id, agent_profile, db_path=None):
+    """Insert a running run row for a task. Returns the new run id."""
+    conn = _connect(db_path)
+    now = time.time()
+    try:
+        with conn:
+            cur = conn.execute(
+                "INSERT INTO runs(task_id, agent_profile, status, started_at, "
+                "heartbeat_at) VALUES(?,?,?,?,?)",
+                (task_id, agent_profile, "running", now, now))
+            run_id = cur.lastrowid
+        return run_id
+    finally:
+        conn.close()
+
+
+def set_run_pid(run_id, pid, db_path=None):
+    conn = _connect(db_path)
+    try:
+        with conn:
+            conn.execute("UPDATE runs SET pid=? WHERE id=?",
+                         (pid, run_id))
+    finally:
+        conn.close()
+
+
+def set_run_brief(run_id, brief_path, db_path=None):
+    conn = _connect(db_path)
+    try:
+        with conn:
+            conn.execute("UPDATE runs SET brief_path=? WHERE id=?",
+                         (brief_path, run_id))
+    finally:
+        conn.close()
+
+
+def set_run_result_paths(run_id, result_paths, db_path=None, _conn=None):
+    import json as _json
+    if _conn is not None:
+        # F-15: run inside the caller's open transaction.
+        return _conn.execute(
+            "UPDATE runs SET result_paths=? WHERE id=?",
+            (_json.dumps(list(result_paths or [])), run_id))
+    conn = _connect(db_path)
+    try:
+        with conn:
+            conn.execute("UPDATE runs SET result_paths=? WHERE id=?",
+                         (_json.dumps(list(result_paths or [])), run_id))
+    finally:
+        conn.close()
+
+
+def set_run_workdir(run_id, workdir, branch=None, db_path=None):
+    """Record a run's effective work directory + (for isolated code runs) the
+    git branch/worktree it executed in, so retries never write into the same
+    tree unknowingly."""
+    conn = _connect(db_path)
+    try:
+        with conn:
+            if branch is not None:
+                conn.execute("UPDATE runs SET workdir=?, branch=? WHERE id=?",
+                             (workdir, branch, run_id))
+            else:
+                conn.execute("UPDATE runs SET workdir=? WHERE id=?",
+                             (workdir, run_id))
+    finally:
+        conn.close()
+
+
+def running_runs(db_path=None):
+    """All runs still in 'running' status (the set the dispatcher livens)."""
+    conn = _connect(db_path)
+    try:
+        return conn.execute(
+            "SELECT * FROM runs WHERE status='running' "
+            "ORDER BY started_at ASC").fetchall()
+    finally:
+        conn.close()
+
+
+def running_count(db_path=None):
+    """Number of tasks currently 'running' (used to size dispatch capacity)."""
+    conn = _connect(db_path)
+    try:
+        return conn.execute(
+            "SELECT COUNT(*) FROM tasks WHERE status='running'").fetchone()[0]
+    finally:
+        conn.close()
+
+
+def running_run_count(db_path=None):
+    """Total live agent processes = running WORK runs + running REVIEW runs.
+
+    The dispatcher sizes capacity against this (not just running tasks) so
+    reviews genuinely count toward the concurrency cap and cannot overshoot it.
+    """
+    conn = _connect(db_path)
+    try:
+        return conn.execute(
+            "SELECT COUNT(*) FROM runs WHERE status='running'").fetchone()[0]
+    finally:
+        conn.close()
+
+
+def finish_run(run_id, status, session_id=None, completion=None, exit_code=None,
+               error=None, notes=None, db_path=None, _conn=None):
+    """Finalize a run row. Guarded: only transitions a run still 'running',
+    so the dispatcher's stall-marking and the wrapper's completion can never
+    double-finalize the same run. Returns 1 if it took effect, else 0."""
+    if status not in ("done", "failed", "blocked", "stalled", "manual"):
+        raise ValueError("invalid run final status: %s" % status)
+    if _conn is not None:
+        # F-15: run inside the caller's open transaction.
+        updates = ["status=?", "finished_at=?"]
+        params = [status, time.time()]
+        if session_id is not None:
+            updates.append("session_id=?"); params.append(session_id)
+        if completion is not None:
+            updates.append("completion=?"); params.append(completion)
+        if exit_code is not None:
+            updates.append("exit_code=?"); params.append(exit_code)
+        if error is not None:
+            updates.append("error=?"); params.append(error)
+        if notes is not None:
+            updates.append("notes=?"); params.append(notes)
+        cur = _conn.execute(
+            "UPDATE runs SET %s, heartbeat_at=? WHERE id=? AND status='running'"
+            % ", ".join(updates), params + [time.time(), run_id])
+        return cur.rowcount
+    conn = _connect(db_path)
+    try:
+        updates = ["status=?", "finished_at=?"]
+        params = [status, time.time()]
+        if session_id is not None:
+            updates.append("session_id=?"); params.append(session_id)
+        if completion is not None:
+            updates.append("completion=?"); params.append(completion)
+        if exit_code is not None:
+            updates.append("exit_code=?"); params.append(exit_code)
+        if error is not None:
+            updates.append("error=?"); params.append(error)
+        if notes is not None:
+            updates.append("notes=?"); params.append(notes)
+        with conn:
+            cur = conn.execute(
+                "UPDATE runs SET %s, heartbeat_at=? WHERE id=? AND status='running'"
+                % ", ".join(updates), params + [time.time(), run_id])
+            return cur.rowcount
+    finally:
+        conn.close()
+
+
+# ---------------------------------------------------------------------------
+# T2 — dependents promotion
+# ---------------------------------------------------------------------------
+def _mark_ready_if_deps_done(conn, task_id):
+    """Promote a task to 'ready' ONLY when it is already released AND deps done.
+
+    Release gate semantics (fix #1/#2):
+      - `planned` tasks are NEVER auto-promoted. Work starts only when the plan
+        is explicitly released (goal release) or a task is `mark_ready`.
+      - `waiting_approval` tasks under a RELEASED goal become `ready` as soon as
+        their deps complete — dependency completion makes them ELIGIBLE and the
+        (already-given) approval lets them proceed; it never bypasses the gate.
+      - `waiting_approval` tasks whose goal is NOT released (explicitly held /
+        not part of an approved plan) stay parked: they block only themselves
+        and their dependents.
+    """
+    row = conn.execute(
+        "SELECT goal_id, status FROM tasks WHERE id=?", (task_id,)).fetchone()
+    if row is None or row["status"] != "waiting_approval":
+        return False
+    g = conn.execute("SELECT status FROM goals WHERE id=?",
+                     (row["goal_id"],)).fetchone() if row["goal_id"] else None
+    if not (g and g["status"] == "released"):
+        return False
+    deps = conn.execute(
+        "SELECT d.depends_on_task_id AS dep, t.status AS status "
+        "FROM task_deps d LEFT JOIN tasks t ON t.id = d.depends_on_task_id "
+        "WHERE d.task_id=?", (task_id,)).fetchall()
+    if all(r["status"] == "done" for r in deps):
+        cur = conn.execute(
+            "UPDATE tasks SET status='ready', updated_at=? "
+            "WHERE id=? AND status='waiting_approval'",
+            (time.time(), task_id))
+        if cur.rowcount > 0:
+            _record_transition_conn(conn, task_id, "ready",
+                                    from_status="waiting_approval",
+                                    detail="deps done on released goal")
+            return True
+    return False
+
+
+def promote_waiting_approval_ready(db_path=None):
+    """Promote eligible `waiting_approval` tasks (released goal + deps done)
+    -> `ready`. `planned` tasks are NEVER touched (they require explicit
+    release). Returns the ids promoted."""
+    conn = _connect(db_path)
+    promoted = []
+    try:
+        with conn:
+            rows = conn.execute(
+                "SELECT id FROM tasks WHERE status='waiting_approval'").fetchall()
+            for r in rows:
+                if _mark_ready_if_deps_done(conn, r["id"]):
+                    promoted.append(r["id"])
+        return promoted
+    finally:
+        conn.close()
+
+
+def promote_dependents(task_id, db_path=None):
+    """Promote tasks that depend on `task_id` (now done) to 'ready'.
+    Returns the ids promoted."""
+    conn = _connect(db_path)
+    promoted = []
+    try:
+        with conn:
+            deps = conn.execute(
+                "SELECT task_id FROM task_deps WHERE depends_on_task_id=?",
+                (task_id,)).fetchall()
+            for d in deps:
+                if _mark_ready_if_deps_done(conn, d["task_id"]):
+                    promoted.append(d["task_id"])
+        return promoted
+    finally:
+        conn.close()
+
+
+# ---------------------------------------------------------------------------
+# T2 — completion contract + liveness + session capture
+# ---------------------------------------------------------------------------
+def record_completion(run_id, task_id, completed, summary="", result_paths=None,
+                      blocker=None, session_id=None, exit_code=None, db_path=None):
+    """Apply the Completion contract for a finished run.
+
+    Only a valid `completed == 'done'` marks the run+task done. `blocked` /
+    `failed` map 1:1; anything else (missing/invalid) -> run+task failed.
+    Returns the resulting (task_status, run_status); raises ValueError on an
+    unrecognized task id so the wrapper can record an error."""
+    result_paths = result_paths or []
+    if not isinstance(result_paths, list):
+        result_paths = [result_paths]
+    # T5 review routing: a clean 'done' work run on a task whose review_policy
+    # is 'required'/'optional' must NOT reach 'done' directly — it enters
+    # 'needs_review' and the system auto-creates a review (SINGLE review model:
+    # never a separately hand-created review task). The work RUN itself is done.
+    routed_to_review = False
+    task = store_get_task_or_none(task_id, db_path=db_path)
+    if task is None:
+        raise ValueError("no task with id %s" % task_id)
+    if completed == "done":
+        run_status = "done"
+        if task["review_policy"] in ("required", "optional"):
+            task_status = "needs_review"
+            routed_to_review = True
+        else:
+            task_status = "done"
+    elif completed == "blocked":
+        run_status = task_status = "blocked"
+    elif completed == "failed":
+        run_status = task_status = "failed"
+    else:
+        run_status = task_status = "failed"
+    result_path = (result_paths[0] if result_paths else None)
+    # F-15: task completion, review creation and run finalization commit as ONE
+    # transaction on ONE connection.
+    conn = _connect(db_path)
+    try:
+        with conn:
+            complete_run(task_id, status=task_status, result_path=result_path,
+                         summary=summary or None, error=blocker,
+                         session_id=session_id, result_paths=result_paths,
+                         db_path=db_path, _conn=conn)
+            if routed_to_review:
+                # Create the review inside the same transaction so a watcher can
+                # never observe run=done while the review row is still missing.
+                create_review(task_id, review_policy=task["review_policy"],
+                              db_path=db_path, _conn=conn)
+            finish_run(run_id, status=run_status, session_id=session_id,
+                       completion=json_dumps(completed, summary, result_paths,
+                                             blocker),
+                       exit_code=exit_code, error=blocker or None,
+                       db_path=db_path, _conn=conn)
+            set_run_result_paths(run_id, result_paths, db_path=db_path,
+                                 _conn=conn)
+        return (task_status, run_status)
+    finally:
+        conn.close()
+
+
+def mark_stalled(run_id, task_id, error, db_path=None):
+    """Dispatcher-side liveness verdict: run -> failed, task -> stalled."""
+    finish_run(run_id, status="failed", error=error, db_path=db_path)
+    conn = _connect(db_path)
+    try:
+        with conn:
+            cur = conn.execute(
+                "UPDATE tasks SET status='stalled', updated_at=? WHERE id=? "
+                "AND status='running'", (time.time(), task_id))
+            if cur.rowcount > 0:
+                _record_transition_conn(conn, task_id, "stalled",
+                                        from_status="running",
+                                        detail="liveness: %s" % (error or ""))
+        log_activity(action="task_stalled", task_id=task_id, run_id=run_id,
+                     detail=error, db_path=db_path)
+    finally:
+        conn.close()
+
+
+# ---------------------------------------------------------------------------
+# T5 — SINGLE review model (auto-created review; verdict via `wm review`)
+# ---------------------------------------------------------------------------
+# The review is a distinct, SYSTEM-created item owned by Reviewer. It is
+# recorded in `reviews` (task_id = the ORIGIN task, reviewer_profile='reviewer')
+# and executed as a real run (runs.review_id links the review run). There is
+# NEVER a separately hand-created review task — a required/optional task, on
+# completion, is auto-routed through review via record_completion().
+REVIEW_OPEN = ("pending", "running", "reviewed")
+REVIEW_FINAL = ("done", "changes_requested", "waived", "blocked", "failed")
+
+
+def create_review(task_id, review_policy=None, reviewer_profile="reviewer",
+                  db_path=None, _conn=None):
+    """Auto-create a review for an origin task that completed done.
+
+    Called by the completion finalizer (record_completion) when the origin's
+    review_policy is 'required'/'optional'. Inserts a 'pending' reviews row
+    bound to the ORIGIN task id. Each completion that needs review creates a
+    NEW review row, so a changes_requested task's re-completion produces a
+    fresh re-review. Returns the review id.
+    """
+    t = get_task(task_id, db_path=db_path)
+    if t is None:
+        raise ValueError("no task with id %s" % task_id)
+    policy = review_policy or t["review_policy"]
+    if policy not in REVIEW_POLICIES:
+        raise ValueError("invalid review_policy %r" % (policy,))
+    if _conn is not None:
+        # F-15: insert inside the caller's open transaction so the review row
+        # commits together with the completion that requested it.
+        cur = _conn.execute(
+            "INSERT INTO reviews(task_id, reviewer_profile, status, "
+            "requested_at, review_policy) VALUES(?,?,?,?,?)",
+            (task_id, reviewer_profile, "pending", time.time(), policy))
+        rid = cur.lastrowid
+        # Same connection for the activity row: a second connection would block
+        # on the caller's open write transaction.
+        _conn.execute(
+            "INSERT INTO activity(ts, project_id, goal_id, task_id, run_id, "
+            "agent_profile, session_id, action, detail, model) "
+            "VALUES(?,?,?,?,?,?,?,?,?,?)",
+            (time.time(), None, None, task_id, None, reviewer_profile, None,
+             "review_created",
+             "review #%d auto-created (policy=%s)" % (rid, policy), None))
+        return rid
+    conn = _connect(db_path)
+    try:
+        with conn:
+            cur = conn.execute(
+                "INSERT INTO reviews(task_id, reviewer_profile, status, "
+                "requested_at, review_policy) VALUES(?,?,?,?,?)",
+                (task_id, reviewer_profile, "pending", time.time(), policy))
+            rid = cur.lastrowid
+        log_activity(action="review_created", task_id=task_id,
+                     agent_profile=reviewer_profile,
+                     detail="review #%d auto-created (policy=%s)" % (rid, policy),
+                     db_path=db_path)
+        return rid
+    finally:
+        conn.close()
+
+
+def set_run_review(run_id, review_id, db_path=None):
+    """Link a run row to the review it executes (runs.review_id)."""
+    conn = _connect(db_path)
+    try:
+        with conn:
+            cur = conn.execute(
+                "UPDATE runs SET review_id=? WHERE id=? AND review_id IS NULL",
+                (review_id, run_id))
+            return cur.rowcount == 1
+    finally:
+        conn.close()
+
+
+def claim_review(review_id, db_path=None):
+    """Atomically claim a PENDING review -> 'running'.
+
+    Returns True iff exactly one row flipped ('pending' -> 'running'). Two
+    overlapping dispatcher ticks can therefore NEVER spawn two Reviewer runs
+    for the same review: whichever claims first wins, the other's claim returns
+    False and is skipped (fix #3/#4 — atomic review claiming).
+    """
+    conn = _connect(db_path)
+    try:
+        with conn:
+            cur = conn.execute(
+                "UPDATE reviews SET status='running' WHERE id=? AND status='pending'",
+                (review_id,))
+            return cur.rowcount == 1
+    finally:
+        conn.close()
+
+
+def get_review(review_id, db_path=None):
+    conn = _connect(db_path)
+    try:
+        return conn.execute(
+            "SELECT * FROM reviews WHERE id=?", (review_id,)).fetchone()
+    finally:
+        conn.close()
+
+
+def get_open_review(task_id, db_path=None):
+    """The most recent not-yet-decided review for a task, or None."""
+    conn = _connect(db_path)
+    try:
+        return conn.execute(
+            "SELECT * FROM reviews WHERE task_id=? AND status IN ('pending','running','reviewed') "
+            "ORDER BY id DESC LIMIT 1", (task_id,)).fetchone()
+    finally:
+        conn.close()
+
+
+def list_reviews(task_id=None, db_path=None):
+    """All review rows (newest first), optionally for one task."""
+    conn = _connect(db_path)
+    try:
+        sql = ("SELECT r.*, t.title AS task_title, t.status AS task_status "
+               "FROM reviews r LEFT JOIN tasks t ON t.id = r.task_id")
+        params = []
+        if task_id is not None:
+            sql += " WHERE r.task_id = ?"
+            params.append(task_id)
+        sql += " ORDER BY r.id DESC"
+        return conn.execute(sql, params).fetchall()
+    finally:
+        conn.close()
+
+
+def pending_reviews(db_path=None):
+    """Reviews awaiting a Reviewer dispatch, joined with their origin task."""
+    conn = _connect(db_path)
+    try:
+        return conn.execute(
+            "SELECT r.*, t.title AS task_title, t.status AS task_status, "
+            "t.result_path, t.summary FROM reviews r "
+            "JOIN tasks t ON t.id = r.task_id "
+            "WHERE r.status='pending' ORDER BY r.requested_at").fetchall()
+    finally:
+        conn.close()
+
+
+def set_review_status(review_id, status, db_path=None):
+    conn = _connect(db_path)
+    try:
+        with conn:
+            conn.execute("UPDATE reviews SET status=? WHERE id=?",
+                         (status, review_id))
+    finally:
+        conn.close()
+
+
+def latest_review_comments(task_id, db_path=None):
+    """Most recent review comments for a task (for re-run brief injection)."""
+    conn = _connect(db_path)
+    try:
+        row = conn.execute(
+            "SELECT comments FROM reviews WHERE task_id=? AND comments IS NOT NULL "
+            "AND comments != '' ORDER BY id DESC LIMIT 1", (task_id,)).fetchone()
+        return (row["comments"] if row else None)
+    finally:
+        conn.close()
+
+
+def record_review_completion(run_id, review_id, completed, summary="",
+                             result_paths=None, blocker=None, session_id=None,
+                             exit_code=None, db_path=None):
+    """Finalize a REVIEW run (Reviewer's real session) under the Completion
+    contract, WITHOUT touching the origin task's status.
+
+    The Reviewer's verdict is applied separately via `wm review` (review_verdict).
+    So a completed=='done' review run marks the review as 'reviewed' (awaiting
+    the verdict) — it NEVER makes the origin task 'done'. A blocked/failed
+    review run finalizes the review accordingly. decided (done/changes_requested/)
+    verdicts are never overwritten.
+    """
+    result_paths = result_paths or []
+    if not isinstance(result_paths, list):
+        result_paths = [result_paths]
+    if completed == "done":
+        run_status, review_status = "done", "reviewed"
+    elif completed == "blocked":
+        run_status = review_status = "blocked"
+    else:
+        run_status = review_status = "failed"
+    finish_run(run_id, status=run_status, session_id=session_id,
+               completion=json_dumps(completed, summary, result_paths, blocker),
+               exit_code=exit_code, error=blocker or None, db_path=db_path)
+    set_run_result_paths(run_id, result_paths, db_path=db_path)
+    conn = _connect(db_path)
+    try:
+        with conn:
+            # Always backfill the reviewer session id for traceability (the
+            # reviewer may have already recorded a verdict via `wm review`,
+            # flipping status to done/changes_requested BEFORE this finalizer
+            # runs — so never let that guard block session capture). Only the
+            # STATUS update is protected so a decided verdict is never overwritten.
+            if session_id:
+                conn.execute("UPDATE reviews SET session_id=? WHERE id=?",
+                             (session_id, review_id))
+            conn.execute(
+                "UPDATE reviews SET status=? "
+                " WHERE id=? AND status NOT IN ('done','changes_requested','waived')",
+                (review_status, review_id))
+    finally:
+        conn.close()
+    log_activity(action="review_run_%s" % review_status,
+                 run_id=run_id, task_id=_review_task_id(review_id, db_path=db_path),
+                 agent_profile="reviewer", session_id=session_id,
+                 detail=blocker or ("reviewer finished; verdict via `wm review`"),
+                 db_path=db_path)
+    return review_status
+
+
+def _review_task_id(review_id, db_path=None):
+    r = get_review(review_id, db_path=db_path)
+    return r["task_id"] if r else None
+
+
+def review_verdict(task_id, verdict, comment=None, db_path=None):
+    """Record a Reviewer verdict on an auto-created review for `task_id`.
+
+    - 'approved'         -> origin task 'done', verdict+comments stored on the
+                            review, dependents auto-promote. (SINGLE review: no
+                            second review is ever created.)
+    - 'changes_requested'-> origin task 'rework' (re-claimable/dispatched), the
+                            comments are stored (and injected into the next re-run
+                            brief), and re-completion auto-creates a re-review.
+    Returns (task_status, review_status, promoted_task_ids).
+    """
+    t = get_task(task_id, db_path=db_path)
+    if t is None:
+        raise ValueError("no task with id %s" % task_id)
+    if verdict not in ("approved", "changes_requested"):
+        raise ValueError("verdict must be 'approved' or 'changes_requested'")
+    review = get_open_review(task_id, db_path=db_path)
+    if review is None:
+        raise ValueError("no open (undecided) review for task %s" % task_id)
+    now = time.time()
+    promoted = []
+    reviews_status = "done" if verdict == "approved" else "changes_requested"
+    conn = _connect(db_path)
+    try:
+        with conn:
+            conn.execute(
+                "UPDATE reviews SET status=?, verdict=?, comments=?, decided_at=? "
+                "WHERE id=?",
+                (reviews_status, verdict, comment or "", now, review["id"]))
+            if verdict == "approved":
+                conn.execute("UPDATE tasks SET status='done', updated_at=? "
+                             "WHERE id=?", (now, task_id))
+                _record_transition_conn(conn, task_id, "done",
+                                        from_status="needs_review",
+                                        detail="review approved")
+            else:
+                conn.execute("UPDATE tasks SET status='rework', feedback=?, "
+                             "updated_at=? WHERE id=?", (comment or "", now, task_id))
+                _record_transition_conn(conn, task_id, "rework",
+                                        from_status="needs_review",
+                                        detail="changes requested")
+    finally:
+        conn.close()
+    review_status = reviews_status
+    if verdict == "approved":
+        promoted = promote_dependents(task_id, db_path=db_path)
+    log_activity(action="review_%s" % review_status, task_id=task_id,
+                 agent_profile="reviewer",
+                 detail="review #%d %s: %s" % (review["id"], verdict, comment or ""),
+                 db_path=db_path)
+    return (("done" if verdict == "approved" else "rework"), review_status, promoted)
+
+
+def waive_review(task_id, comment=None, db_path=None):
+    """Non-blocking path for an `optional`-policy task: mark it done + waive the
+    review without an approval. `required` tasks cannot be waived.
+    Returns (task_status, review_status, promoted_task_ids).
+    """
+    t = get_task(task_id, db_path=db_path)
+    if t is None:
+        raise ValueError("no task with id %s" % task_id)
+    if t["review_policy"] != "optional":
+        raise ValueError("only optional-policy reviews may be waived (task %s "
+                         "is '%s')" % (task_id, t["review_policy"]))
+    review = get_open_review(task_id, db_path=db_path)
+    if review is None:
+        raise ValueError("no open review for task %s" % task_id)
+    now = time.time()
+    conn = _connect(db_path)
+    try:
+        with conn:
+            conn.execute("UPDATE reviews SET status='waived', verdict='waived', "
+                         "comments=?, decided_at=? WHERE id=?",
+                         (comment or "", now, review["id"]))
+            conn.execute("UPDATE tasks SET status='done', updated_at=? WHERE id=?",
+                         (now, task_id))
+    finally:
+        conn.close()
+    promoted = promote_dependents(task_id, db_path=db_path)
+    log_activity(action="review_waived", task_id=task_id,
+                 agent_profile="reviewer",
+                 detail="review #%d waived: %s" % (review["id"], comment or ""),
+                 db_path=db_path)
+    return ("done", "waived", promoted)
+
+
+# ---------------------------------------------------------------------------
+# Phase 6.5.1 — OWNER feedback (the human's own "send this back" channel)
+# ---------------------------------------------------------------------------
+# The Reviewer's `changes_requested` verdict is an AGENT decision. Owner
+# feedback is the human equivalent: Kamran looks at a finished (or under-review)
+# task, says what is wrong in his own words, and the task goes back to `rework`
+# with those words threaded into the next run's brief.
+#
+# It carries NO schema change. The durable record is a `state_transitions` row
+# (the non-prunable ledger) whose `detail` is prefixed with OWNER_FEEDBACK_MARKER
+# so the text is machine-recoverable, plus a `task_feedback` activity row.
+OWNER_FEEDBACK_MARKER = "owner feedback: "
+
+# Statuses a task may receive owner feedback from. All three mean "the assignee
+# has produced something to react to": it is awaiting review, it is already
+# being reworked, or it was accepted and the owner changed his mind. A task that
+# has not produced anything yet (planned/waiting_approval/ready/running/...) has
+# nothing to give feedback ON — sending it to `rework` would either kill a live
+# run's bookkeeping or fabricate a rework state for work that never happened.
+OWNER_FEEDBACK_SOURCE_STATUSES = ("needs_review", "rework", "done")
+
+
+def owner_feedback(task_id, comment, db_path=None):
+    """Owner sends a task back for rework with a written reason.
+
+    - The task flips to `rework` (re-claimable/dispatchable) and the transition
+      row records `owner feedback: <comment>` so `latest_owner_feedback` — and
+      therefore `render_brief` — can hand the assignee the exact words.
+    - A real `task_feedback` activity row is written (agent_profile
+      'orchestrator': this is an owner/Orchestrator action, not an agent's).
+    - If the task still has an OPEN review (pending/running/reviewed), that
+      review is decided `changes_requested` in the same transaction. Leaving it
+      open would let the dispatcher launch a Reviewer run for a verdict the
+      owner has already pre-empted, and `get_open_review` would keep reporting a
+      review that no longer matches the task's state. The review's `comments`
+      column is deliberately NOT overwritten: it belongs to the REVIEWER, and
+      forging the owner's words into it would both misattribute them and make
+      `latest_review_comments` echo the same text the OWNER FEEDBACK brief
+      section already carries. The reason lives in the transition ledger + a
+      `review_changes_requested` activity row that names the owner.
+
+    Returns (task_status, comment, closed_review_id|None, demoted_dependents).
+    Raises ValueError for
+    an unknown task, an empty comment, or a source status outside
+    OWNER_FEEDBACK_SOURCE_STATUSES.
+    """
+    t = get_task(task_id, db_path=db_path)
+    if t is None:
+        raise ValueError("no task with id %s" % task_id)
+    comment = str(comment or "").strip()
+    if not comment:
+        raise ValueError("feedback comment must be non-empty")
+    status = t["status"]
+    if status not in OWNER_FEEDBACK_SOURCE_STATUSES:
+        raise ValueError(
+            "task %d is '%s' — owner feedback is only accepted on a %s task"
+            % (task_id, status,
+               " / ".join("'%s'" % s for s in OWNER_FEEDBACK_SOURCE_STATUSES)))
+    review = get_open_review(task_id, db_path=db_path)
+    now = time.time()
+    demoted = []
+    conn = _connect(db_path)
+    try:
+        with conn:
+            if review is not None:
+                conn.execute(
+                    "UPDATE reviews SET status='changes_requested', "
+                    "verdict='changes_requested', decided_at=? WHERE id=?",
+                    (now, review["id"]))
+            conn.execute("UPDATE tasks SET status='rework', feedback=?, "
+                         "updated_at=? WHERE id=?", (comment, now, task_id))
+            _record_transition_conn(conn, task_id, "rework", from_status=status,
+                                    detail=OWNER_FEEDBACK_MARKER + comment)
+            # A parent that was `done` had its dependents promoted to `ready`
+            # (promote_dependents). Sending it back to `rework` invalidates that
+            # result, so demote any STILL-UNCLAIMED `ready` dependent back to
+            # `waiting_approval` (awaiting its dependency). Only status=='done'
+            # parents ever promoted dependents, so this is the exact window.
+            if status == "done":
+                for d in conn.execute(
+                        "SELECT task_id FROM task_deps "
+                        "WHERE depends_on_task_id=?", (task_id,)).fetchall():
+                    child = conn.execute(
+                        "SELECT status FROM tasks WHERE id=?",
+                        (d["task_id"],)).fetchone()
+                    if child and child["status"] == "ready":
+                        conn.execute(
+                            "UPDATE tasks SET status='waiting_approval', "
+                            "updated_at=? WHERE id=?", (now, d["task_id"]))
+                        _record_transition_conn(
+                            conn, d["task_id"], "waiting_approval",
+                            from_status="ready",
+                            detail="owner rework: parent #%d went back to rework"
+                                   % task_id)
+                        demoted.append(d["task_id"])
+    finally:
+        conn.close()
+    log_activity(action="task_feedback", project_id=t["project_id"],
+                 goal_id=t["goal_id"], task_id=task_id,
+                 agent_profile="orchestrator", detail=comment, db_path=db_path)
+    if review is not None:
+        log_activity(action="review_changes_requested", project_id=t["project_id"],
+                     goal_id=t["goal_id"], task_id=task_id,
+                     agent_profile="orchestrator",
+                     detail="review #%d closed changes_requested by OWNER "
+                            "feedback (no Reviewer verdict was recorded): %s"
+                            % (review["id"], comment), db_path=db_path)
+    return ("rework", comment, review["id"] if review is not None else None,
+            demoted)
+
+
+def latest_owner_feedback(task_id, db_path=None):
+    """The owner's words behind the task's CURRENT rework state, or None.
+
+    Reads the most recent `-> rework` row in the state_transitions ledger and
+    returns its comment only when that row carries OWNER_FEEDBACK_MARKER.
+
+    Deviation from the brief's literal "latest row where to_status='rework' AND
+    detail startswith 'owner feedback:'": the newest rework transition is
+    inspected, not the newest OWNER one. Both find the same row in the normal
+    case, but the literal form keeps re-injecting an old owner comment forever
+    once a later Reviewer `changes_requested` has become the reason the task is
+    in rework — i.e. it would tell the agent to address feedback that has
+    already been dealt with. Anchoring on the latest transition means the brief
+    only ever shows the feedback that actually put the task where it is.
+    """
+    conn = _connect(db_path)
+    try:
+        # Only surface owner feedback while the task is CURRENTLY in rework;
+        # once it has run again (left rework without a fresh owner transition)
+        # the feedback was addressed and must not be re-injected.
+        cur = get_task(task_id, db_path=db_path)
+        if cur is None or cur["status"] != "rework":
+            return None
+        row = conn.execute(
+            "SELECT detail FROM state_transitions WHERE task_id=? AND "
+            "to_status='rework' ORDER BY id DESC LIMIT 1", (task_id,)).fetchone()
+    finally:
+        conn.close()
+    detail = (row["detail"] or "") if row is not None else ""
+    if not detail.startswith(OWNER_FEEDBACK_MARKER):
+        return None
+    return detail[len(OWNER_FEEDBACK_MARKER):].strip() or None
+
+
+# ---------------------------------------------------------------------------
+# T4 — recovery surface (safe; NEVER silent auto-retry)
+# ---------------------------------------------------------------------------
+def get_task_latest_run(task_id, db_path=None):
+    """Latest run row for a task (by id DESC — deterministic per task)."""
+    conn = _connect(db_path)
+    try:
+        return conn.execute(
+            "SELECT * FROM runs WHERE task_id=? AND review_id IS NULL "
+            "ORDER BY id DESC LIMIT 1", (task_id,)).fetchone()
+    finally:
+        conn.close()
+
+
+def retry_task(task_id, db_path=None):
+    """Re-open a failed/stalled/blocked task to 'ready' for a fresh run.
+
+    Prior run rows are kept intact (history preserved). Does NOT spawn a
+    process — the next dispatcher tick claims and relaunches the fresh run.
+    Refuses while the task is currently 'running' (and never touches a 'done'
+    task).
+    """
+    t = get_task(task_id, db_path=db_path)
+    if t is None:
+        raise ValueError("no task with id %s" % task_id)
+    if t["status"] == "running":
+        raise ValueError("cannot retry task %d while it is running" % task_id)
+    if t["status"] == "done":
+        raise ValueError("cannot retry task %d: already done" % task_id)
+    conn = _connect(db_path)
+    try:
+        with conn:
+            cur = conn.execute(
+                "UPDATE tasks SET status='ready', updated_at=? WHERE id=?",
+                (time.time(), task_id))
+            if cur.rowcount == 0:
+                raise ValueError("no task %d" % task_id)
+            _record_transition_conn(conn, task_id, "ready",
+                                    from_status=t["status"],
+                                    detail="manual retry (old runs kept)")
+    finally:
+        conn.close()
+    log_activity(action="task_retry", task_id=task_id,
+                 detail="old status=%s; reopened to ready" % t["status"],
+                 db_path=db_path)
+    return task_id
+
+
+def mark_manual(task_id, note=None, db_path=None):
+    """A human acknowledges a stuck task and takes it out of the queue.
+
+    status -> 'manual'. Prior run rows and activity are preserved. Never
+    downgrades a 'done' task.
+    """
+    t = get_task(task_id, db_path=db_path)
+    if t is None:
+        raise ValueError("no task with id %s" % task_id)
+    if t["status"] == "done":
+        raise ValueError("cannot mark task %d manual: already done" % task_id)
+    conn = _connect(db_path)
+    try:
+        with conn:
+            cur = conn.execute(
+                "UPDATE tasks SET status='manual', updated_at=? WHERE id=?",
+                (time.time(), task_id))
+            if cur.rowcount > 0:
+                _record_transition_conn(conn, task_id, "manual",
+                                        from_status=t["status"], detail=("ack: %s" % note) if note else "acknowledged out of queue")
+    finally:
+        conn.close()
+    log_activity(action="task_manual", task_id=task_id,
+                 detail=note or ("old status=%s" % t["status"]),
+                 db_path=db_path)
+    return task_id
+
+
+def get_session_activity(agent, session_id, db_path=None):
+    """Read a session's last_activity_at from a Hermes profile state.db.
+
+    Scoped by the agent profile's own state.db (never 'newest row' across
+    profiles). Returns a dict {id,last_activity_at,title} or None."""
+    sdb = agent_session_db_path(agent)
+    if not os.path.exists(sdb):
+        return None
+    try:
+        conn = _connect(sdb)
+    except sqlite3.Error:
+        return None
+    try:
+        try:
+            row = conn.execute(
+                "SELECT id,last_activity_at,title FROM sessions WHERE id=?",
+                (session_id,)).fetchone()
+        except sqlite3.Error:
+            return None
+        if row is None:
+            return None
+        laa = row["last_activity_at"]
+        return {"id": row["id"], "last_activity_at": laa,
+                "title": row["title"]}
+    finally:
+        conn.close()
+
+
+def get_run_session_activity(agent, run_id, session_id=None, db_path=None):
+    """Locate the live session for a run for liveness.
+
+    Preference order (never 'newest row'):
+      1. the run's recorded session_id (set by the wrapper on completion);
+      2. the deterministic marker title 'wm-run-<run_id>' planted at launch
+         (lets the dispatcher judge activity of a still-running agent whose
+         session_id the wrapper has not yet captured).
+    Returns a dict {id,last_activity_at,title} or None."""
+    if session_id:
+        found = get_session_activity(agent, session_id, db_path=db_path)
+        if found:
+            return found
+    sdb = agent_session_db_path(agent)
+    marker = "wm-run-%s" % run_id
+    if not os.path.exists(sdb):
+        return None
+    try:
+        conn = _connect(sdb)
+    except sqlite3.Error:
+        return None
+    try:
+        try:
+            row = conn.execute(
+                "SELECT id,last_activity_at,title FROM sessions "
+                "WHERE title=? ORDER BY started_at DESC LIMIT 1",
+                (marker,)).fetchone()
+        except sqlite3.Error:
+            return None
+        if row is None:
+            return None
+        return {"id": row["id"], "last_activity_at": row["last_activity_at"],
+                "title": row["title"]}
+    finally:
+        conn.close()
+
+
+def capture_session_id(run_id, agent, preferred=None, db_path=None):
+    """Deterministic, concurrency-safe session-id capture for a run.
+
+    `--pass-session-id` behavior (verified against the CLI + hermes source,
+    2026-08-25): `hermes chat ... --pass-session-id` sets the *launch-layer*
+    env flag HERMES_TUI_PASS_SESSION_ID=1 (an enable toggle, NOT the id
+    itself — so the wrapper cannot read the id from any --pass-session-id env
+    variable), and it injects the live session id into the agent's system
+    prompt as `Session ID: <sid>`. That sid IS the real session created for
+    this run (title 'wm-run-<run_id>').
+
+    Capture rule (preferred cross-check first, unique-marker fallback last —
+    NEVER 'newest row'):
+      1. PREFERRED cross-check: when the executing agent self-reports its
+         session id (the 'Session ID:' line it can now see via
+         --pass-session-id, e.g. in the completion JSON), use it IF a session
+         with that id exists in THIS profile's state.db. Self-reported ids are
+         correct by construction (the agent only ever sees its OWN session),
+         so this is deterministic and concurrency-safe.
+      2. RELIABLE FALLBACK (authoritative): look up the agent profile's own
+         state.db for the session whose title equals the unique per-run marker
+         'wm-run-<run_id>'. Because the marker is unique per run id, two
+         concurrent runs can never collide and each resolves to its own
+         session — this never 'grabs the newest row'.
+    Always scoped to the run's OWN agent profile state.db.
+    """
+    sdb = agent_session_db_path(agent)
+    marker = "wm-run-%s" % run_id
+    if not os.path.exists(sdb):
+        return None
+    try:
+        conn = _connect(sdb)
+    except sqlite3.Error:
+        return None
+    try:
+        # 1. Preferred cross-check: self-reported id that really exists here.
+        if preferred:
+            try:
+                row = conn.execute(
+                    "SELECT id FROM sessions WHERE id=?", (preferred,)).fetchone()
+            except sqlite3.Error:
+                row = None
+            if row:
+                return row["id"]
+        # 2. Reliable fallback: unique per-run marker title.
+        try:
+            row = conn.execute(
+                "SELECT id FROM sessions WHERE title=? "
+                "ORDER BY started_at DESC LIMIT 1", (marker,)).fetchone()
+        except sqlite3.Error:
+            return None
+        return row["id"] if row else None
+    finally:
+        conn.close()
+
+
+def json_dumps(completed, summary, result_paths, blocker):
+    """Canonical completion-JSON text stored against the run."""
+    import json
+    return json.dumps({
+        "completed": completed,
+        "summary": summary or "",
+        "result_paths": list(result_paths or []),
+        "blocker": blocker if blocker is not None else "",
+    }, indent=2)
+
+
+def store_get_task_or_none(task_id, db_path=None):
+    try:
+        return get_task(task_id, db_path=db_path)
+    except Exception:
+        return None
+
+
+def _completion_contract_lines(cpath):
+    """The canonical Completion-contract instruction (REQUIRED last action).
+
+    Shared verbatim by the work brief and the orchestrator planning brief so the
+    agent's closing instruction never drifts between render paths.
+    """
+    return [
+        "COMPLETION CONTRACT (REQUIRED — your LAST action):",
+        "Write a JSON file to %s" % cpath,
+        "with EXACTLY this structure:",
+        '{"completed": "done|blocked|failed", "summary": "...", '
+        '"result_paths": ["..."], "blocker": "...", '
+        '"session_id": "<optional>"}',
+        "  - completed: 'done' if you fully finished the task; "
+        "'blocked' if you hit an external blocker; 'failed' if you "
+        "could not finish.",
+        "  - summary: a prose summary of what you did / the result.",
+        "  - result_paths: ABSOLUTE paths to each artifact/file you "
+        "actually produced (empty list if none).",
+        "  - blocker: the reason, REQUIRED (non-empty) iff "
+        "completed != 'done'.",
+        "  - session_id (OPTIONAL): if your system prompt contains a "
+        "'Session ID:' line, copy that id here so the work manager can "
+        "cross-check it.",
+        "Process exit does NOT count as completion — the only thing "
+        "that marks this task done is a valid {completed:'done'} JSON "
+        "written to the path above as your last step.",
+    ]
+
+
+def _feedback_sections(task, db_path):
+    """Extra brief lines carrying the feedback that put the task where it is.
+
+    Reviewer `changes_requested` comments first, owner feedback second — the
+    canonical order (different authors, neither instead of the other). Shared by
+    the work brief and the orchestrator planning brief so a re-run always sees
+    exactly what was sent back.
+    """
+    lines = []
+    rcomments = latest_review_comments(task["id"], db_path=db_path)
+    if rcomments:
+        lines.append("")
+        lines.append("REVIEW REWORK COMMENTS (address these — from the last "
+                     "review)")
+        lines.append("-" * 40)
+        lines.append(rcomments)
+    ofeedback = latest_owner_feedback(task["id"], db_path=db_path)
+    if ofeedback:
+        lines.append("")
+        lines.append("OWNER FEEDBACK (address these — the owner sent this task "
+                     "back for rework)")
+        lines.append("-" * 40)
+        lines.append(ofeedback)
+    return lines
+
+
+def _render_orchestrator_planning_brief(run, task, project, primary_path,
+                                        cpath, db_path):
+    """The ORCHESTRATOR PLANNING brief for a `Plan goal #N` run (6.5.2).
+
+    An orchestrator-assigned run acts on the goal's DECOMPOSITION, not on a
+    deliverable. Two clearly-delimited cases:
+
+      DECOMPOSE (goal still `planning`/`draft`): read the goal + project, break
+        it into real tasks via the `wm` CLI, then `wm goal planned <id>` (which
+        closes this plan task) and write the Completion contract.
+      REVISION (goal already `planned`; plan task sent back to `rework` with
+        OWNER FEEDBACK): revise the EXISTING breakdown via the `wm` CLI per the
+        feedback — edit/add/remove tasks, DO NOT duplicate — keep the goal
+        `planned`, and write the Completion contract (this closes the plan
+        task).
+
+    Both paths keep the Completion contract and the OWNER FEEDBACK / REVIEW
+    REWORK COMMENTS sections verbatim via the shared helpers.
+    """
+    goal = get_goal(task["goal_id"], db_path=db_path) if task["goal_id"] else None
+    revision = bool(goal and goal["status"] == "planned")
+    slug = (project["slug"] if project else "?")
+    gid = (goal["id"] if goal else "?")
+    lines = []
+    lines.append("WORK MANAGER ORCHESTRATOR PLANNING BRIEF")
+    lines.append("=" * 40)
+    lines.append("Task #%s: %s" % (task["id"], task["title"] or "-"))
+    if goal:
+        lines.append("Goal #%s: %s   [goal status: %s]"
+                     % (goal["id"], goal["title"] or "-", goal["status"]))
+    lines.append("Project primary_path: %s" % primary_path)
+    lines.append("Project slug: %s" % slug)
+    lines.append("Assignee profile: %s" % (run["agent_profile"] or "-"))
+    # L3: the wrapper launches this run with cwd=run["workdir"] when one is
+    # recorded, exactly as for a deliverable run — so the brief must name the
+    # SAME directory the process actually starts in, not the project's
+    # primary_path. Mirrors the work brief's "Working directory:" line.
+    lines.append("Working directory: %s" % (run["workdir"] or primary_path))
+    if run["branch"]:
+        lines.append("Git branch/worktree: %s (isolated run — do not touch "
+                     "other branches)" % run["branch"])
+    lines.append("")
+    lines.append("AUTHORIZATION")
+    lines.append("-" * 40)
+    lines.append("The Work Manager state lives in " + DEFAULT_DB_PATH + ". "
+                 "Do NOT edit wm.db (or any database) directly via SQL — it is "
+                 "owned and integrity-checked by the system. Report your result "
+                 "ONLY through the `wm` CLI commands below and the Completion "
+                 "contract JSON. Editing the database directly triggers a "
+                 "tamper audit.")
+    lines.append("")
+    if not revision:
+        lines.append("INSTRUCTIONS — DECOMPOSE THIS GOAL INTO TASKS")
+        lines.append("-" * 40)
+        lines.append("This goal is not decomposed yet. Read its description and "
+                     "acceptance criteria below, then break it into a coherent "
+                     "set of REAL tasks using the `wm` CLI (NO raw SQL):")
+        lines.append("  `wm task create <project-slug> <title> --goal %s "
+                     "--assignee <profile> --review-policy <none|required|optional>`"
+                     % gid)
+        lines.append("  - assignee must be one of: analyst | writer | marketer "
+                     "| coder | uiux | reviewer")
+        lines.append("  - wire prerequisite ordering with "
+                     "`wm task depend <dependent-task-id> <dependency-task-id>`")
+        lines.append("  - give every task a concrete, testable "
+                     "definition_of_done.")
+        lines.append("  - only decompose the REAL project below; do not invent "
+                     "a different scope.")
+        lines.append("")
+        lines.append("GOAL")
+        lines.append("-" * 40)
+        lines.append("Title: %s" % (goal["title"] if goal else "-"))
+        lines.append("Description: %s"
+                     % (goal["description"] if goal and goal["description"] else "-"))
+        if goal and goal["acceptance_criteria"]:
+            lines.append("Acceptance criteria: %s" % goal["acceptance_criteria"])
+        lines.append("")
+        lines.append("After the breakdown is agreed, run `wm goal planned %s` — "
+                     "this closes THIS planning task and moves the goal to "
+                     "`planned` (it does NOT release it)." % gid)
+    else:
+        lines.append("INSTRUCTIONS — REVISE THE EXISTING TASK BREAKDOWN")
+        lines.append("-" * 40)
+        lines.append("The goal is already `planned` with an existing breakdown. "
+                     "This planning task was sent back to rework by the owner "
+                     "to revise it, not to decompose again:")
+        lines.append("  - REVIEW the current tasks under goal %s and revise the "
+                     "breakdown via the `wm` CLI per the OWNER FEEDBACK below "
+                     "(edit / add / remove) — DO NOT duplicate existing tasks."
+                     % gid)
+        lines.append("  - keep the goal `planned` — do NOT call `wm goal "
+                     "planned` again (it is a no-op that revises nothing).")
+    lines.append("")
+    lines += _feedback_sections(task, db_path)
+    lines.append("")
+    lines += _completion_contract_lines(cpath)
+    return "\n".join(lines)
+
+
+# ---------------------------------------------------------------------------
+# Brief rendering (single render entry point). Includes the task's goal/message,
+# DoD, primary_path, the Completion-contract instruction, and — for any
+# completed parents (task_deps) — automatic handoff context (their result_path,
+# summary, and a --resume line for their latest sessioned run).
+# ---------------------------------------------------------------------------
+def render_brief(run_id, db_path=None):
+    """Render the brief text an agent executes for a run.
+
+    Includes the task's goal/message and definition of done, the project's
+    canonical primary_path, and the required Completion-contract instruction
+    (write <run_id>.completion.json as the agent's LAST action). Pure text
+    assembly (no file writes); the caller persists it to brief_path(run_id).
+    """
+    run = get_run(run_id, db_path=db_path)
+    if run is None:
+        raise ValueError("no run %s" % run_id)
+    task = get_task(run["task_id"], db_path=db_path)
+    if task is None:
+        raise ValueError("no task for run %s" % run_id)
+    project = get_project(task["project_id"], db_path=db_path)
+    primary_path = (project["primary_path"] if project else None) or os.getcwd()
+    cpath = completion_path(run_id)
+
+    # T5: a REVIEW run (runs.review_id set) gets an auto-generated reviewer brief
+    # instead of the work brief — deliverable path + policy + origin context +
+    # the completion-JSON instruction. The Reviewer executes in a REAL session.
+    review_id = run["review_id"]
+    if review_id is not None:
+        review = get_review(review_id, db_path=db_path)
+        # Origin work run's result_paths (from its completion JSON) if available.
+        work_run = get_task_latest_run(task["id"], db_path=db_path)
+        deliverable = task["result_path"] or "-"
+        rpaths = []
+        if work_run and work_run["completion"]:
+            try:
+                import json as _json
+                rpaths = _json.loads(work_run["completion"]).get("result_paths") or []
+            except Exception:
+                rpaths = []
+        delim = "=" * 40
+        rl = [
+            "WORK MANAGER REVIEW BRIEF (auto-created by the system)",
+            delim,
+            "Reviewing task #%s: %s" % (task["id"], task["title"] or "-"),
+            "This review was automatically created because the task's "
+            "review_policy is '%s' — there is NO separately hand-created "
+            "review task." % task["review_policy"],
+            "Project primary_path (your working directory): %s" % primary_path,
+            "Assignee profile: %s" % (task["assignee_profile"] or "-") + (
+                "   |   Reviewer profile: reviewer"),
+            "Review policy: %s" % task["review_policy"],
+            "",
+            "ORIGIN TASK (what the assignee produced)",
+            "-" * 40,
+            "Description: %s" % (task["description"] or "-"),
+            "Definition of done: %s" % (task["definition_of_done"] or "-"),
+            "Deliverable result_path: %s" % deliverable,
+            "Deliverable result_paths (from completion): %s"
+            % (", ".join(rpaths) if rpaths else "-"),
+            "Assignee summary: %s" % (task["summary"] or "-"),
+        ]
+        rl += [
+            "",
+            "INSTRUCTIONS",
+            "-" * 40,
+            "Inspect the deliverable(s) at the result_path(s) above against the "
+            "origin task's definition_of_done. Decide whether it is approved or "
+            "needs changes. Then record your verdict by running, in this session:",
+            "  wm review %s --verdict approved --comment \"...\"   OR" % task["id"],
+            "  wm review %s --verdict changes_requested --comment \"...\"" % task["id"],
+            "  (approved -> origin done + dependents fire; changes_requested -> "
+            "origin rework + your comments feed the next run's brief.)",
+            "",
+            "COMPLETION CONTRACT (REQUIRED — your LAST action):",
+            "Write a JSON file to %s" % cpath,
+            "with EXACTLY this structure:",
+            '{"completed": "done|blocked|failed", "summary": "...", '
+            '"result_paths": ["..."], "blocker": "...", '
+            '"session_id": "<optional>"}',
+            "  - completed: 'done' iff you completed the review and recorded the "
+            "verdict above.",
+            "  - session_id (OPTIONAL): if your system prompt contains a 'Session "
+            "ID:' line, copy it here.",
+            "Process exit does NOT count as completion — a valid "
+            "{completed:'done'} JSON written to the path above as your last step, "
+            "combined with a recorded verdict, is what completes this review.",
+        ]
+        return "\n".join(rl)
+
+    # Phase 6.5.2: an orchestrator-assigned run on a goal's decomposition task
+    # gets the ORCHESTRATOR PLANNING brief (decompose or revise) instead of a
+    # generic deliverable work brief. Only plan tasks (they carry a goal_id)
+    # take this path; a general orchestrator task falls through unchanged.
+    if run["agent_profile"] == ORCHESTRATOR_AGENT and task["goal_id"]:
+        return _render_orchestrator_planning_brief(
+            run, task, project, primary_path, cpath, db_path)
+
+    # Automatic handoff context: for each completed parent (from task_deps)
+    # carry forward the parent's result_path + summary + a --resume command for
+    # that parent's latest sessioned run. No Orchestrator copy-paste needed.
+    handoff = []
+    for d in list_task_deps(task["id"], db_path=db_path):
+        pt = get_task(d["depends_on_task_id"], db_path=db_path)
+        if pt is None or pt["status"] != "done":
+            continue
+        last = get_task_last_run(pt["id"], db_path=db_path)
+        handoff.append((pt["id"], pt, last))
+    lines = []
+    lines.append("WORK MANAGER TASK BRIEF")
+    lines.append("=" * 40)
+    lines.append("Task #%s: %s" % (task["id"], task["title"] or "-"))
+    lines.append("Project primary_path (your working directory): %s"
+                 % primary_path)
+    if task["description"]:
+        lines.append("Description: %s" % task["description"])
+    if task["definition_of_done"]:
+        lines.append("Definition of done: %s" % task["definition_of_done"])
+    lines.append("Assignee profile: %s" % (run["agent_profile"] or "-"))
+    lines.append("Working directory: %s" % (run["workdir"] or primary_path))
+    if run["branch"]:
+        lines.append("Git branch/worktree: %s (isolated code run — do not "
+                     "touch other branches)" % run["branch"])
+    lines.append("")
+    lines.append("AUTHORIZATION")
+    lines.append("-" * 40)
+    lines.append("The Work Manager state lives in " + DEFAULT_DB_PATH + ". "
+                 "Do NOT edit wm.db (or any database) directly via SQL — it is "
+                 "owned and integrity-checked by the system. Report your result "
+                 "ONLY through the Completion contract JSON below (and, for "
+                 "reviews, the `wm review` command). Editing the database "
+                 "directly triggers a tamper audit.")
+    lines.append("")
+    lines.append("INSTRUCTIONS")
+    lines.append("-" * 40)
+    lines.append("Work in the project's Working directory above. Complete the task.")
+    lines.append("")
+    lines += _completion_contract_lines(cpath)
+    if handoff:
+        lines.append("")
+        lines.append("HANDOFF CONTEXT FROM COMPLETED PARENTS "
+                     "(use these; carries forward automatically)")
+        lines.append("-" * 40)
+        for len_, pt, last in handoff:
+            sid = last["session_id"] if last else None
+            agent = (last["agent_profile"] if last else None) \
+                or pt["assignee_profile"]
+            lines.append("Parent task #%s: %s"
+                         % (pt["id"], pt["title"] or "-"))
+            lines.append("  result_path : %s" % (pt["result_path"] or "-"))
+            lines.append("  summary     : %s" % (pt["summary"] or "-"))
+            resume = get_resume_command(agent, sid)
+            lines.append("  resume      : %s" % (resume or "-"))
+    # T5 + Phase 6.5.1: inject the feedback that put this task in `rework` —
+    # the Reviewer's `changes_requested` comments and the OWNER FEEDBACK — so
+    # the re-run brief carries them end-to-end, in canonical order.
+    lines += _feedback_sections(task, db_path)
+    return "\n".join(lines)
+
+
+# ---------------------------------------------------------------------------
+# Fix #5 — DB authorization + integrity audit
+# ---------------------------------------------------------------------------
+# In this private single-user system every process (dispatcher, wrappers, the
+# six specialist agents, the Orchestrator) runs under the SAME OS uid, so a
+# filesystem permission wall CANNOT hard-block an agent from writing wm.db
+# (they can always `chmod`/write the file they own). The "smallest useful
+# protection" is therefore two things:
+#   1. A strong convention enforcement point (the task/review brief tells every
+#      agent to report ONLY through `wm ...` commands — never raw SQL), and
+#   2. A cheap, always-runnable consistency audit (`wm check`) that DETECTS
+#      state changes that could only have come from raw DB tampering (a task
+#      flipped to done with no corresponding run/transition; a decided review
+#      with no reviewer session; a task marked done directly; an unknown status
+#      that the sanctioned state machine cannot produce).
+# This makes bypasses visible to the Orchestrator instead of silently
+# accepted — the practical guard for a trusted, single-human system.
+
+def check_integrity(db_path=None):
+    """Run the DB-consistency audit. Returns {ok: bool, findings: [str]}.
+
+    Catches typical raw-SQL tamper/bypass and internal drift:
+      - a task whose status is not in the sanctioned TASK_STATUSES set;
+      - a 'done' task whose newest transition or activity was NOT via a done
+        run/review approve (i.e. flipped directly);
+      - a decided review (done/changes_requested) with no reviewer session_id;
+      - a review that is 'running' but has no linked run;
+      - a run still 'running' whose task is not 'running' (desync).
+    """
+    conn = _connect(db_path)
+    findings = []
+    try:
+        bad_statuses = conn.execute(
+            "SELECT id,status FROM tasks WHERE status NOT IN (%s)"
+            % ",".join("?" * len(TASK_STATUSES)), TASK_STATUSES).fetchall()
+        for r in bad_statuses:
+            findings.append("task #%s has an unknown/unsanctioned status %r "
+                            "(possible raw SQL)" % (r["id"], r["status"]))
+        # done tasks: last transition should be -> done (done run or approve)
+        # Approximate: any 'done' task with NO state_transition to 'done' and
+        # no done run and no approved review is suspicious.
+        done = conn.execute(
+            "SELECT id,result_path,summary FROM tasks WHERE status='done'").fetchall()
+        for t in done:
+            tr = conn.execute(
+                "SELECT 1 FROM state_transitions WHERE task_id=? AND to_status='done' LIMIT 1",
+                (t["id"],)).fetchone()
+            if tr:
+                continue
+            rrun = conn.execute(
+                "SELECT 1 FROM runs WHERE task_id=? AND status='done' LIMIT 1",
+                (t["id"],)).fetchone()
+            if rrun:
+                continue
+            passed = conn.execute(
+                "SELECT 1 FROM reviews WHERE task_id=? AND verdict='approved' LIMIT 1",
+                (t["id"],)).fetchone()
+            if not passed:
+                findings.append("task #%s is 'done' but has NO done-run, "
+                                "approved-review, or recorded transition — "
+                                "status likely set directly (tamper?)" % t["id"])
+            if not tr:
+                findings.append("task #%s: 'done' reached without a "
+                                "state_transition record" % t["id"])
+        decided_no_session = conn.execute(
+            "SELECT id,task_id,status FROM reviews "
+            "WHERE status IN ('done','changes_requested') AND "
+            "(session_id IS NULL OR session_id='')").fetchall()
+        for r in decided_no_session:
+            # The sanctioned `wm review ... --verdict` CLI decides a review
+            # WITHOUT launching a reviewer run — so a missing session_id is NOT
+            # itself tamper. A genuine CLI decision logs an activity entry
+            # (review_done / review_changes_requested / review_waived); a raw
+            # SQL status/verdict write leaves NO such audit trail. Flag only
+            # when there is no session AND no sanctioned activity record.
+            acted = conn.execute(
+                "SELECT 1 FROM activity WHERE task_id=? AND action IN "
+                "('review_done','review_changes_requested','review_waived') "
+                "LIMIT 1", (r["task_id"],)).fetchone()
+            if acted:
+                continue
+            findings.append("review #%s (task #%s) decided %r with NO reviewer "
+                            "session_id AND no sanctioned `wm review` activity "
+                            "— verdict likely written directly via SQL"
+                            % (r["id"], r["task_id"], r["status"]))
+        running_rev_no_run = conn.execute(
+            "SELECT id,task_id FROM reviews WHERE status='running' AND NOT EXISTS "
+            "(SELECT 1 FROM runs WHERE runs.review_id=reviews.id)").fetchall()
+        for r in running_rev_no_run:
+            findings.append("review #%s (task #%s) is 'running' but has no "
+                            "linked Reviewer run" % (r["id"], r["task_id"]))
+        desync = conn.execute(
+            "SELECT id,task_id,status FROM runs WHERE status='running' AND NOT EXISTS "
+            "(SELECT 1 FROM tasks WHERE tasks.id=runs.task_id AND tasks.status='running')").fetchall()
+        for r in desync:
+            findings.append("run #%s (task #%s) is 'running' but its task is not "
+                            "'running' — state desync" % (r["id"], r["task_id"]))
+    finally:
+        conn.close()
+    return {"ok": not findings, "findings": findings}
+
+
+# ---------------------------------------------------------------------------
+# Fix #8 — backup + retention
+# ---------------------------------------------------------------------------
+def backup_db(db_path=None, backup_dir=None):
+    """Online backup of the live wm.db via the SQLite backup API (safe under
+    WAL). Returns the backup file path. Never modifies the live DB."""
+    db_path = db_path or DEFAULT_DB_PATH
+    backup_dir = backup_dir or resolve_backup_dir(db_path=db_path)
+    os.makedirs(backup_dir, exist_ok=True)
+    name = "wm-%s.backup.db" % time.strftime("%Y%m%d-%H%M%S")
+    dest = os.path.join(backup_dir, name)
+    src = sqlite3.connect(db_path)
+    try:
+        b = sqlite3.connect(dest)
+        try:
+            src.backup(b)
+        finally:
+            b.close()
+    finally:
+        src.close()
+    return dest
+
+
+def resolve_backup_dir(db_path=None):
+    m = get_meta("backup_dir", db_path=db_path)
+    if not m:
+        m = os.path.join(resolve_runs_dir(), "backups")
+    return m
+
+
+def maybe_auto_backup(db_path=None):
+    """Backup if none created within backup_interval_hours (cheap per-tick
+    guard; typically a daily backup driven from the dispatch tick). Returns the
+    backup path if one was made, else None."""
+    import glob
+    bdir = resolve_backup_dir(db_path=db_path)
+    interval = float(get_meta("backup_interval_hours", db_path=db_path) or 24)
+    newest = None
+    newest_mtime = None
+    if os.path.isdir(bdir):
+        for f in glob.glob(os.path.join(bdir, "wm-*.backup.db")):
+            m = os.path.getmtime(f)
+            if newest_mtime is None or m > newest_mtime:
+                newest = f
+                newest_mtime = m
+    if newest is not None and (time.time() - newest_mtime) < interval * 3600:
+        return None
+    p = backup_db(db_path=db_path, backup_dir=bdir)
+    log_activity(action="db_backup", agent_profile="system",
+                 detail="backup written to %s" % p, db_path=db_path)
+    return p
+
+
+def prune_history(retention_days=None, keep_transitions=True, db_path=None):
+    """Retention/cleanup for runtime history WITHOUT deleting task/project/
+    goal/review identity or current-state data.
+
+    - prunes `activity` rows older than retention_days (the chatty event log);
+    - prunes old run log/brief/completion files from runs/ for runs older than
+      retention_days (filesystem hygiene);
+    - optionally prunes old `state_transitions` for runs older than
+      retention_days (keep_transitions=False). By default the durable
+      transition log is KEPT so meaningful state history survives cleanup.
+    Rows describing live resources — tasks, projects, goals, reviews, and runs
+    for open/current work — are never touched.
+    Returns a count summary dict.
+    """
+    import glob
+    retention_days = retention_days if retention_days is not None else \
+        int(get_meta("retention_days", db_path=db_path) or 180)
+    cutoff = time.time() - retention_days * 86400
+    counts = {"activity": 0, "transitions": 0, "files": 0}
+    conn = _connect(db_path)
+    try:
+        cur = conn.execute("SELECT COUNT(*) FROM activity WHERE ts < ?", (cutoff,))
+        counts["activity"] = cur.fetchone()[0]
+        with conn:
+            conn.execute("DELETE FROM activity WHERE ts < ?", (cutoff,))
+        if not keep_transitions:
+            # Only prune transitions linked to old runs; never a task's most
+            # recent current-state line (we keep all by default).
+            cur = conn.execute(
+                "SELECT COUNT(*) FROM state_transitions WHERE run_id IS NOT NULL "
+                "AND ts < ?", (cutoff,))
+            counts["transitions"] = cur.fetchone()[0]
+            with conn:
+                conn.execute(
+                    "DELETE FROM state_transitions WHERE run_id IS NOT NULL AND ts < ?",
+                    (cutoff,))
+    finally:
+        conn.close()
+    # filesystem hygiene for old runs (log/brief/completion), never deleting
+    # currently-running or recent run artifacts.
+    rdir = resolve_runs_dir()
+    if os.path.isdir(rdir):
+        for pat in ("*.log", "*.brief.txt", "*.completion.json"):
+            for f in glob.glob(os.path.join(rdir, pat)):
+                try:
+                    if os.path.getmtime(f) < cutoff:
+                        os.remove(f)
+                        counts["files"] += 1
+                except OSError:
+                    pass
+    log_activity(action="prune", agent_profile="system",
+                 detail="retention_days=%s removed=%s" % (retention_days, counts),
+                 db_path=db_path)
+    return counts
