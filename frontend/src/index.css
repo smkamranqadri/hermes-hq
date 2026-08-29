@@ -156,8 +156,8 @@ body {
 
 @utility glass {
   background: var(--hq-glass);
-  -webkit-backdrop-filter: blur(14px);
-  backdrop-filter: blur(14px);
+  -webkit-backdrop-filter: blur(16px);
+  backdrop-filter: blur(16px);
   border: 1px solid var(--hq-border);
 }
 @utility glass-strong {

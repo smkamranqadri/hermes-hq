@@ -28,7 +28,7 @@ export function TopBar() {
   const sys = useQuery({ queryKey: ['system'], queryFn: () => fetch('/api/system').then(r => r.json()), refetchInterval: 15000 })
   const live = sys.data?.dispatcher?.alive
   return (
-    <header className="glass-strong sticky top-0 z-20 flex flex-wrap items-center gap-x-3 border-x-0 border-t-0 px-3 py-1.5 sm:h-16 sm:gap-x-4 sm:px-4 sm:py-2 sm:flex-nowrap">
+    <header className="glass sticky top-0 z-20 flex flex-wrap items-center gap-x-3 border-x-0 border-t-0 px-3 py-1.5 sm:h-16 sm:gap-x-4 sm:px-4 sm:py-2 sm:flex-nowrap">
       <div className="flex h-10 min-w-0 shrink-0 items-center gap-2 sm:h-auto sm:gap-2.5">
         <img src="/icon.svg" alt="" className="size-[26px] drop-shadow-[0_0_6px_var(--hq-accent-2)]" />
         <span className="hq-wordmark truncate text-xs font-bold uppercase sm:text-sm">Hermes // HQ</span>

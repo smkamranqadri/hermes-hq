@@ -72,7 +72,8 @@ def create_app(dispatcher_enabled: bool = True, interval: float = 30.0, password
             candidate = os.path.join(STATIC_DIR, path)
             if path and os.path.isfile(candidate):
                 return FileResponse(candidate)
-            return FileResponse(os.path.join(STATIC_DIR, "index.html"))
+            # the SPA shell must never be served stale: hashed assets change on every build
+            return FileResponse(os.path.join(STATIC_DIR, "index.html"), headers={"Cache-Control": "no-cache"})
     else:
         @app.get("/", include_in_schema=False)
         def no_ui():
