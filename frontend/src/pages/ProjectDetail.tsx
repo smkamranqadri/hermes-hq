@@ -30,16 +30,18 @@ export function ProjectDetail() {
       {modal === 'goal' && <NewGoalModal project={slug} onClose={() => setModal(null)} />}
       <div className="mb-5 flex flex-wrap items-end justify-between gap-3">
         <div>
-          <h1 className="text-xl font-semibold tracking-tight">{p.name} {!!p.archived && <Chip>archived</Chip>}</h1>
-          <p className="mt-1 font-mono text-[11px] text-muted">{p.primary_path}</p>
+          <h1 className="break-words text-xl font-semibold tracking-tight">{p.name} {!!p.archived && <Chip>archived</Chip>}</h1>
+          <p className="mt-1 break-all font-mono text-[11px] text-muted">{p.primary_path}</p>
           {p.description && <p className="mt-2 max-w-2xl text-sm text-muted">{p.description}</p>}
         </div>
-        <div className="flex flex-wrap items-center gap-2">
+        <div className="flex w-full flex-wrap items-center gap-2 sm:w-auto">
           <Btn onClick={() => setModal('task')}>+ Task</Btn><Btn kind="ghost" onClick={() => setModal('goal')}>+ Goal</Btn>
           <ActionBtn url={`/api/project/${slug}/archive?archived=${p.archived ? 0 : 1}`} label={p.archived ? 'Restore' : 'Archive'} kind="ghost" confirm={p.archived ? undefined : `Archive ${p.name}? Its tasks leave the global Tasks view.`} />
+          <div className="flex basis-full gap-2 sm:basis-auto">
           {[['tasks', `${p.tasks_done}/${p.tasks_total}`], ['runs', String(p.runs.length)], ['goals', `${p.goals.filter(g => g.status === 'released').length}/${p.goals.length}`]].map(([k, v]) => (
-            <GlassCard key={k} className="min-w-20 py-2 text-center"><p className="font-mono text-lg font-semibold">{v}</p><Label>{k}</Label></GlassCard>
+            <GlassCard key={k} className="min-w-16 flex-1 py-2 text-center sm:flex-none sm:min-w-20"><p className="font-mono text-base font-semibold sm:text-lg">{v}</p><Label>{k}</Label></GlassCard>
           ))}
+          </div>
         </div>
       </div>
       <div className="mb-5 h-1 overflow-hidden rounded-full bg-inset"><div className="h-full bg-working" style={{ width: `${pct}%` }} /></div>

@@ -17,8 +17,8 @@ export function AppearanceMenu() {
     </button>
   )
   return (
-    <Menu keepOpen button={<span className="font-mono text-[10px]">◐ {THEMES.find(t => t.id === theme)?.label.toUpperCase() ?? 'VIOLET'}</span>}>
-      <div className="max-h-[70vh] w-72 overflow-y-auto p-1">
+    <Menu keepOpen button={<span className="font-mono text-[10px]">◐<span className="hidden sm:inline"> {THEMES.find(t => t.id === theme)?.label.toUpperCase() ?? 'VIOLET'}</span></span>}>
+      <div className="max-h-[70vh] w-[min(18rem,calc(100vw-2rem))] overflow-y-auto p-1">
         <p className="px-2.5 pb-1 pt-1 font-mono text-[10px] uppercase tracking-widest text-muted">Theme</p>
         {THEMES.map(t => row(theme === t.id, () => pickTheme(t.id), (<>
           <span className="flex shrink-0 gap-0.5 rounded border border-line p-0.5">
