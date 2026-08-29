@@ -5,7 +5,7 @@ from fastapi import APIRouter, HTTPException, Request, Response
 from pydantic import BaseModel, Field
 
 from backend import auth as A
-from backend import stop as stopmod, tasks as tq
+from backend import agents as ag, stop as stopmod, tasks as tq
 from core import wm_dispatch, wm_store as store
 
 router = APIRouter(prefix="/api")
@@ -195,6 +195,27 @@ def stop(tid: int, keep_in_queue: int = 0):
 @router.post("/task/{tid}/assign")
 def assign(tid: int, body: Assign):
     _engine(store.assign_task, tid, body.assignee); return _after(tid)
+
+
+# ---- agents ------------------------------------------------------------
+class InstallIn(BaseModel):
+    template: str
+    force: bool = False
+
+
+class AskOrchIn(BaseModel):
+    template: str
+    project: str
+
+
+@router.post("/agents/install")
+def install_agent(body: InstallIn):
+    return _engine(ag.install, body.template, force=body.force)
+
+
+@router.post("/agents/ask-orchestrator")
+def ask_orchestrator(body: AskOrchIn):
+    return _engine(ag.ask_orchestrator, body.template, body.project)
 
 
 # ---- system ------------------------------------------------------------
