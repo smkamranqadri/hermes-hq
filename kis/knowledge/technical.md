@@ -20,6 +20,9 @@ Engine keeps its precise state machine (`planned, waiting_approval, ready, runni
 - **Needs you** = owner approval, blocked, failed, stalled — each with the one unblocking action
 - **Done** = done, manual/archived
 
+## Legacy WM snapshot
+Live WM (`/opt/data/work-manager/`, crons `wm-dispatch`, `wm completion watchdog`, `wm-planning-pickup`) keeps running until Group 1b cutover. hermes-hq works on an imported copy with dispatcher off; `hermes-hq import` rewrites `/opt/data/work-manager/` path prefixes and skips `runs/worktrees/`. Human state is derived at read time from engine status (`hermes_hq/status.py`), never stored.
+
 ## Engine rules carried over (non-negotiable)
 - Every task belongs to a project with a valid `primary_path` (default `/opt/data/projects/<slug>`, root configurable).
 - One persistent Hermes session per task run; session id must be deterministic, never "newest session".
