@@ -140,6 +140,7 @@
 }
 
 html, body, #root { min-height: 100%; }
+html, body { overflow-x: hidden; max-width: 100vw; }
 body {
   background-color: var(--hq-bg);
   background-image:

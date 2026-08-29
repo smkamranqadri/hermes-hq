@@ -75,7 +75,7 @@ export function ProjectDetail() {
       {tab === 'activity' && (p.activity.length ? <GlassCard className="p-0">{p.activity.map(a => (
         <div key={a.id} className="flex flex-wrap items-center gap-3 border-b border-line-subtle px-4 py-2 text-xs last:border-0">
           <span className="w-28 shrink-0 font-mono text-[10px] text-muted">{when(a.ts)}</span><Agent name={a.agent_profile} /><span className="font-mono text-muted">{a.action}</span>
-          <span className="min-w-0 flex-1 truncate">{a.task_id ? <Link to={`/tasks/${a.task_id}`} className="hover:text-accent-2">#{a.task_id} </Link> : null}{a.detail}</span>
+          <span className="min-w-0 basis-full truncate sm:flex-1 sm:basis-auto">{a.task_id ? <Link to={`/tasks/${a.task_id}`} className="hover:text-accent-2">#{a.task_id} </Link> : null}{a.detail}</span>
         </div>))}</GlassCard> : <Empty title="No activity yet" />)}
     </section>
   )
