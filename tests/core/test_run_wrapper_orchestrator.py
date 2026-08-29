@@ -41,7 +41,7 @@ import sys
 import tempfile
 
 HERE = os.path.dirname(os.path.abspath(__file__))
-ENGINE = os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "..", "backend", "core"); sys.path.insert(0, ENGINE)
+ENGINE = os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "..", "core"); sys.path.insert(0, ENGINE)
 import wm_store as store            # noqa: E402
 import wm_run_agent as wra          # noqa: E402
 

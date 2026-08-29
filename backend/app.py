@@ -8,7 +8,7 @@ from fastapi.staticfiles import StaticFiles
 
 from backend import __version__
 from backend.dispatcher import DispatcherLoop
-from backend.core import wm_store
+from core import wm_store
 
 STATIC_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), "static")
 

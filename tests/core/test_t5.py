@@ -7,7 +7,7 @@
 # `none` never routes; `optional` non-blocking (waive); reviews rows + status;
 # NO second/separate review exists anywhere.
 import contextlib, io, json, os, sqlite3, subprocess, sys, tempfile, time
-BASE = os.path.dirname(os.path.abspath(__file__)); ENGINE = os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "..", "backend", "core"); sys.path.insert(0, ENGINE)
+BASE = os.path.dirname(os.path.abspath(__file__)); ENGINE = os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "..", "core"); sys.path.insert(0, ENGINE)
 import wm_store as store, wm_dispatch as dispatch, wm_cli  # noqa: E402
 
 TMP = tempfile.mkdtemp(prefix="wm_t5_")

@@ -4,7 +4,7 @@ import logging
 import threading
 import time
 
-from backend.core import wm_dispatch, wm_store
+from core import wm_dispatch, wm_store
 
 log = logging.getLogger("backend.dispatcher")
 

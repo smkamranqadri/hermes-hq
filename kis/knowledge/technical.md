@@ -1,7 +1,7 @@
 # hermes-hq — Technical Knowledge
 
 ## Architecture (decided 2026-08-29)
-- **One Python service** (`hq` package, FastAPI) that: contains the engine (`backend/core/` = moved `wm_store`/`wm_dispatch`/`wm_run_agent`), runs the dispatcher as an in-process background loop (no Hermes cron), exposes REST + WebSocket events, and serves the built React UI.
+- **One Python service** (`hq` package, FastAPI) that: contains the engine (`core/` = moved `wm_store`/`wm_dispatch`/`wm_run_agent`), runs the dispatcher as an in-process background loop (no Hermes cron), exposes REST + WebSocket events, and serves the built React UI.
 - **Frontend**: React 19 + Vite + Tailwind 4. Top bar (glass, bordered): **Overview · Projects · Tasks · Agents · Chat**; right side **Tools** menu (Files · Terminal · Memory · Skills · MCP · Schedules), theme picker, LIVE/PAUSED dot, SYSTEM. Reviews live inside Tasks + Task detail; Activity inside Overview feed + Project detail. (Supersedes the 7-tab IA in `hermes-work-manager/design/IA_FLOWS.md`; decided 2026-08-29.)
 - **Theming**: all colors are `--hq-*` CSS vars per `[data-theme]` in `frontend/src/index.css`, exposed to Tailwind via `@theme inline`. Six fixed themes, no OS-follow: violet (default, WM tokens), nous, nous-light (only light theme, from workspace `claude-nous-light`), bronze, slate, hermes (palettes from hermes-workspace `styles.css`). Pref in `localStorage['hq-theme']`; `?theme=<id>` overrides (used for screenshots).
 - **Fonts**: only Inter + JetBrains Mono bundled (`frontend/public/fonts`, no CDN, no `@fontsource`). One font choice: JetBrains Mono (default, everywhere), Inter, System Sans/Serif/Mono. Pref in `localStorage['hq-fonts']`; `?font=<id>` overrides. Why: the app renders on each viewer's device, so only bundled fonts look identical; owner wants JetBrains.
@@ -31,6 +31,6 @@ Live WM (`/opt/data/work-manager/`, crons `wm-dispatch`, `wm completion watchdog
 - Liveness = process state + Hermes session `last_activity_at` + timeout.
 
 ## Environment (this box)
-Repo layout: `backend/` (Python package `backend`: app.py, cli.py, dispatcher.py, static/ = built UI), `backend/core/` (engine: wm_store/wm_dispatch/wm_run_agent/wm_cli), `frontend/` (Vite+React), `tests/core/`. Package is named `backend` on purpose (owner choice 2026-08-29; installs into its own venv so the generic name can't collide).
+Repo layout: `core/` (engine package: wm_store/wm_dispatch/wm_run_agent/wm_cli, no web deps), `backend/` (package `backend`: app.py, cli.py, dispatcher.py, static/ = built UI), `frontend/` (Vite+React), `tests/core/`. Two top-level packages on purpose (owner choice 2026-08-29): core is standalone and predates the UI.
 
 Hermes v0.20.5 at `/opt/hermes`, `HERMES_HOME=/opt/data`, profiles under `/opt/data/profiles/`, gateway :8642, Hermes dashboard :9119, legacy WM dashboard :9009. Node 26, Python 3.13, no pnpm.

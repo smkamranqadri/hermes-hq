@@ -5,7 +5,7 @@ Covers T2 DoD: loop+sessionid+dependent promote (2), completion contract
 both ways (3), liveness one case (4), `wm dispatch` manual path + status (5).
 """
 import contextlib, io, os, sqlite3, sys, tempfile, time
-BASE = os.path.dirname(os.path.abspath(__file__)); ENGINE = os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "..", "backend", "core"); sys.path.insert(0, ENGINE)
+BASE = os.path.dirname(os.path.abspath(__file__)); ENGINE = os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "..", "core"); sys.path.insert(0, ENGINE)
 import wm_store as store, wm_dispatch as dispatch, wm_cli      # noqa: E402
 
 TMP = tempfile.mkdtemp(prefix="wm_t2_")
