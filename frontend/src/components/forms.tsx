@@ -89,8 +89,8 @@ export function FeedbackModal({ taskId, onClose }: { taskId: number; onClose: ()
 }
 
 /** Confirmed one-shot action button. */
-export function ActionBtn({ url, label, confirm, kind = 'primary', onDone }: { url: string; label: string; confirm?: string; kind?: 'primary' | 'ghost' | 'warn'; onDone?: (d: unknown) => void }) {
+export function ActionBtn({ url, label, confirm, kind = 'primary', onDone, body }: { url: string; label: string; confirm?: string; kind?: 'primary' | 'ghost' | 'warn'; onDone?: (d: unknown) => void; body?: unknown }) {
   const toast = useToast()
   const m = useWrite(url, { onSuccess: (d) => { toast(`${label}: done`); onDone?.(d) } })
-  return <Btn kind={kind} busy={m.isPending} onClick={() => { if (!confirm || window.confirm(confirm)) m.mutate(undefined, { onError: x => toast(errText(x), 'err') }) }}>{label}</Btn>
+  return <Btn kind={kind} busy={m.isPending} onClick={() => { if (!confirm || window.confirm(confirm)) m.mutate(body, { onError: x => toast(errText(x), 'err') }) }}>{label}</Btn>
 }

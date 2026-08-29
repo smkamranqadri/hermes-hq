@@ -53,7 +53,7 @@ def test_list_and_templates(env):
     t = {x["name"]: x for x in d["templates"]}
     assert t["orchestrator"]["overlay"] is True and t["coder"]["skills"] == ["coder-specialist"]
     assert c.get("/api/agent/nobody").status_code == 404
-    assert c.get("/api/agent/coder").json()["runs"] == []
+    assert c.get("/api/agent/coder").json()["recent_runs"] == []
 
 
 def test_install_specialist_then_refuse(env):

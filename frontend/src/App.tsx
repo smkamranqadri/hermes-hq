@@ -16,6 +16,8 @@ import { Projects } from './pages/Projects'
 import { ProjectDetail } from './pages/ProjectDetail'
 import { Tasks } from './pages/Tasks'
 import { TaskDetail } from './pages/TaskDetail'
+import { Agents } from './pages/Agents'
+import { AgentDetail } from './pages/AgentDetail'
 
 function Placeholder({ title }: { title: string }) {
   usePageTitle(title)
@@ -123,13 +125,15 @@ export default function App() {
         <SnapshotBanner />
         <main>
           <Routes>
-            {[...TABS, ...TOOLS].filter(([, to]) => !['/projects', '/tasks', '/', '/activity'].includes(to)).map(([label, to]) => <Route key={to} path={to} element={<Placeholder title={label} />} />)}
+            {[...TABS, ...TOOLS].filter(([, to]) => !['/projects', '/tasks', '/', '/activity', '/agents'].includes(to)).map(([label, to]) => <Route key={to} path={to} element={<Placeholder title={label} />} />)}
             <Route path="/" element={<Overview />} />
             <Route path="/activity" element={<Activity />} />
             <Route path="/projects" element={<Projects />} />
             <Route path="/projects/:slug" element={<ProjectDetail />} />
             <Route path="/tasks" element={<Tasks />} />
             <Route path="/tasks/:id" element={<TaskDetail />} />
+            <Route path="/agents" element={<Agents />} />
+            <Route path="/agents/:name" element={<AgentDetail />} />
             <Route path="/system" element={<System />} />
           </Routes>
         </main>

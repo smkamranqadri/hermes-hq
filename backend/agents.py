@@ -137,15 +137,15 @@ def agent_detail(name, db_path=None):
     a = next(x for x in list_agents(db_path) if x["name"] == name)
     conn = store._connect(db_path or store.DEFAULT_DB_PATH)
     try:
-        a["runs"] = [dict(r) for r in conn.execute(
+        a["recent_runs"] = [dict(r) for r in conn.execute(
             "SELECT r.id, r.task_id, r.status, r.started_at, r.finished_at, r.error, r.session_id, t.title AS task_title "
             "FROM runs r LEFT JOIN tasks t ON t.id=r.task_id WHERE r.agent_profile=? ORDER BY r.id DESC LIMIT 50", (name,))]
     finally:
         conn.close()
     try:
-        a["sessions"] = readers.agent_sessions(store.resolve_profiles_dir(), name, limit=50)
+        a["recent_sessions"] = readers.agent_sessions(store.resolve_profiles_dir(), name, limit=50)
     except (ValueError, FileNotFoundError):
-        a["sessions"] = []
+        a["recent_sessions"] = []
     return a
 
 
