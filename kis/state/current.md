@@ -1,11 +1,10 @@
 # State
 
 ## Status
-Foundation scaffold DONE 2026-08-29 (commit on `main`). Engine, service, and UI shell exist; no data views yet.
+Foundation scaffold + Group 0 shell DONE 2026-08-29 (on `main`). Server running on :9010 (`--no-dispatcher`, log `/opt/data/hermes-hq-serve.log`).
 
 ## Now
-Task: **Group 0 shell polish** (approved 2026-08-29): 6 themes (Violet default, Nous, Bronze, Slate, Hermes, Violet Light) via CSS vars, glass cards/orbs/grid/fonts from WM tokens, top bar = Overview·Projects·Tasks·Agents·Chat + Tools menu (Files·Terminal·Memory·Skills·MCP·Schedules) + theme + SYSTEM. Reviews→Tasks, Activity→Overview/Project.
-Verification: screenshots of every theme at desktop + mobile; Tools menu open.
+Idle — awaiting go for Group 1.
 
 ## Next
 **Group 1 read views**: `/api/projects`, `/api/tasks`, `/api/task/{id}` over `wm_store` readers (port the reader logic from `../hermes-work-manager/wm-tool/wm_dash/reader.py`, not the HTTP layer), Projects list + Tasks list pages using `StatusBadge`. Then the `wm.db` importer.
@@ -20,9 +19,7 @@ None.
 ## How to run
 See `README.md`. Dev: `.venv/bin/hermes-hq serve --no-dispatcher` + `cd web && npm run dev` (proxies /api to :9010). Legacy WM dashboard still live on :9009 and untouched.
 
-## Proof (foundation scaffold)
-- Engine tests from new location: t1, t3, t4, t6, run_wrapper_orchestrator, run_wrapper_provider_error PASS; t2/t5/t7 pre-existing failures (verified same in source).
-- `hermes-hq serve --port 9010 --no-dispatcher`: `/api/health` → `{"ok":true,"version":"0.1.0"}`, `/api/system` → real paths, `/` and `/tasks` → 200 SPA.
-- `hermes-hq serve --port 9011 --interval 2`: `/api/system.dispatcher` → `alive: true, last_tick set, last_error: null`.
-- Screenshots (1280 and 390 wide): 7-tab top bar, active pill, LIVE/PAUSED dot, SYSTEM link, 5-state badges rendered.
-- `hermes-hq wm status` passthrough works.
+## Proof (latest: Group 0)
+- Screenshots at 1280px of `/system?theme=<id>` for violet, violet-light, nous, bronze, slate, hermes: glass top bar with border, orbs + dot grid, glass cards, Inter/JetBrains Mono, 5-state badges; mobile 390px shows brand row + scrollable tab row.
+- Bug found+fixed during proof: 250ms theme transition made light theme screenshot dark → transition removed.
+- Foundation proof (engine tests, /api/health, dispatcher alive) recorded in commit 6620b75 message history; still valid.
