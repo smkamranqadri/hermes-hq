@@ -18,6 +18,7 @@ import { Tasks } from './pages/Tasks'
 import { TaskDetail } from './pages/TaskDetail'
 import { Agents } from './pages/Agents'
 import { AgentDetail } from './pages/AgentDetail'
+import { Chat } from './pages/Chat'
 
 function Placeholder({ title }: { title: string }) {
   usePageTitle(title)
@@ -125,7 +126,7 @@ export default function App() {
         <SnapshotBanner />
         <main>
           <Routes>
-            {[...TABS, ...TOOLS].filter(([, to]) => !['/projects', '/tasks', '/', '/activity', '/agents'].includes(to)).map(([label, to]) => <Route key={to} path={to} element={<Placeholder title={label} />} />)}
+            {[...TABS, ...TOOLS].filter(([, to]) => !['/projects', '/tasks', '/', '/activity', '/agents', '/chat'].includes(to)).map(([label, to]) => <Route key={to} path={to} element={<Placeholder title={label} />} />)}
             <Route path="/" element={<Overview />} />
             <Route path="/activity" element={<Activity />} />
             <Route path="/projects" element={<Projects />} />
@@ -134,6 +135,9 @@ export default function App() {
             <Route path="/tasks/:id" element={<TaskDetail />} />
             <Route path="/agents" element={<Agents />} />
             <Route path="/agents/:name" element={<AgentDetail />} />
+            <Route path="/chat" element={<Chat />} />
+            <Route path="/chat/:profile" element={<Chat />} />
+            <Route path="/chat/:profile/:id" element={<Chat />} />
             <Route path="/system" element={<System />} />
           </Routes>
         </main>

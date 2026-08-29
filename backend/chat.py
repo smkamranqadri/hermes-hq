@@ -42,7 +42,20 @@ def _conn(port):
     return http.client.HTTPConnection("127.0.0.1", port, timeout=CONNECT_TIMEOUT)
 
 
-def _gateway_json(port, key, method, path, body=None):
+def _gateway_json(port, key, method, path, body=None, retry_for=0.0):
+    """One JSON call to the gateway. With retry_for>0, connection errors and
+    503 (gateway still warming up right after start) are retried for that long."""
+    deadline = time.time() + retry_for
+    while True:
+        try:
+            return _gateway_json_once(port, key, method, path, body)
+        except GatewayError as e:
+            if time.time() >= deadline or not getattr(e, "transient", False):
+                raise
+            time.sleep(0.5)
+
+
+def _gateway_json_once(port, key, method, path, body=None):
     c = _conn(port)
     try:
         c.request(method, path, body=json.dumps(body) if body is not None else None,
@@ -50,7 +63,8 @@ def _gateway_json(port, key, method, path, body=None):
         r = c.getresponse()
         raw = r.read().decode("utf-8", "replace")
     except (OSError, http.client.HTTPException) as e:
-        raise GatewayError("gateway unreachable: %s" % e)
+        err = GatewayError("gateway unreachable: %s" % e); err.transient = True
+        raise err
     finally:
         c.close()
     try:
@@ -59,7 +73,9 @@ def _gateway_json(port, key, method, path, body=None):
         data = {"raw": raw[:500]}
     if r.status >= 400:
         msg = (data.get("error") or {}).get("message") if isinstance(data.get("error"), dict) else data.get("error")
-        raise GatewayError("gateway %s %s -> %d: %s" % (method, path, r.status, msg or raw[:300]))
+        err = GatewayError("gateway %s %s -> %d: %s" % (method, path, r.status, msg or raw[:300]))
+        err.transient = r.status in (502, 503, 504)
+        raise err
     return data
 
 
@@ -85,7 +101,7 @@ def create_session(profile, title=None, db_path=None):
     _check_profile(profile)
     port, key = gateways.ensure_running(profile, db_path)
     body = {"title": title} if title else {}
-    data = _gateway_json(port, key, "POST", "/api/sessions", body)
+    data = _gateway_json(port, key, "POST", "/api/sessions", body, retry_for=8.0)
     sess = data.get("session") if isinstance(data.get("session"), dict) else data
     sid = sess.get("id") or sess.get("session_id")
     if not sid:
