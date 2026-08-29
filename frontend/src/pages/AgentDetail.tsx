@@ -38,9 +38,13 @@ export function AgentDetail() {
       </div>
       <GlassCard className="min-w-0 overflow-hidden">
         <div className="flex flex-wrap items-center justify-between gap-2"><Label>History · {a.runs} task runs · {a.sessions} sessions</Label><span className="font-mono text-[10px] text-muted">one row per Hermes session; task runs carry their run # and task</span></div>
+        {a.live.length > 0 && <div className="mt-2 rounded-lg border border-working/50 bg-working/10 p-2">
+          <Label>Running now · {a.live.length}</Label>
+          {a.live.map(l => <div key={l.run_id} className="mt-1 flex min-w-0 flex-wrap items-center gap-x-3 gap-y-1 text-xs"><span className="hq-dot-live size-1.5 rounded-full bg-working" /><span className="font-mono">run #{l.run_id}{l.review_id ? ' · review' : ''}</span>{l.task_id ? <Link to={`/tasks/${l.task_id}`} className="order-last min-w-0 basis-full truncate hover:underline sm:order-none sm:flex-1 sm:basis-auto">#{l.task_id} {l.task_title}</Link> : <span className="flex-1" />}<span className="text-muted">started {ago(l.started_at)}</span>{l.task_id && <Link to={`/tasks/${l.task_id}`} className="rounded-full border border-working/60 px-2 py-0.5 font-mono text-[10px] uppercase tracking-wider text-working hover:bg-working/20">Watch log</Link>}</div>)}
+        </div>}
         {a.history.length === 0 && <p className="mt-2 text-xs text-muted">Nothing yet — no runs and no sessions in this profile's state.db.</p>}
         <ul className="mt-2 divide-y divide-line">
-          {a.history.map((h, i) => {
+          {a.history.filter(h => !(h.run && h.run.status === 'running')).map((h, i) => {
             const s = h.session, r = h.run
             const title = s ? (s.title || s.id) : `run #${r?.id} (no session)`
             return (

@@ -51,6 +51,7 @@ export function TopBar() {
         <span className="flex items-center gap-2 font-mono text-[11px]">
           <span className={clsx('size-2 rounded-full', sys.isError ? 'bg-error text-error' : live ? 'hq-dot-live bg-working text-working' : 'bg-needsyou text-needsyou')} />
           <span className="hidden sm:inline">{sys.isError ? 'OFFLINE' : live ? 'LIVE' : 'PAUSED'}</span>
+          {sys.data && typeof sys.data.running === 'number' && <span title={`${sys.data.running} of ${sys.data.cap} run slots busy`} className={clsx('ml-1 inline-flex items-center gap-1 rounded-full border px-1.5 py-0.5 font-mono text-[10px]', sys.data.paused ? 'border-line text-muted' : sys.data.running >= sys.data.cap ? 'border-needsyou/60 text-needsyou' : sys.data.running > 0 ? 'border-working/60 text-working' : 'border-line text-muted')}>{sys.data.running > 0 && !sys.data.paused && <span className="hq-dot-live size-1.5 rounded-full bg-current" />}{sys.data.running}/{sys.data.cap}</span>}
         </span>
         <span className="hidden font-mono text-[11px] md:inline">{clock}</span>
         <NavLink to="/system" className="rounded-full border border-line px-2 py-1 font-mono text-[10px] hover:text-fg sm:px-2.5">SYS<span className="hidden sm:inline">TEM</span></NavLink>

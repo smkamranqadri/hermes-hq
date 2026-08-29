@@ -80,7 +80,9 @@ export function ago(ts?: number | null) {
 export const when = (ts?: number | null) => ts ? new Date(ts * 1000).toLocaleString() : '—'
 
 export type ActivityEvent = { kind: 'activity' | 'transition'; id: number; ts: number; task_id: number | null; run_id: number | null; agent_profile: string | null; action: string; detail: string | null; project_slug: string | null; task_title: string | null }
-export type Overview = { stats: { needsyou: number; working: number; queued: number; backlog: number; done_today: number; open_reviews: number; paused: boolean; cap: number }; needsyou: Task[]; working: Task[]; queued: Task[]; activity: (ActivityEvent & { model?: string })[]; ts: number }
+export type Overview = { stats: { needsyou: number; working: number; queued: number; backlog: number; done_today: number; open_reviews: number; paused: boolean; cap: number; slots_used: number }; needsyou: Task[]; working: Task[]; queued: Task[]; activity: (ActivityEvent & { model?: string })[]; ts: number }
+export type SystemInfo = { version: string; paused: boolean; running: number; cap: number; dispatcher: { enabled: boolean; alive: boolean; last_error: string | null }; imported_from: string | null }
+export const useSystem = () => useQuery({ queryKey: ['system'], queryFn: () => get<SystemInfo>('/api/system'), refetchInterval: 15000 })
 export const useOverview = () => useQuery({ queryKey: ['overview'], queryFn: () => get<Overview>('/api/overview'), refetchInterval: 10000 })
 export const useActivity = (p: { project?: string; agent?: string; task_id?: number; before?: number; limit?: number }) => {
   const qs = new URLSearchParams(); Object.entries(p).forEach(([k, v]) => { if (v !== undefined && v !== '' && v !== null) qs.set(k, String(v)) })
@@ -92,8 +94,9 @@ export const useRunLog = (runId: number | null, offset: number, active: boolean)
 
 // ---- agents -------------------------------------------------------------
 export type Gateway = { configured: boolean; port: number | null; enabled: boolean; running: boolean; last_used: string | null }
+export type LiveRun = { run_id: number; task_id: number | null; task_title: string | null; started_at: number; session_id: string | null; review_id: number | null }
 export type AgentSummary = {
-  name: string; role?: string; installed: boolean; home: string; description: string; has_template: boolean; gateway: Gateway
+  name: string; live: LiveRun[]; role?: string; installed: boolean; home: string; description: string; has_template: boolean; gateway: Gateway
   overlay_applied?: boolean; runs: number; runs_running: number; runs_done: number; runs_failed: number; last_run_at: number | null
   tasks_assigned: number; sessions: number; last_active_at: number | null; estimated_cost_usd: number | null; active_now?: boolean
 }
@@ -108,7 +111,7 @@ export const useAgent = (name: string) => useQuery({ queryKey: ['agent', name], 
 
 // ---- chat ---------------------------------------------------------------
 export type ChatMessage = { id: number; role: string; content: string | null; timestamp: number | null; tool_name: string | null; token_count: number | null; display_kind: string | null; active: number | null }
-export type SessionDetail = AgentSession & { usage: { model: string; input_tokens: number; output_tokens: number; estimated_cost_usd: number | null }[]; transcript: ChatMessage[] }
+export type SessionDetail = AgentSession & { live_run: { run_id: number; task_id: number | null; task_title: string | null; started_at: number } | null; usage: { model: string; input_tokens: number; output_tokens: number; estimated_cost_usd: number | null }[]; transcript: ChatMessage[] }
 export const useAgentSessions = (name: string | undefined) => useQuery({ queryKey: ['agent-sessions', name], queryFn: () => get<{ sessions: AgentSession[] }>(`/api/agent/${name}/sessions?limit=100`), enabled: !!name, refetchInterval: 20000 })
 export const useSessionDetail = (profile: string | undefined, id: string | undefined) => useQuery({ queryKey: ['session', profile, id], queryFn: () => get<SessionDetail>(`/api/session/${profile}/${id}`), enabled: !!profile && !!id, retry: false })
 

@@ -98,7 +98,7 @@ def agent_sessions(name: str, limit: int = Query(100, ge=1, le=500)):
 @router.get("/session/{profile}/{session_id}")
 def session(profile: str, session_id: str, limit: int = Query(400, ge=1, le=2000)):
     try:
-        d = chat.transcript(profile, session_id, limit)
+        d = chat.transcript(profile, session_id, limit, db_path=_db())
     except ValueError as e:
         raise HTTPException(404, str(e))
     if d is None:

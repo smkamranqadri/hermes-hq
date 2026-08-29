@@ -107,6 +107,7 @@ def list_agents(db_path=None):
     db_path = db_path or store.DEFAULT_DB_PATH
     profiles_dir = store.resolve_profiles_dir()
     base = {a["name"]: a for a in readers.list_agents(db_path, profiles_dir)}
+    live = live_runs(db_path)
     out = []
     for name in store.ASSIGNEE_PROFILES:
         a = dict(base.get(name, {"name": name}))
@@ -114,10 +115,26 @@ def list_agents(db_path=None):
         a.update({"installed": is_installed(name), "home": home,
                   "description": _profile_description(home, name),
                   "has_template": os.path.isfile(os.path.join(templates_dir(), name, "agent.yaml")),
-                  "gateway": gateway_state(name, db_path)})
+                  "gateway": gateway_state(name, db_path),
+                  "live": live.get(name, [])})
         if name == store.ORCHESTRATOR_AGENT:
             a["overlay_applied"] = overlay_applied(name)
         out.append(a)
+    return out
+
+
+def live_runs(db_path=None):
+    """Running runs grouped by agent: {agent: [{run_id, task_id, task_title, started_at, session_id, review_id}]}."""
+    conn = store._connect(db_path or store.DEFAULT_DB_PATH)
+    try:
+        rows = conn.execute(
+            "SELECT r.id AS run_id, r.agent_profile, r.task_id, r.started_at, r.session_id, r.review_id, t.title AS task_title "
+            "FROM runs r LEFT JOIN tasks t ON t.id=r.task_id WHERE r.status='running' ORDER BY r.started_at ASC").fetchall()
+    finally:
+        conn.close()
+    out = {}
+    for r in rows:
+        d = dict(r); out.setdefault(d.pop("agent_profile"), []).append(d)
     return out
 
 

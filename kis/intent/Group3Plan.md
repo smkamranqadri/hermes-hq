@@ -28,3 +28,11 @@ Risks: sending into a CLI-created session (verify with the first real message; f
 - pytest with a fake SSE gateway; Playwright 1440/390: Agents, Agent detail, Chat streaming, Task→session.
 
 Out of scope: files/terminal/memory/skills/MCP, schedules, multi-user, gateway pools, voice.
+
+## 3c — Live-run highlighting — DONE 2026-08-29 (owner picked C; Standard mode)
+Make the live runs and the concurrency allowance visible everywhere they matter. One global cap (`concurrency_cap`, default 3); slots = runs with status `running` (incl. review runs).
+1. **Capacity pill**: `/api/system` gains `running`/`cap`; top bar shows `2/3 running` next to LIVE (pulsing dot when >0, amber at cap, grey when paused); Overview "Working" tile reads `2 / 3` for slots.
+2. **Agent detail + card**: `/api/agents` rows carry `live: [{run_id, task_id, task_title, started_at}]`; History pins live rows under "Running now" with working border + pulsing dot + "Watch log" (task detail); Agent card shows the task it is on.
+3. **Tasks / Task detail**: running badge gets the pulsing dot; Task detail shows `slots N/cap busy` and, for a ready task with all slots busy, "waiting for a free slot".
+4. **Chat**: `/api/session/{profile}/{id}` returns `live_run` when a running run owns that session (by session id or `wm-run-<id>` marker); Chat shows "agent is working here (run #N)" and disables the composer.
+Acceptance: pytest for `/api/system` counts, agents `live`, session `live_run`; Playwright 1440/390 with a fake running run on a scratch instance showing the pill, pinned row, badge dot, and the disabled composer.

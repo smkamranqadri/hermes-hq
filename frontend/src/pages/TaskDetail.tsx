@@ -1,6 +1,6 @@
 import { Link, useParams } from 'react-router-dom'
 import clsx from 'clsx'
-import { useTask, ago, when } from '../api'
+import { useTask, useSystem, ago, when } from '../api'
 import { GlassCard } from '../components/GlassCard'
 import { StatusBadge } from '../components/StatusBadge'
 import { Empty, Loading, Chip, Crumbs, Label, Agent } from '../components/ui'
@@ -18,6 +18,7 @@ function Block({ title, children }: { title: string; children: React.ReactNode }
 export function TaskDetail() {
   const id = Number(useParams().id)
   const q = useTask(id)
+  const sys = useSystem()
   const t = q.data
   usePageTitle(t ? `#${t.id} ${t.title}` : `Task #${id}`)
   const [reply, setReply] = useState(false)
@@ -35,7 +36,7 @@ export function TaskDetail() {
         <div className="min-w-0">
           <h1 className="break-words text-lg font-semibold tracking-tight sm:text-xl">{t.title}</h1>
           <div className="mt-2 flex flex-wrap items-center gap-2 text-xs text-muted">
-            <StatusBadge human={{ state: t.human.state, reason: t.human.reason?.split(':')[0] }} /><span className="font-mono">engine: {t.status}</span>
+            <StatusBadge human={{ state: t.human.state, reason: t.human.reason?.split(':')[0] }} live={st === 'running'} /><span className="font-mono">engine: {t.status}</span>{sys.data && (st === 'running' || st === 'ready') && <span className={`font-mono ${st === 'ready' && sys.data.running >= sys.data.cap ? 'text-needsyou' : ''}`}>· slots {sys.data.running}/{sys.data.cap} busy{st === 'ready' && !sys.data.paused && sys.data.running >= sys.data.cap ? ' — waiting for a free slot' : ''}{st === 'ready' && sys.data.paused ? ' — dispatcher paused' : ''}</span>}
             <Agent name={t.assignee_profile} />{!!t.is_code && <Chip>code</Chip>}<Chip>review {t.review_policy}</Chip>
             {t.goal_title && <span>· goal #{t.goal_id} {t.goal_title}</span>}
           </div>
