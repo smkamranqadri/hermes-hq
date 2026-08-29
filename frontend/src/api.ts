@@ -4,6 +4,7 @@ import type { Human } from './status'
 export class ApiError extends Error { constructor(public status: number, message: string) { super(message) } }
 let csrf = ''
 export const setCsrf = (t: string) => { csrf = t }
+export const getCsrf = () => csrf
 
 async function parse<T>(r: Response, url: string): Promise<T> {
   if (r.status === 401) { window.dispatchEvent(new Event('hq:unauthenticated')) }
@@ -102,3 +103,32 @@ export type AgentSession = { id: string; title: string | null; model: string | n
 export type AgentDetail = AgentSummary & { recent_runs: AgentRun[]; recent_sessions: AgentSession[] }
 export const useAgents = () => useQuery({ queryKey: ['agents'], queryFn: () => get<{ agents: AgentSummary[]; templates: AgentTemplate[] }>('/api/agents'), refetchInterval: 15000 })
 export const useAgent = (name: string) => useQuery({ queryKey: ['agent', name], queryFn: () => get<AgentDetail>(`/api/agent/${name}`), refetchInterval: 15000 })
+
+// ---- chat ---------------------------------------------------------------
+export type ChatMessage = { id: number; role: string; content: string | null; timestamp: number | null; tool_name: string | null; token_count: number | null; display_kind: string | null; active: number | null }
+export type SessionDetail = AgentSession & { usage: { model: string; input_tokens: number; output_tokens: number; estimated_cost_usd: number | null }[]; transcript: ChatMessage[] }
+export const useAgentSessions = (name: string | undefined) => useQuery({ queryKey: ['agent-sessions', name], queryFn: () => get<{ sessions: AgentSession[] }>(`/api/agent/${name}/sessions?limit=100`), enabled: !!name, refetchInterval: 20000 })
+export const useSessionDetail = (profile: string | undefined, id: string | undefined) => useQuery({ queryKey: ['session', profile, id], queryFn: () => get<SessionDetail>(`/api/session/${profile}/${id}`), enabled: !!profile && !!id, retry: false })
+
+export type SseEvent = { name: string; data: Record<string, unknown> }
+/** POST a chat message and stream the gateway's SSE events back. Resolves when the stream ends. */
+export async function streamChat(profile: string, sessionId: string, message: string, onEvent: (e: SseEvent) => void, signal?: AbortSignal): Promise<void> {
+  const r = await fetch(`/api/chat/${profile}/${sessionId}`, { method: 'POST', headers: { 'content-type': 'application/json', 'x-csrf': csrf }, body: JSON.stringify({ message }), signal })
+  if (!r.ok || !r.body) { let msg = `${r.status}`; try { msg = (await r.json()).detail ?? msg } catch {} throw new ApiError(r.status, msg) }
+  const reader = r.body.getReader(); const dec = new TextDecoder(); let buf = ''
+  for (;;) {
+    const { value, done } = await reader.read()
+    if (done) break
+    buf += dec.decode(value, { stream: true })
+    let i: number
+    while ((i = buf.indexOf('\n\n')) >= 0) {
+      const block = buf.slice(0, i); buf = buf.slice(i + 2)
+      let name = 'message', data: Record<string, unknown> = {}
+      for (const line of block.split('\n')) {
+        if (line.startsWith('event: ')) name = line.slice(7)
+        else if (line.startsWith('data: ')) { try { data = JSON.parse(line.slice(6)) } catch { data = { raw: line.slice(6) } } }
+      }
+      onEvent({ name, data })
+    }
+  }
+}

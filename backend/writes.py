@@ -243,6 +243,8 @@ def _chat(fn, *a, **kw):
     except ValueError as e:
         raise HTTPException(409, str(e))
     except chat.GatewayError as e:
+        import logging
+        logging.getLogger("backend.chat").warning("gateway error: %s", e)
         raise HTTPException(502, str(e))
 
 
