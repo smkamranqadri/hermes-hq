@@ -78,7 +78,7 @@ export function TaskDetail() {
                     <span className="ml-auto font-mono text-[10px] text-muted">{when(r.started_at)} → {r.finished_at ? ago(r.finished_at) : 'running'}</span>
                   </div>
                   <div className="mt-1.5 font-mono text-[11px]">
-                    {r.session_id ? <span className="inline-flex flex-wrap items-center gap-2"><span className="break-all text-accent-2">session {r.session_id}</span>{st === 'running' && r.status === 'running' ? <span className="text-muted" title="The agent is still working in this session; open it when the run ends.">open after run</span> : <Link to={`/chat/${r.agent_profile}/${r.session_id}`} className="rounded-full border border-line px-2 py-0.5 font-mono text-[10px] uppercase tracking-wider text-fg hover:bg-raised">Open session</Link>}</span> : <span className="text-muted">session not mapped yet</span>}
+                    {r.session_id ? <span className="inline-flex flex-wrap items-center gap-2"><span className="break-all text-accent-2">session {r.session_id}</span><Link to={`/chat/${r.agent_profile}/${r.session_id}`} className={`rounded-full border px-2 py-0.5 font-mono text-[10px] uppercase tracking-wider hover:bg-raised ${r.status === 'running' ? 'border-working/60 text-working' : 'border-line text-fg'}`}>{r.status === 'running' ? 'Watch session' : 'Open session'}</Link></span> : <span className="text-muted">session not mapped yet</span>}
                   </div>
                   {r.error && <p className="mt-1.5 whitespace-pre-wrap break-words text-error">{r.error}</p>}
                 </GlassCard>))}</div>
