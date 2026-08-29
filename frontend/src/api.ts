@@ -77,3 +77,14 @@ export function ago(ts?: number | null) {
   return `${Math.floor(s / 86400)}d ago`
 }
 export const when = (ts?: number | null) => ts ? new Date(ts * 1000).toLocaleString() : '—'
+
+export type ActivityEvent = { kind: 'activity' | 'transition'; id: number; ts: number; task_id: number | null; run_id: number | null; agent_profile: string | null; action: string; detail: string | null; project_slug: string | null; task_title: string | null }
+export type Overview = { stats: { needsyou: number; working: number; queued: number; backlog: number; done_today: number; open_reviews: number; paused: boolean; cap: number }; needsyou: Task[]; working: Task[]; queued: Task[]; activity: (ActivityEvent & { model?: string })[]; ts: number }
+export const useOverview = () => useQuery({ queryKey: ['overview'], queryFn: () => get<Overview>('/api/overview'), refetchInterval: 10000 })
+export const useActivity = (p: { project?: string; agent?: string; task_id?: number; before?: number; limit?: number }) => {
+  const qs = new URLSearchParams(); Object.entries(p).forEach(([k, v]) => { if (v !== undefined && v !== '' && v !== null) qs.set(k, String(v)) })
+  return useQuery({ queryKey: ['activity', p], queryFn: () => get<{ events: ActivityEvent[]; next_before: number | null }>(`/api/activity?${qs}`), refetchInterval: p.before ? false : 15000 })
+}
+export const useRunLog = (runId: number | null, offset: number, active: boolean) =>
+  useQuery({ queryKey: ['runlog', runId, offset], enabled: runId != null, refetchInterval: active ? 3000 : false,
+    queryFn: () => get<{ exists: boolean; offset: number; size: number; next: number; data: string; truncated: boolean }>(`/api/run/${runId}/log?offset=${offset}`) })

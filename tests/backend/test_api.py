@@ -76,3 +76,31 @@ def test_task_detail_deps_normalized(client):
     d = c.get("/api/task/%d" % t2).json()
     assert d["deps"] == [{"id": t1, "status": "planned", "title": "first"}]
     assert c.get("/api/task/%d" % t1).json()["dependents"][0]["id"] == t2
+
+
+def test_overview_and_activity(client):
+    c, store, db, t1, t2 = client
+    store.mark_ready(t1, db_path=db)
+    o = c.get("/api/overview").json()
+    assert o["stats"]["queued"] == 1 and o["stats"]["backlog"] == 1 and o["stats"]["needsyou"] == 0
+    assert [t["id"] for t in o["queued"]] == [t1] and o["needsyou"] == []
+    a = c.get("/api/activity").json()
+    kinds = {e["kind"] for e in a["events"]}
+    assert kinds == {"activity", "transition"} and a["events"][0]["ts"] >= a["events"][-1]["ts"]
+    only = c.get("/api/activity?task_id=%d" % t1).json()["events"]
+    assert only and all(e["task_id"] == t1 for e in only)
+    assert c.get("/api/activity?limit=1").json()["next_before"] is not None
+
+
+def test_run_log_tail(client, tmp_path):
+    c, store, db, t1, t2 = client
+    import os
+    os.makedirs(store.resolve_runs_dir(), exist_ok=True)
+    p = os.path.join(store.resolve_runs_dir(), "7.log")
+    open(p, "w").write("hello\nworld\n")
+    r = c.get("/api/run/7/log").json()
+    assert r["exists"] and r["data"] == "hello\nworld\n" and r["next"] == 12
+    open(p, "a").write("more\n")
+    r2 = c.get("/api/run/7/log?offset=%d" % r["next"]).json()
+    assert r2["data"] == "more\n"
+    assert c.get("/api/run/999/log").json()["exists"] is False
