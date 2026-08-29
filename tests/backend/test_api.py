@@ -9,6 +9,7 @@ import pytest
 def client(tmp_path, monkeypatch):
     home = tmp_path / "hq"
     monkeypatch.setenv("HERMES_HQ_HOME", str(home))
+    monkeypatch.setenv("HERMES_HQ_PASSWORD", "pw-test")
     for m in list(sys.modules):
         if m.startswith(("core", "backend")):
             del sys.modules[m]
@@ -26,6 +27,7 @@ def client(tmp_path, monkeypatch):
     from fastapi.testclient import TestClient
     from backend.app import create_app
     with TestClient(create_app(dispatcher_enabled=False)) as c:
+        c.headers["x-csrf"] = c.post("/api/login", json={"password": "pw-test"}).json()["csrf"]
         yield c, store, db, t1, t2
 
 

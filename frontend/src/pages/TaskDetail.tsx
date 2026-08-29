@@ -4,9 +4,11 @@ import { useTask, ago, when } from '../api'
 import { GlassCard } from '../components/GlassCard'
 import { StatusBadge } from '../components/StatusBadge'
 import { Empty, Loading, Chip, Crumbs, Label, Agent } from '../components/ui'
+import { Btn } from '../components/Modal'
 import { usePageTitle } from '../usePageTitle'
+import { useState } from 'react'
+import { ActionBtn, FeedbackModal } from '../components/forms'
 
-const ACTION_LABEL: Record<string, string> = { mark_ready: 'Mark ready', release_goal: 'Release goal', retry: 'Retry', unblock: 'Unblock' }
 
 function Block({ title, children }: { title: string; children: React.ReactNode }) {
   return <div><Label>{title}</Label><div className="mt-1 whitespace-pre-wrap break-words text-sm">{children}</div></div>
@@ -17,9 +19,14 @@ export function TaskDetail() {
   const q = useTask(id)
   const t = q.data
   usePageTitle(t ? `#${t.id} ${t.title}` : `Task #${id}`)
+  const [reply, setReply] = useState(false)
   if (q.isLoading) return <section className="mx-auto max-w-6xl p-6"><Loading /></section>
   if (q.isError || !t) return <section className="mx-auto max-w-6xl p-6"><Empty error title={`Could not load /api/task/${id}`} note={String(q.error ?? '404')} /></section>
   const latest = t.runs[0]
+  const st = t.status
+  const canFeedback = ['needs_review', 'rework', 'done', 'blocked', 'failed', 'stalled'].includes(st)
+  const canRetry = ['failed', 'stalled', 'blocked', 'rework', 'manual'].includes(st)
+  const canManual = !['done', 'manual', 'running'].includes(st)
   return (
     <section className="mx-auto max-w-6xl p-4 sm:p-6">
       <Crumbs items={[['Projects', '/projects'], [t.project_slug, `/projects/${t.project_slug}`], [`Task #${t.id}`]]} />
@@ -33,11 +40,17 @@ export function TaskDetail() {
           </div>
         </div>
         {t.human.reason && t.human.reason.includes(':') && <p className="basis-full text-sm text-needsyou">{t.human.reason.slice(t.human.reason.indexOf(':') + 1).trim()}</p>}
-        {t.human.action && (
-          <button disabled title="Write actions arrive in Group 1b" className="rounded-full border border-needsyou/50 bg-needsyou/10 px-4 py-1.5 font-mono text-[11px] uppercase text-needsyou opacity-60">
-            {ACTION_LABEL[t.human.action] ?? t.human.action} · soon
-          </button>
-        )}
+        <div className="flex basis-full flex-wrap gap-2">
+          {st === 'planned' && <ActionBtn url={`/api/task/${t.id}/mark-ready`} label="Mark ready" confirm={t.goal_id && t.goal_status !== 'released' ? 'This bypasses the goal release gate for this task. Continue?' : undefined} />}
+          {t.human.action === 'release_goal' && t.goal_id && <ActionBtn url={`/api/goal/${t.goal_id}/release`} label="Release goal" confirm={`Release goal #${t.goal_id}?`} />}
+          {st === 'blocked' && <Btn onClick={() => setReply(true)}>Reply → rework</Btn>}
+          {(st === 'failed' || st === 'stalled') && <ActionBtn url={`/api/task/${t.id}/retry`} label="Retry" confirm="Re-queue this task for a fresh run? Old runs are kept." />}
+          {st === 'blocked' && <ActionBtn url={`/api/task/${t.id}/retry`} label="Retry as-is" kind="ghost" confirm="Retry without new information? The agent may block again." />}
+          {canFeedback && st !== 'blocked' && <Btn kind="ghost" onClick={() => setReply(true)}>Feedback → rework</Btn>}
+          {canRetry && !['failed', 'stalled', 'blocked'].includes(st) && <ActionBtn url={`/api/task/${t.id}/retry`} label="Re-queue" kind="ghost" confirm="Re-queue this task?" />}
+          {canManual && <ActionBtn url={`/api/task/${t.id}/manual`} label="Take over" kind="warn" confirm="Take this task out of the queue (status manual)?" />}
+        </div>
+        {reply && <FeedbackModal taskId={t.id} onClose={() => setReply(false)} />}
       </div>
       <div className="grid gap-4 lg:grid-cols-3">
         <div className="flex flex-col gap-4 lg:col-span-2">

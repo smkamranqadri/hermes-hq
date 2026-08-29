@@ -4,21 +4,26 @@ import { useProjects, ago } from '../api'
 import { GlassCard, PageHeader } from '../components/GlassCard'
 import { Empty, Loading, Chip, Select, Agent } from '../components/ui'
 import { usePageTitle } from '../usePageTitle'
+import { NewProjectModal } from '../components/forms'
+import { Btn } from '../components/Modal'
 
 export function Projects() {
   usePageTitle('Projects')
   const [scope, setScope] = useState<'active' | 'all'>('active')
+  const [creating, setCreating] = useState(false)
   const q = useProjects(scope === 'all')
   const list = (q.data?.projects ?? []).filter(p => scope === 'all' || !p.archived)
   return (
     <section className="mx-auto max-w-6xl p-4 sm:p-6">
-      <PageHeader crumb="projects" title="Projects" right={
+      <PageHeader crumb="projects" title="Projects" right={<div className="flex items-center gap-2">
         <Select value={scope} onChange={e => setScope(e.target.value as 'active' | 'all')}>
           <option value="active">Active</option><option value="all">All incl. archived</option>
-        </Select>} />
+        </Select>
+        <Btn onClick={() => setCreating(true)}>+ Project</Btn></div>} />
+      {creating && <NewProjectModal onClose={() => setCreating(false)} />}
       {q.isLoading && <Loading />}
       {q.isError && <Empty error title="Could not load /api/projects" note={String(q.error)} />}
-      {q.data && list.length === 0 && <Empty title="No projects" note="Create one from the CLI for now: hermes-hq wm project create" />}
+      {q.data && list.length === 0 && <Empty title="No projects" note="Use + Project to create one." />}
       <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-3">
         {list.map(p => {
           const pct = p.tasks_total ? Math.round(100 * p.tasks_done / p.tasks_total) : 0

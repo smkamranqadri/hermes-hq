@@ -6,6 +6,8 @@ import { GlassCard } from '../components/GlassCard'
 import { TaskRow } from '../components/TaskRow'
 import { Empty, Loading, Chip, Crumbs, Label, Agent } from '../components/ui'
 import { usePageTitle } from '../usePageTitle'
+import { NewTaskModal, NewGoalModal, ActionBtn } from '../components/forms'
+import { Btn } from '../components/Modal'
 
 const TABS = ['tasks', 'goals', 'runs', 'activity'] as const
 const GOAL_TONE: Record<string, string> = { draft: 'text-muted', planning: 'text-needsyou', planned: 'text-queued', released: 'text-working' }
@@ -16,6 +18,7 @@ export function ProjectDetail() {
   const p = q.data
   usePageTitle(p?.name ?? slug)
   const [tab, setTab] = useState<(typeof TABS)[number]>('tasks')
+  const [modal, setModal] = useState<'task' | 'goal' | null>(null)
   if (q.isLoading) return <section className="mx-auto max-w-6xl p-6"><Loading /></section>
   if (q.isError || !p) return <section className="mx-auto max-w-6xl p-6"><Empty error title={`Could not load /api/project/${slug}`} note={String(q.error ?? '404')} /></section>
   const pct = p.tasks_total ? Math.round(100 * p.tasks_done / p.tasks_total) : 0
@@ -23,13 +26,17 @@ export function ProjectDetail() {
   return (
     <section className="mx-auto max-w-6xl p-4 sm:p-6">
       <Crumbs items={[['Projects', '/projects'], [p.name]]} />
+      {modal === 'task' && <NewTaskModal project={slug} onClose={() => setModal(null)} />}
+      {modal === 'goal' && <NewGoalModal project={slug} onClose={() => setModal(null)} />}
       <div className="mb-5 flex flex-wrap items-end justify-between gap-3">
         <div>
           <h1 className="text-xl font-semibold tracking-tight">{p.name} {!!p.archived && <Chip>archived</Chip>}</h1>
           <p className="mt-1 font-mono text-[11px] text-muted">{p.primary_path}</p>
           {p.description && <p className="mt-2 max-w-2xl text-sm text-muted">{p.description}</p>}
         </div>
-        <div className="flex gap-2">
+        <div className="flex flex-wrap items-center gap-2">
+          <Btn onClick={() => setModal('task')}>+ Task</Btn><Btn kind="ghost" onClick={() => setModal('goal')}>+ Goal</Btn>
+          <ActionBtn url={`/api/project/${slug}/archive?archived=${p.archived ? 0 : 1}`} label={p.archived ? 'Restore' : 'Archive'} kind="ghost" confirm={p.archived ? undefined : `Archive ${p.name}? Its tasks leave the global Tasks view.`} />
           {[['tasks', `${p.tasks_done}/${p.tasks_total}`], ['runs', String(p.runs.length)], ['goals', `${p.goals.filter(g => g.status === 'released').length}/${p.goals.length}`]].map(([k, v]) => (
             <GlassCard key={k} className="min-w-20 py-2 text-center"><p className="font-mono text-lg font-semibold">{v}</p><Label>{k}</Label></GlassCard>
           ))}
@@ -51,6 +58,11 @@ export function ProjectDetail() {
           <div className="flex items-start justify-between gap-2"><h3 className="text-sm font-semibold">#{g.id} {g.title}</h3><span className={clsx('font-mono text-[10px] uppercase', GOAL_TONE[g.status])}>{g.status}</span></div>
           {g.description && <p className="mt-1 text-xs text-muted">{g.description}</p>}
           <p className="mt-2 font-mono text-[10px] text-muted">{g.tasks_done}/{g.tasks_total} tasks done</p>
+          <div className="mt-3 flex flex-wrap gap-2">
+            {g.status === 'draft' && <ActionBtn url={`/api/goal/${g.id}/plan`} label="Plan" kind="ghost" confirm={`Ask the Orchestrator to plan goal #${g.id}? A planning task is created in the backlog; no agent starts automatically.`} />}
+            {g.status === 'planning' && <><ActionBtn url={`/api/goal/${g.id}/planned`} label="Mark planned" kind="ghost" /><ActionBtn url={`/api/goal/${g.id}/abandon`} label="Abandon" kind="warn" confirm={`Abandon planning for goal #${g.id} and return it to draft?`} /></>}
+            {g.status === 'planned' && <ActionBtn url={`/api/goal/${g.id}/release`} label="Release" confirm={`Release goal #${g.id}? Its tasks become eligible to run as their dependencies complete.`} />}
+          </div>
         </GlassCard>))}</div> : <Empty title="No goals" />)}
       {tab === 'runs' && (p.runs.length ? <div className="flex flex-col gap-2">{p.runs.map(r => (
         <Link key={r.id} to={`/tasks/${r.task_id}`} className="glass flex flex-wrap items-center gap-3 rounded-xl px-4 py-2 text-xs hover:bg-raised">

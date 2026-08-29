@@ -18,7 +18,7 @@ Acceptance
 
 Out of scope: writes, Overview, Agents, Chat, Files, cron/cutover, data cleanup.
 
-## 1b Write + cutover — ACTIVE (approved 2026-08-29)
+## 1b Write + cutover — phases 1–2 DONE 2026-08-29; phase 3 (cutover) PENDING owner
 Decisions: password auth ships before any write is exposed; "unblock" for `blocked` = Reply→rework (owner feedback threaded into the next brief), Retry/Take-over secondary; failed/stalled → Retry primary; cutover only at a quiet moment with the owner present.
 
 Phases

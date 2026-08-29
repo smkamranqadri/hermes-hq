@@ -2102,7 +2102,11 @@ OWNER_FEEDBACK_MARKER = "owner feedback: "
 # has not produced anything yet (planned/waiting_approval/ready/running/...) has
 # nothing to give feedback ON — sending it to `rework` would either kill a live
 # run's bookkeeping or fabricate a rework state for work that never happened.
-OWNER_FEEDBACK_SOURCE_STATUSES = ("needs_review", "rework", "done")
+# hermes-hq (2026-08-29): a task that stopped to ask the owner something
+# (blocked) or died (failed/stalled) is exactly where owner words are most
+# useful — feedback re-queues it as rework with the answer in the next brief.
+OWNER_FEEDBACK_SOURCE_STATUSES = ("needs_review", "rework", "done",
+                                  "blocked", "failed", "stalled")
 
 
 def owner_feedback(task_id, comment, db_path=None):
