@@ -19,7 +19,8 @@ None.
 ## How to run
 See `README.md`. Dev: `.venv/bin/hermes-hq serve --no-dispatcher` + `cd web && npm run dev` (proxies /api to :9010). Legacy WM dashboard still live on :9009 and untouched.
 
-## Proof (latest: Group 0)
+## Proof (latest: Group 0 + navbar/font feedback)
+- Screenshots 1440px violet `/tasks` (old-WM navbar anatomy), nous `/system?font=fraunces` (serif applied everywhere), 390px mobile (3-row stack). Appearance menu reachable via ◐ pill.
 - Screenshots at 1280px of `/system?theme=<id>` for violet, violet-light, nous, bronze, slate, hermes: glass top bar with border, orbs + dot grid, glass cards, Inter/JetBrains Mono, 5-state badges; mobile 390px shows brand row + scrollable tab row.
 - Bug found+fixed during proof: 250ms theme transition made light theme screenshot dark → transition removed.
 - Foundation proof (engine tests, /api/health, dispatcher alive) recorded in commit 6620b75 message history; still valid.
