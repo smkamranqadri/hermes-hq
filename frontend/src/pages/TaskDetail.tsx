@@ -32,7 +32,7 @@ export function TaskDetail() {
       <Crumbs items={[['Projects', '/projects'], [t.project_slug, `/projects/${t.project_slug}`], [`Task #${t.id}`]]} />
       <div className="mb-5 flex flex-wrap items-start justify-between gap-3">
         <div className="min-w-0">
-          <h1 className="text-xl font-semibold tracking-tight">{t.title}</h1>
+          <h1 className="break-words text-lg font-semibold tracking-tight sm:text-xl">{t.title}</h1>
           <div className="mt-2 flex flex-wrap items-center gap-2 text-xs text-muted">
             <StatusBadge human={{ state: t.human.state, reason: t.human.reason?.split(':')[0] }} /><span className="font-mono">engine: {t.status}</span>
             <Agent name={t.assignee_profile} />{!!t.is_code && <Chip>code</Chip>}<Chip>review {t.review_policy}</Chip>
@@ -52,9 +52,9 @@ export function TaskDetail() {
         </div>
         {reply && <FeedbackModal taskId={t.id} onClose={() => setReply(false)} />}
       </div>
-      <div className="grid gap-4 lg:grid-cols-3">
-        <div className="flex flex-col gap-4 lg:col-span-2">
-          <GlassCard className="flex flex-col gap-4">
+      <div className="grid min-w-0 gap-4 lg:grid-cols-3">
+        <div className="flex min-w-0 flex-col gap-4 lg:col-span-2">
+          <GlassCard className="flex min-w-0 flex-col gap-4 overflow-hidden">
             {t.description && <Block title="Description">{t.description}</Block>}
             {t.definition_of_done && <Block title="Definition of done">{t.definition_of_done}</Block>}
             {t.summary && <Block title="Summary">{t.summary}</Block>}
@@ -73,14 +73,14 @@ export function TaskDetail() {
                     <span className="ml-auto font-mono text-[10px] text-muted">{when(r.started_at)} → {r.finished_at ? ago(r.finished_at) : 'running'}</span>
                   </div>
                   <div className="mt-1.5 font-mono text-[11px]">
-                    {r.session_id ? <span className="text-accent-2">session {r.session_id}</span> : <span className="text-muted">session not mapped yet</span>}
+                    {r.session_id ? <span className="break-all text-accent-2">session {r.session_id}</span> : <span className="text-muted">session not mapped yet</span>}
                   </div>
-                  {r.error && <p className="mt-1.5 whitespace-pre-wrap text-error">{r.error}</p>}
+                  {r.error && <p className="mt-1.5 whitespace-pre-wrap break-words text-error">{r.error}</p>}
                 </GlassCard>))}</div>
             )}
           </div>
         </div>
-        <div className="flex flex-col gap-4">
+        <div className="flex min-w-0 flex-col gap-4">
           {(t.deps.length > 0 || t.dependents.length > 0) && (
             <GlassCard className="text-xs">
               {t.deps.length > 0 && <><Label>Waits on</Label><ul className="mb-3 mt-1">{t.deps.map(d => <li key={d.id}><Link to={`/tasks/${d.id}`} className="hover:text-accent-2">#{d.id} {d.title}</Link> <span className="font-mono text-muted">{d.status}</span></li>)}</ul></>}

@@ -13,11 +13,11 @@ After 1b: Group 2 Overview (Needs-you first) + Reviews-in-Tasks + Activity feed.
 None.
 
 ## Known debt
+- Mobile polish pass done 2026-08-29 (2-row top bar, compact sysbar, overflow fixes); re-check each new page at 390px.
 - Writes made in snapshot mode (task #101 smoke, #96 reply) are throwaway — the cutover re-imports with `--force`.
 - Cookie session over plain HTTP; HTTPS via reverse proxy is a later item.
 - `readers.py` is a straight port (1100 lines) incl. agents/sessions/files/overview readers not yet exposed; prune or expose as Groups 2–5 need them.
 - `tests/core/test_t2/t5/t7.py` fail identically in the source repo (goal lifecycle draft→planned changed after they were written). Not caused by the move; fix when touching goal release.
-- Mobile top bar stacks into 3 rows (brand / sysbar / tabs); acceptable for now, revisit with Overview.
 
 ## How to run
 See `README.md`. Dev: `.venv/bin/hermes-hq serve --no-dispatcher` + `cd frontend && npm run dev` (proxies /api to :9010). Legacy WM dashboard still live on :9009 and untouched. Owner drops reference images in `screenshots/` (git-ignored).

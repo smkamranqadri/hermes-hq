@@ -67,7 +67,7 @@ function System() {
 function SnapshotBanner() {
   const sys = useQuery({ queryKey: ['system'], queryFn: () => fetch('/api/system').then(r => r.json()) })
   if (!sys.data?.imported_from || sys.data?.dispatcher?.enabled) return null
-  return <div className="border-b border-needsyou/30 bg-needsyou/10 px-4 py-1 text-center font-mono text-[10px] uppercase tracking-widest text-needsyou">Snapshot mode · imported from {sys.data.imported_from} · dispatcher off · writes here are not seen by the old Work Manager</div>
+  return <div className="truncate border-b border-needsyou/30 bg-needsyou/10 px-4 py-1 text-center font-mono text-[9px] uppercase tracking-widest text-needsyou sm:text-[10px]" title={`Imported from ${sys.data.imported_from}; dispatcher off; writes here are not seen by the old Work Manager`}>Snapshot mode · dispatcher off · <span className="hidden sm:inline">imported from {sys.data.imported_from} · </span>writes are throwaway until cutover</div>
 }
 
 export default function App() {

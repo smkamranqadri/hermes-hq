@@ -44,8 +44,8 @@ export function Tasks() {
           <option value="">All states</option>
           {(d?.stateOptions ?? ORDER).map(s => <option key={s} value={s}>{HUMAN_LABEL[s as HumanState] ?? s}</option>)}
         </Select>
-        <form onSubmit={e => { e.preventDefault(); set('q', draft) }} className="flex gap-1">
-          <Input value={draft} onChange={e => setDraft(e.target.value)} placeholder="Search title, id, agent, project…" className="w-56" />
+        <form onSubmit={e => { e.preventDefault(); set('q', draft) }} className="flex w-full gap-1 sm:w-auto">
+          <Input value={draft} onChange={e => setDraft(e.target.value)} placeholder="Search title, id, agent…" className="w-full sm:w-56" />
         </form>
         {d && <span className="ml-auto font-mono text-[10px] text-muted">{d.total} task{d.total === 1 ? '' : 's'}</span>}
       </div>
