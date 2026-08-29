@@ -4,10 +4,11 @@
 Foundation scaffold + Group 0 shell DONE 2026-08-29; HEAD `22bd58a` on `main`, working tree clean. Server running on :9010 (`--no-dispatcher`, log `/opt/data/hermes-hq-serve.log`).
 
 ## Now
-Idle — awaiting go for Group 1.
+Task: **Group 1a Read** (plan approved 2026-08-29, `kis/intent/Group1Plan.md`). Not started.
+Verification: pytest (status/importer/api) on imported snapshot, curl :9010, headless screenshots 1440+390.
 
 ## Next
-**Group 1 read views**: `/api/projects`, `/api/tasks`, `/api/task/{id}` over `wm_store` readers (port the reader logic from `../hermes-work-manager/wm-tool/wm_dash/reader.py`, not the HTTP layer), Projects list + Tasks list pages using `StatusBadge`. Then the `wm.db` importer.
+Group 1b Write, then cutover from old WM (see plan).
 
 ## Blocker
 None.
