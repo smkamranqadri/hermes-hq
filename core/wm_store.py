@@ -2215,18 +2215,29 @@ def latest_owner_feedback(task_id, db_path=None):
     """
     conn = _connect(db_path)
     try:
-        # Only surface owner feedback while the task is CURRENTLY in rework;
-        # once it has run again (left rework without a fresh owner transition)
-        # the feedback was addressed and must not be re-injected.
+        # Only surface owner feedback while the task is CURRENTLY in rework —
+        # or was just claimed straight out of it: the dispatcher claims the task
+        # (rework -> running) BEFORE it renders the brief, so at render time the
+        # status is already 'running'. Once the task has moved on through any
+        # other transition, the feedback was addressed and is not re-injected.
         cur = get_task(task_id, db_path=db_path)
-        if cur is None or cur["status"] != "rework":
+        if cur is None:
             return None
-        row = conn.execute(
-            "SELECT detail FROM state_transitions WHERE task_id=? AND "
-            "to_status='rework' ORDER BY id DESC LIMIT 1", (task_id,)).fetchone()
+        rows = conn.execute(
+            "SELECT to_status, detail FROM state_transitions WHERE task_id=? "
+            "ORDER BY id DESC LIMIT 2", (task_id,)).fetchall()
     finally:
         conn.close()
-    detail = (row["detail"] or "") if row is not None else ""
+    if not rows:
+        return None
+    if cur["status"] == "rework" and rows[0]["to_status"] == "rework":
+        row = rows[0]
+    elif (cur["status"] == "running" and rows[0]["to_status"] == "running"
+          and len(rows) > 1 and rows[1]["to_status"] == "rework"):
+        row = rows[1]
+    else:
+        return None
+    detail = row["detail"] or ""
     if not detail.startswith(OWNER_FEEDBACK_MARKER):
         return None
     return detail[len(OWNER_FEEDBACK_MARKER):].strip() or None
