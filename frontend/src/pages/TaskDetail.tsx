@@ -50,7 +50,8 @@ export function TaskDetail() {
           {st === 'blocked' && <Btn onClick={() => setReply(true)}>Reply → rework</Btn>}
           {(st === 'failed' || st === 'stalled') && <ActionBtn url={`/api/task/${t.id}/retry`} label="Retry" confirm="Re-queue this task for a fresh run? Old runs are kept." />}
           {st === 'blocked' && <ActionBtn url={`/api/task/${t.id}/retry`} label="Retry as-is" kind="ghost" confirm="Retry without new information? The agent may block again." />}
-          {canFeedback && st !== 'blocked' && <Btn kind="ghost" onClick={() => setReply(true)}>Feedback → rework</Btn>}
+          {st === 'rework' && <span className="inline-flex items-center gap-1.5 rounded-full border border-queued/50 px-2.5 py-0.5 font-mono text-[10px] uppercase tracking-wider text-queued"><span className="hq-dot-live size-1.5 rounded-full bg-current" />feedback sent · waiting for the agent</span>}
+          {canFeedback && st !== 'blocked' && <Btn kind="ghost" onClick={() => setReply(true)}>{st === 'rework' ? 'Add feedback' : 'Feedback → rework'}</Btn>}
           {canRetry && !['failed', 'stalled', 'blocked'].includes(st) && <ActionBtn url={`/api/task/${t.id}/retry`} label="Re-queue" kind="ghost" confirm="Re-queue this task?" />}
           {canManual && <ActionBtn url={`/api/task/${t.id}/manual`} label="Take over" kind="warn" confirm="Take this task out of the queue (status manual)?" />}
         </div>
