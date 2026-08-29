@@ -88,3 +88,17 @@ export const useActivity = (p: { project?: string; agent?: string; task_id?: num
 export const useRunLog = (runId: number | null, offset: number, active: boolean) =>
   useQuery({ queryKey: ['runlog', runId, offset], enabled: runId != null, refetchInterval: active ? 3000 : false,
     queryFn: () => get<{ exists: boolean; offset: number; size: number; next: number; data: string; truncated: boolean }>(`/api/run/${runId}/log?offset=${offset}`) })
+
+// ---- agents -------------------------------------------------------------
+export type Gateway = { configured: boolean; port: number | null; enabled: boolean; running: boolean; last_used: string | null }
+export type AgentSummary = {
+  name: string; role?: string; installed: boolean; home: string; description: string; has_template: boolean; gateway: Gateway
+  overlay_applied?: boolean; runs: number; runs_running: number; runs_done: number; runs_failed: number; last_run_at: number | null
+  tasks_assigned: number; sessions: number; last_active_at: number | null; estimated_cost_usd: number | null; active_now?: boolean
+}
+export type AgentTemplate = { name: string; description: string; overlay: boolean; skills: string[]; installed: boolean }
+export type AgentRun = { id: number; task_id: number | null; status: string; started_at: number; finished_at: number | null; error: string | null; session_id: string | null; task_title: string | null }
+export type AgentSession = { id: string; title: string | null; model: string | null; started_at: number | null; last_activity_at: number | null; message_count: number | null; estimated_cost_usd: number | null; source: string | null }
+export type AgentDetail = AgentSummary & { recent_runs: AgentRun[]; recent_sessions: AgentSession[] }
+export const useAgents = () => useQuery({ queryKey: ['agents'], queryFn: () => get<{ agents: AgentSummary[]; templates: AgentTemplate[] }>('/api/agents'), refetchInterval: 15000 })
+export const useAgent = (name: string) => useQuery({ queryKey: ['agent', name], queryFn: () => get<AgentDetail>(`/api/agent/${name}`), refetchInterval: 15000 })
