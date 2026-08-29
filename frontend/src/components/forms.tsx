@@ -18,7 +18,7 @@ export function NewProjectModal({ onClose }: { onClose: () => void }) {
         <Field label="Slug" hint="lowercase, dashes; becomes the folder name"><TextInput required pattern="[a-z0-9][a-z0-9-]*" value={f.slug} onChange={e => setF({ ...f, slug: e.target.value })} /></Field>
         <Field label="Description"><TextArea value={f.description} onChange={e => setF({ ...f, description: e.target.value })} /></Field>
         <Field label="Path" hint="leave empty to create <projects root>/<slug>"><TextInput value={f.primary_path} onChange={e => setF({ ...f, primary_path: e.target.value })} placeholder="/opt/data/projects/…" /></Field>
-        <div className="mt-2 flex justify-end gap-2"><Btn kind="ghost" type="button" onClick={onClose}>Cancel</Btn><Btn type="submit" disabled={m.isPending}>Create</Btn></div>
+        <div className="mt-2 flex justify-end gap-2"><Btn kind="ghost" type="button" onClick={onClose}>Cancel</Btn><Btn type="submit" busy={m.isPending}>Create</Btn></div>
       </form>
     </Modal>
   )
@@ -51,7 +51,7 @@ export function NewTaskModal({ project, onClose }: { project?: string; onClose: 
           <Field label="Depends on" hint="task ids, e.g. 81, 83"><TextInput value={f.deps} onChange={e => setF({ ...f, deps: e.target.value })} list="hq-tasks" /><datalist id="hq-tasks">{(candidates.data?.tasks ?? []).map(t => <option key={t.id} value={t.id}>{t.title}</option>)}</datalist></Field>
         </div>
         <label className="flex items-center gap-2 text-sm"><input type="checkbox" checked={f.is_code} onChange={e => setF({ ...f, is_code: e.target.checked })} /> Code task (runs in an isolated git worktree)</label>
-        <div className="mt-2 flex justify-end gap-2"><Btn kind="ghost" type="button" onClick={onClose}>Cancel</Btn><Btn type="submit" disabled={m.isPending}>Create</Btn></div>
+        <div className="mt-2 flex justify-end gap-2"><Btn kind="ghost" type="button" onClick={onClose}>Cancel</Btn><Btn type="submit" busy={m.isPending}>Create</Btn></div>
       </form>
     </Modal>
   )
@@ -67,7 +67,7 @@ export function NewGoalModal({ project, onClose }: { project: string; onClose: (
         <Field label="Title"><TextInput required autoFocus value={f.title} onChange={e => setF({ ...f, title: e.target.value })} /></Field>
         <Field label="Description"><TextArea value={f.description} onChange={e => setF({ ...f, description: e.target.value })} /></Field>
         <Field label="Acceptance criteria"><TextArea rows={2} value={f.acceptance_criteria} onChange={e => setF({ ...f, acceptance_criteria: e.target.value })} /></Field>
-        <div className="mt-2 flex justify-end gap-2"><Btn kind="ghost" type="button" onClick={onClose}>Cancel</Btn><Btn type="submit" disabled={m.isPending}>Create</Btn></div>
+        <div className="mt-2 flex justify-end gap-2"><Btn kind="ghost" type="button" onClick={onClose}>Cancel</Btn><Btn type="submit" busy={m.isPending}>Create</Btn></div>
       </form>
     </Modal>
   )
@@ -82,7 +82,7 @@ export function FeedbackModal({ taskId, onClose }: { taskId: number; onClose: ()
       <p className="mb-3 text-xs text-muted">Your comment is threaded into the next run's brief as OWNER FEEDBACK; the task becomes rework and is re-queued.</p>
       <form className="flex flex-col gap-3" onSubmit={e => { e.preventDefault(); m.mutate({ comment }, { onError: x => toast(errText(x), 'err') }) }}>
         <TextArea autoFocus rows={5} required value={comment} onChange={e => setComment(e.target.value)} placeholder="Answer the agent's question, or say what to change…" />
-        <div className="flex justify-end gap-2"><Btn kind="ghost" type="button" onClick={onClose}>Cancel</Btn><Btn type="submit" disabled={m.isPending || !comment.trim()}>Send & rework</Btn></div>
+        <div className="flex justify-end gap-2"><Btn kind="ghost" type="button" onClick={onClose}>Cancel</Btn><Btn type="submit" busy={m.isPending} disabled={!comment.trim()}>Send & rework</Btn></div>
       </form>
     </Modal>
   )
@@ -92,5 +92,5 @@ export function FeedbackModal({ taskId, onClose }: { taskId: number; onClose: ()
 export function ActionBtn({ url, label, confirm, kind = 'primary', onDone }: { url: string; label: string; confirm?: string; kind?: 'primary' | 'ghost' | 'warn'; onDone?: (d: unknown) => void }) {
   const toast = useToast()
   const m = useWrite(url, { onSuccess: (d) => { toast(`${label}: done`); onDone?.(d) } })
-  return <Btn kind={kind} disabled={m.isPending} onClick={() => { if (!confirm || window.confirm(confirm)) m.mutate(undefined, { onError: x => toast(errText(x), 'err') }) }}>{label}</Btn>
+  return <Btn kind={kind} busy={m.isPending} onClick={() => { if (!confirm || window.confirm(confirm)) m.mutate(undefined, { onError: x => toast(errText(x), 'err') }) }}>{label}</Btn>
 }

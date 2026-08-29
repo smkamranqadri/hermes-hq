@@ -20,7 +20,7 @@ export function TaskDetail() {
   const t = q.data
   usePageTitle(t ? `#${t.id} ${t.title}` : `Task #${id}`)
   const [reply, setReply] = useState(false)
-  if (q.isLoading) return <section className="mx-auto max-w-6xl p-6"><Loading /></section>
+  if (q.isLoading) return <section className="mx-auto max-w-6xl p-4 sm:p-6"><Loading rows={1} /><div className="mt-4 grid gap-4 lg:grid-cols-3"><div className="lg:col-span-2"><Loading rows={3} /></div><Loading rows={2} /></div></section>
   if (q.isError || !t) return <section className="mx-auto max-w-6xl p-6"><Empty error title={`Could not load /api/task/${id}`} note={String(q.error ?? '404')} /></section>
   const latest = t.runs[0]
   const st = t.status

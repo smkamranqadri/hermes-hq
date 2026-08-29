@@ -1,7 +1,7 @@
 """Read API for Group 1a. Every handler is read-only over hq.db."""
 from fastapi import APIRouter, HTTPException, Query
 
-from backend import readers, tasks as tq
+from backend import readers, sysinfo, tasks as tq
 from core import wm_store
 
 router = APIRouter(prefix="/api")
@@ -46,3 +46,8 @@ def task(task_id: int):
     if t is None:
         raise HTTPException(404, "no such task")
     return t
+
+
+@router.get("/system/stats")
+def system_stats():
+    return sysinfo.collect()

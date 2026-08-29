@@ -21,7 +21,7 @@ export function Projects() {
         </Select>
         <Btn onClick={() => setCreating(true)}>+ Project</Btn></div>} />
       {creating && <NewProjectModal onClose={() => setCreating(false)} />}
-      {q.isLoading && <Loading />}
+      {q.isLoading && <Loading rows={3} card />}
       {q.isError && <Empty error title="Could not load /api/projects" note={String(q.error)} />}
       {q.data && list.length === 0 && <Empty title="No projects" note="Use + Project to create one." />}
       <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-3">
