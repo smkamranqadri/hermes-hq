@@ -1,0 +1,7 @@
+.venv/
+__pycache__/
+*.pyc
+node_modules/
+web/dist/
+hermes_hq/static/
+.env
