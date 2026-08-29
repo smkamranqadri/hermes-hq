@@ -1,4 +1,4 @@
-# Group 3 — Agents + Chat (approved 2026-08-29)
+# Group 3 — Agents + Chat (approved 2026-08-29) — COMPLETE 2026-08-29
 
 Decisions: chat via the Hermes gateway HTTP API with SSE streaming (like hermes-workspace); one gateway per profile, **managed lazily by hermes-hq** (ports 8650+, keys generated into the profile `.env` only when chat is enabled, idle-stop 15 min); templates extracted from the six live profiles into `agents/` and installed through `hermes profile create`; "Stop run" ships first.
 
@@ -9,13 +9,13 @@ Decisions: chat via the Hermes gateway HTTP API with SSE streaming (like hermes-
 - [x] DONE 2026-08-29 — `backend/gateways.py` — **revised 2026-08-29 (pre-flight + owner rule: never assume docker/s6):** supervisor-agnostic. hermes-hq ensures `API_SERVER_PORT`/`API_SERVER_KEY` in the profile `.env` (lines marked `# hermes-hq`; ports analyst 8650 … reviewer 8655), asks the platform first (`hermes --profile X gateway start|stop` — s6 here, systemd/launchd elsewhere) and, when no service exists, runs `hermes --profile X gateway run` as a detached child it owns (pid in wm_meta, killed on stop/exit); checks health with `GET /v1/models` + bearer key, idle-stops (15 min since last chat use) from a small sweeper thread, and on serve exit stops the specialist gateways it started. Default profile = `:8642` + key from `$HERMES_HOME/.env` (key generated only if absent); stopped only if hermes-hq spawned it. `POST /api/agent/{name}/gateway {enabled}`; `GET /api/agents` shows `gateway.running`.
 - [x] DONE 2026-08-29 — UI: `/agents` cards (description, run stats, gateway dot, orchestrator soul chip) + `+ Agent` modal (templates, Install / installed) + `Apply Orchestrator soul to default` (shown until applied); `/agents/:name` detail (Enable/Disable chat, last 50 runs → task links, last 50 sessions, home path). `ActionBtn` gained `body`.
 
-## 3b — Chat — ACTIVE (approved 2026-08-29, Phase mode)
+## 3b — Chat — DONE 2026-08-29 (approved 2026-08-29, Phase mode)
 Decisions: use the gateway **session API** (not /v1/chat/completions): structured SSE with text deltas and tool events; transcripts read from the profile `state.db` (works with the gateway off, sees dispatched-run sessions); gateway auto-starts on first message only when chat is enabled for the agent (else inline "Enable chat"); orchestrator chat via the default gateway `:8642` + root key; project chat deferred to Group 4.
 
 Sub-slices (each with proof):
 1. [x] DONE 2026-08-29 **Proxy** — `backend/chat.py`: `GET /api/agent/{name}/sessions` (state.db RO), `GET /api/session/{profile}/{id}` (transcript + usage via `readers.session_detail`), `POST /api/chat/{profile}/sessions {title?}` → `gateways.ensure_running` + gateway `POST /api/sessions` → `{id}`, `POST /api/chat/{profile}/{session_id} {message}` → proxy `POST /api/sessions/{id}/chat/stream`, forward SSE bytes unbuffered with the gateway's own event names, `gateways.touch()` per event; 409 (engine message) when chat disabled, 502 on gateway error; `POST /api/chat/{profile}/{session_id}/stop/{run_id}` → gateway `/v1/runs/{run_id}/stop` (run id from the stream's `run.started`). Keys never leave the server. pytest with a fake gateway (sessions + SSE).
 2. [x] DONE 2026-08-29 **Chat page** — `/chat` and `/chat/:profile/:id`: agent picker (installed + gateway dot), session list, transcript (user/assistant/tool rows, tool events collapsed), composer, streaming render, Stop, inline "Enable chat" when disabled; refetch transcript from state.db after the turn. Playwright 1440/390 with a streaming screenshot.
-3. [ ] **Task → session** — Task detail "Open session" → `/chat/<assignee>/<run session id>` (disabled while the task is running). Proof: continue a done task's session for real.
+3. [x] DONE 2026-08-29 **Task → session** — Task detail "Open session" → `/chat/<assignee>/<run session id>` (disabled while the task is running). Proof: continue a done task's session for real.
 
 Out of scope: project chat (Group 4), model picker, fork/rename/delete sessions, images, voice.
 Risks: sending into a CLI-created session (verify with the first real message; fallback `POST /api/sessions {"id": same}` upsert); long turns vs the 15-min idle sweeper (touch per event); SSE buffering through the Vite dev proxy (verify on :9010).

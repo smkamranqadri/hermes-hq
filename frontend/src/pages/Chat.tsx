@@ -55,6 +55,7 @@ export function Chat() {
       if (!sid) { const s = await post<{ id: string }>(`/api/chat/${profile}/sessions`, { title: draft.trim().slice(0, 60) }); sid = s.id; nav(`/chat/${profile}/${sid}`, { replace: true }) }
     } catch (e) { toast(e instanceof ApiError ? e.message : String(e), 'err'); return }
     const msg = draft.trim(); setDraft(''); setPendingUser(msg); setLive(emptyLive())
+    let failed = false
     abort.current = new AbortController()
     const onEvent = (e: SseEvent) => setLive(l => {
       if (!l) return l
@@ -74,9 +75,10 @@ export function Chat() {
       }
     })
     try { await streamChat(profile, sid!, msg, onEvent, abort.current.signal) }
-    catch (e) { if (!(e instanceof DOMException && e.name === 'AbortError')) toast(e instanceof ApiError ? e.message : String(e), 'err') }
+    catch (e) { if (!(e instanceof DOMException && e.name === 'AbortError')) { failed = true; toast(e instanceof ApiError ? e.message : String(e), 'err') } }
     finally {
       abort.current = null; setLive(null); setPendingUser(null)
+      if (failed) setDraft(msg)
       qc.invalidateQueries({ queryKey: ['session', profile, sid] }); qc.invalidateQueries({ queryKey: ['agent-sessions', profile] }); qc.invalidateQueries({ queryKey: ['agents'] })
     }
   }
@@ -86,7 +88,8 @@ export function Chat() {
     abort.current?.abort()
   }
 
-  const chatDisabled = agent && agent.name !== 'orchestrator' && !agent.gateway.enabled
+  const agentKnown = !!agent
+  const chatDisabled = agentKnown && agent.name !== 'orchestrator' && !agent.gateway.enabled
   return (
     <section className="mx-auto flex max-w-6xl flex-col p-4 sm:p-6">
       <PageHeader crumb="chat" title="Chat" right={<div className="flex flex-wrap items-center gap-2">
@@ -136,9 +139,9 @@ export function Chat() {
                 <div className="flex flex-wrap items-center justify-between gap-2 text-xs text-muted"><span>Chat is off for <span className="font-mono text-accent-2">{profile}</span> — its gateway is not enabled.</span><ActionBtn url={`/api/agent/${profile}/gateway`} label="Enable chat" body={{ enabled: true }} confirm={`Start the ${profile} gateway? Its .env gets API_SERVER_PORT/KEY if missing.`} /></div>
               ) : (
                 <div className="flex items-end gap-2">
-                  <TextArea rows={2} value={draft} placeholder={`Message ${profile}… (Enter to send, Shift+Enter for newline)`} onChange={e => setDraft(e.target.value)} disabled={busy}
+                  <TextArea rows={2} value={draft} placeholder={agentKnown ? `Message ${profile}… (Enter to send, Shift+Enter for newline)` : 'Loading agent…'} onChange={e => setDraft(e.target.value)} disabled={busy || !agentKnown}
                     onKeyDown={e => { if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); void send() } }} />
-                  {busy ? <Btn kind="warn" onClick={() => void stop()}>Stop</Btn> : <Btn onClick={() => void send()} disabled={!draft.trim()}>Send</Btn>}
+                  {busy ? <Btn kind="warn" onClick={() => void stop()}>Stop</Btn> : <Btn onClick={() => void send()} disabled={!draft.trim() || !agentKnown}>Send</Btn>}
                 </div>
               )}
             </div>
