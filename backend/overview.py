@@ -20,7 +20,7 @@ def overview(db_path):
         done_today = con.execute("SELECT COUNT(*) FROM state_transitions WHERE to_status='done' AND ts>=?", (day_ago,)).fetchone()[0]
         activity = _fetchall(con, "SELECT a.*, p.slug AS project_slug, t.title AS task_title FROM activity a "
                              "LEFT JOIN projects p ON p.id=a.project_id LEFT JOIN tasks t ON t.id=a.task_id "
-                             "ORDER BY a.id DESC LIMIT 25")
+                             "ORDER BY a.id DESC LIMIT 10")
         meta = {r["key"]: r["value"] for r in con.execute("SELECT key, value FROM wm_meta")}
     finally:
         con.close()
