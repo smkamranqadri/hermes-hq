@@ -100,7 +100,9 @@ export type AgentSummary = {
 export type AgentTemplate = { name: string; description: string; overlay: boolean; skills: string[]; installed: boolean }
 export type AgentRun = { id: number; task_id: number | null; status: string; started_at: number; finished_at: number | null; error: string | null; session_id: string | null; task_title: string | null }
 export type AgentSession = { id: string; title: string | null; model: string | null; started_at: number | null; last_activity_at: number | null; message_count: number | null; estimated_cost_usd: number | null; source: string | null }
-export type AgentDetail = AgentSummary & { recent_runs: AgentRun[]; recent_sessions: AgentSession[] }
+export type AgentRunBrief = { id: number; task_id: number | null; task_title: string | null; status: string; started_at: number; finished_at: number | null; error: string | null; review_id: number | null }
+export type AgentHistoryItem = { session: AgentSession | null; run: AgentRunBrief | null; ts: number; kind: 'run' | 'chat' | 'cli' }
+export type AgentDetail = AgentSummary & { history: AgentHistoryItem[] }
 export const useAgents = () => useQuery({ queryKey: ['agents'], queryFn: () => get<{ agents: AgentSummary[]; templates: AgentTemplate[] }>('/api/agents'), refetchInterval: 15000 })
 export const useAgent = (name: string) => useQuery({ queryKey: ['agent', name], queryFn: () => get<AgentDetail>(`/api/agent/${name}`), refetchInterval: 15000 })
 

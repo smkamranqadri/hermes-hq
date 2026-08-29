@@ -36,35 +36,32 @@ export function AgentDetail() {
           {isDefault && !a.overlay_applied && <ActionBtn url="/api/agents/install" label="Apply Orchestrator soul" kind="ghost" body={{ template: 'orchestrator' }} confirm="Overwrite the default profile's SOUL.md with the HQ Orchestrator soul? The current file is backed up next to it." />}
         </div>
       </div>
-      <div className="grid min-w-0 gap-4 lg:grid-cols-2">
-        <GlassCard className="min-w-0 overflow-hidden">
-          <Label>Runs · {a.runs} total · {a.runs_done} done · {a.runs_failed} failed</Label>
-          {a.recent_runs.length === 0 && <p className="mt-2 text-xs text-muted">No runs yet.</p>}
-          <ul className="mt-2 divide-y divide-line">
-            {a.recent_runs.map(r => (
-              <li key={r.id} className="flex min-w-0 items-center gap-3 py-2 text-xs">
-                <span className="w-12 shrink-0 font-mono text-muted">#{r.id}</span>
-                <StatusBadge status={r.status} compact />
-                <span className="min-w-0 flex-1 truncate">{r.task_id ? <Link to={`/tasks/${r.task_id}`} className="hover:underline">#{r.task_id} {r.task_title}</Link> : '—'}</span>
-                <span className="shrink-0 text-muted">{ago(r.started_at)}</span>
+      <GlassCard className="min-w-0 overflow-hidden">
+        <div className="flex flex-wrap items-center justify-between gap-2"><Label>History · {a.runs} task runs · {a.sessions} sessions</Label><span className="font-mono text-[10px] text-muted">one row per Hermes session; task runs carry their run # and task</span></div>
+        {a.history.length === 0 && <p className="mt-2 text-xs text-muted">Nothing yet — no runs and no sessions in this profile's state.db.</p>}
+        <ul className="mt-2 divide-y divide-line">
+          {a.history.map((h, i) => {
+            const s = h.session, r = h.run
+            const title = r?.task_title ? `#${r.task_id} ${r.task_title}` : (s?.title || s?.id || `run #${r?.id}`)
+            return (
+              <li key={s?.id ?? `run-${r?.id ?? i}`} className="min-w-0 py-2 text-xs">
+                <div className="flex min-w-0 items-center gap-2">
+                  {r ? <StatusBadge status={r.status} compact /> : <Chip tone={h.kind === 'chat' ? 'accent' : 'muted'}>{h.kind}</Chip>}
+                  <span className="min-w-0 flex-1 truncate">{r?.task_id ? <Link to={`/tasks/${r.task_id}`} className="hover:underline">{title}</Link> : title}</span>
+                  <span className="shrink-0 text-muted">{ago(h.ts)}</span>
+                </div>
+                <div className="mt-0.5 flex flex-wrap items-center gap-x-3 gap-y-0.5 font-mono text-[10px] text-muted">
+                  {r && <span>run #{r.id}{r.review_id ? ' · review' : ''}</span>}
+                  {s ? <><span title={s.id}>{s.id.slice(0, 14)}</span>{s.model && <span>{s.model}</span>}{s.message_count != null && <span>{s.message_count} msgs</span>}{s.estimated_cost_usd != null && <span>${s.estimated_cost_usd.toFixed(2)}</span>}
+                    <Link to={`/chat/${a.name}/${s.id}`} className="rounded-full border border-line px-2 py-0.5 uppercase tracking-wider text-fg hover:bg-raised">Open</Link></>
+                    : <span>no session{r?.error ? ` · ${r.error.slice(0, 80)}` : ''}</span>}
+                </div>
               </li>
-            ))}
-          </ul>
-        </GlassCard>
-        <GlassCard className="min-w-0 overflow-hidden">
-          <Label>Sessions · {a.sessions} total · {a.recent_sessions.length} recent</Label>
-          {a.recent_sessions.length === 0 && <p className="mt-2 text-xs text-muted">No sessions in this profile's state.db.</p>}
-          <ul className="mt-2 divide-y divide-line">
-            {a.recent_sessions.map(s => (
-              <li key={s.id} className="min-w-0 py-2 text-xs">
-                <div className="flex min-w-0 items-center gap-2"><span className="min-w-0 flex-1 truncate">{s.title || s.id}</span><span className="shrink-0 text-muted">{ago(s.last_activity_at ?? s.started_at)}</span></div>
-                <div className="mt-0.5 flex flex-wrap gap-x-3 font-mono text-[10px] text-muted"><span>{s.id.slice(0, 8)}</span>{s.model && <span>{s.model}</span>}{s.message_count != null && <span>{s.message_count} msgs</span>}{s.estimated_cost_usd != null && <span>${s.estimated_cost_usd.toFixed(2)}</span>}{s.source && <span>{s.source}</span>}</div>
-              </li>
-            ))}
-          </ul>
-          {a.last_active_at && <p className="mt-2 text-[11px] text-muted">last active {when(a.last_active_at)}</p>}
-        </GlassCard>
-      </div>
+            )
+          })}
+        </ul>
+        {a.last_active_at && <p className="mt-2 text-[11px] text-muted">last active {when(a.last_active_at)}</p>}
+      </GlassCard>
     </section>
   )
 }

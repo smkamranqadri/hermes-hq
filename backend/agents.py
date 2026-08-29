@@ -132,21 +132,45 @@ def _profile_description(home, name):
 
 
 def agent_detail(name, db_path=None):
+    """Summary + ONE unified history: every Hermes session (chat, CLI, dispatched
+    run) with its hq run/task attached when it came from the dispatcher, plus
+    runs that never got a session (died before the agent started)."""
     if name not in store.ASSIGNEE_PROFILES:
         raise ValueError("unknown agent %r" % name)
     a = next(x for x in list_agents(db_path) if x["name"] == name)
     conn = store._connect(db_path or store.DEFAULT_DB_PATH)
     try:
-        a["recent_runs"] = [dict(r) for r in conn.execute(
-            "SELECT r.id, r.task_id, r.status, r.started_at, r.finished_at, r.error, r.session_id, t.title AS task_title "
-            "FROM runs r LEFT JOIN tasks t ON t.id=r.task_id WHERE r.agent_profile=? ORDER BY r.id DESC LIMIT 50", (name,))]
+        runs = [dict(r) for r in conn.execute(
+            "SELECT r.id, r.task_id, r.status, r.started_at, r.finished_at, r.error, r.session_id, r.review_id, t.title AS task_title "
+            "FROM runs r LEFT JOIN tasks t ON t.id=r.task_id WHERE r.agent_profile=? ORDER BY r.id DESC LIMIT 200", (name,))]
     finally:
         conn.close()
     try:
-        a["recent_sessions"] = readers.agent_sessions(store.resolve_profiles_dir(), name, limit=50)
+        sessions = readers.agent_sessions(store.resolve_profiles_dir(), name, limit=100)
     except (ValueError, FileNotFoundError):
-        a["recent_sessions"] = []
+        sessions = []
+    by_session = {r["session_id"]: r for r in runs if r["session_id"]}
+    # runs whose session id was never captured (stopped/crashed early) still planted
+    # their marker title `wm-run-<id>` on the session: match on that as a fallback
+    by_marker = {"wm-run-%d" % r["id"]: r for r in runs if not r["session_id"]}
+    items = []
+    for s in sessions:
+        r = by_session.pop(s["id"], None) or by_marker.pop(s.get("title") or "", None)
+        items.append({"session": s, "run": _run_brief(r), "ts": s.get("last_activity_at") or s.get("started_at") or 0,
+                      "kind": "run" if r else ("chat" if str(s["id"]).startswith("api_") else "cli")})
+    matched = {id(r) for r in by_session.values()} | {id(r) for r in by_marker.values()}
+    for r in runs:
+        if (not r["session_id"] and id(r) in matched) or (r["session_id"] and r["session_id"] in by_session):   # unmatched: no session, or session outside the recent window
+            items.append({"session": None, "run": _run_brief(r), "ts": r["finished_at"] or r["started_at"] or 0, "kind": "run"})
+    items.sort(key=lambda x: x["ts"] or 0, reverse=True)
+    a["history"] = items[:120]
     return a
+
+
+def _run_brief(r):
+    if not r:
+        return None
+    return {k: r.get(k) for k in ("id", "task_id", "task_title", "status", "started_at", "finished_at", "error", "review_id")}
 
 
 # ---- install ------------------------------------------------------------
