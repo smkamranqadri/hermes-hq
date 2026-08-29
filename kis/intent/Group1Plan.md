@@ -5,8 +5,8 @@ Decisions: snapshot the live WM now and cut over at the end of Group 1 (not befo
 ## 1a Read — ACTIVE
 Scope
 - `hermes-hq import <wm-dir>`: copy `wm.db` → `hq.db`, copy `runs/` minus `runs/worktrees/`, rewrite `/opt/data/work-manager/` prefixes in `runs.brief_path`, `runs.result_paths`, `runs.workdir`. Idempotent; refuses non-empty `hq.db` without `--force`. Never edits data.
-- `hermes_hq/status.py`: engine status → human state + reason (single source; UI `status.ts` mirrors it, test asserts agreement).
-- `hermes_hq/readers.py`: port from `../hermes-work-manager/wm-tool/wm_dash/reader.py`, read-only.
+- `hq/status.py`: engine status → human state + reason (single source; UI `status.ts` mirrors it, test asserts agreement).
+- `hq/readers.py`: port from `../hermes-work-manager/wm-tool/wm_dash/reader.py`, read-only.
 - API: `GET /api/projects?archived`, `/api/project/{slug}`, `/api/goals`, `/api/tasks` (project, state, q, limit, offset; `updated_at DESC`; envelope `{tasks,total,stateCounts,stateOptions,limit,offset}` per the Tasks-tab spec with human states), `/api/task/{id}`.
 - UI: Projects list, Project detail, Tasks list (Needs you → Working → Queued → Backlog → Done) + board toggle + project/state/search, Task detail (badge+reason, description/DoD, runs, reviews, transitions, session link or "not mapped yet").
 

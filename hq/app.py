@@ -6,9 +6,9 @@ from fastapi import FastAPI
 from fastapi.responses import FileResponse, JSONResponse
 from fastapi.staticfiles import StaticFiles
 
-from hermes_hq import __version__
-from hermes_hq.dispatcher import DispatcherLoop
-from hermes_hq.engine import wm_store
+from hq import __version__
+from hq.dispatcher import DispatcherLoop
+from hq.engine import wm_store
 
 STATIC_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), "static")
 

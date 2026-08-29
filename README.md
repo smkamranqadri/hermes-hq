@@ -31,7 +31,7 @@ Requires Python ≥ 3.11 with [`uv`](https://github.com/astral-sh/uv), Node ≥ 
 
 ```bash
 uv venv .venv && uv pip install --python .venv/bin/python -e .
-(cd web && npm install && npm run build)     # builds the UI into hermes_hq/static
+(cd web && npm install && npm run build)     # builds the UI into hq/static
 .venv/bin/hermes-hq serve                     # http://127.0.0.1:9010
 .venv/bin/hermes-hq serve --no-dispatcher     # UI/API only, never launches agents
 .venv/bin/hermes-hq wm status                 # engine CLI passthrough
@@ -52,8 +52,8 @@ for t in tests/engine/test_*.py; do HERMES_HQ_HOME=/tmp/hq-test python3 "$t"; do
 ## Layout
 
 ```
-hermes_hq/        FastAPI service (app.py), CLI (cli.py), in-process dispatcher, engine/
-web/              Vite + React 19 + Tailwind 4 UI → built into hermes_hq/static
+hq/        FastAPI service (app.py), CLI (cli.py), in-process dispatcher, engine/
+web/              Vite + React 19 + Tailwind 4 UI → built into hq/static
 tests/engine/     engine test suite
 kis/              project memory (knowledge / intent / state) — read state first
 ```

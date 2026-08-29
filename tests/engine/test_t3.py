@@ -8,7 +8,7 @@ runs each with its OWN session, render_brief automatic handoff context, and
 """
 import contextlib, io, json, os, sqlite3, subprocess, sys, tempfile, time
 
-BASE = os.path.dirname(os.path.abspath(__file__)); ENGINE = os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "..", "hermes_hq", "engine"); sys.path.insert(0, ENGINE)
+BASE = os.path.dirname(os.path.abspath(__file__)); ENGINE = os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "..", "hq", "engine"); sys.path.insert(0, ENGINE)
 import wm_store as store, wm_dispatch as dispatch, wm_cli  # noqa: E402
 
 TMP = tempfile.mkdtemp(prefix="wm_t3_")

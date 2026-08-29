@@ -6,11 +6,11 @@ requires-python = ">=3.11"
 dependencies = ["fastapi>=0.115", "uvicorn[standard]>=0.30"]
 
 [project.scripts]
-hermes-hq = "hermes_hq.cli:main"
+hermes-hq = "hq.cli:main"
 
 [build-system]
 requires = ["hatchling"]
 build-backend = "hatchling.build"
 
 [tool.hatch.build.targets.wheel]
-packages = ["hermes_hq"]
+packages = ["hq"]

@@ -3,6 +3,6 @@ __pycache__/
 *.pyc
 node_modules/
 web/dist/
-hermes_hq/static/
+hq/static/
 .env
 screenshots/
