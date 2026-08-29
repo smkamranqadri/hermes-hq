@@ -4,11 +4,10 @@
 **hermes-hq is the live control plane since 2026-08-29 13:40 UTC.** `hermes-hq serve --host 0.0.0.0 --port 9010 --interval 20` with the dispatcher ON (log `/opt/data/hermes-hq-serve.log`, password `/opt/data/hermes-hq/password`). Old WM crons paused (not deleted): `dfe30ff9e8bf` wm-dispatch, `040334fe79ae` wm completion watchdog, `b84db989076d` wm-planning-pickup. Rollback = `hermes cron resume <id>` ×3 and stop hermes-hq; old `/opt/data/work-manager/` untouched. Legacy dashboard :9009 still up but stale.
 
 ## Now
-Task: **Group 3b Chat** — plan approved 2026-08-29 (Phase mode, 3 sub-slices in `kis/intent/Group3Plan.md`), not started. Ledger: [x] proxy (done 2026-08-29) · [x] Chat page (done 2026-08-29) · [ ] Task→session (in progress). Group 3a done 2026-08-29 (stop-run, templates, agents API, gateways, Agents UI).
-Verification: pytest with a fake gateway (sessions + SSE), real chat with coder and orchestrator on this box, Playwright 1440/390 incl. a streaming screenshot and Task→session.
+Task: **Group 4 — direct chat scopes** (next; not planned yet — run `/kis:plan`). Group 3 (Agents + Chat) complete 2026-08-29; see `kis/intent/Group3Plan.md` and `PRD.md` for Group 4 scope ("Chat about this project" from Project detail was deferred here).
 
 ## Next
-Group 3b Chat (SSE proxy + Chat page), then Group 4 direct chat scopes.
+Group 4 direct chat scopes (project-scoped chat with the orchestrator, seeded brief), then Group 5 per PRD.
 
 ## Blocker
 None.
@@ -30,6 +29,7 @@ None.
 See `README.md`. Dev: `.venv/bin/hermes-hq serve --no-dispatcher` + `cd frontend && npm run dev` (proxies /api to :9010). Legacy WM dashboard still live on :9009 and untouched. Owner drops reference images in `screenshots/` (git-ignored).
 
 ## Proof (latest)
+- Task→session 2026-08-29: Task #98 (63 runs) shows an **Open session** link per run with a mapped session (using the run's own `agent_profile`; running runs show "open after run"), 390 `scrollWidth==390`; clicking the newest landed on `/chat/reviewer/20260829_134957_cc6f83`, transcript loaded (45 bubbles), inline Enable chat started the reviewer gateway (`:8655`), a message sent into that CLI-created session streamed back "I worked on task #98." (47 bubbles after refetch). Fixed on the way: composer showed before agent state loaded (→ 409); now gated, and a failed send restores the draft. Orchestrator chat not separately exercised through the UI (proxy test covers root-.env credentials).
 - Chat page 2026-08-29: `tsc` + build clean; live Playwright 1440: `/chat/coder` showed inline "Chat is off … Enable chat", clicking it started the gateway and revealed the composer; a real turn ("numbers 1–60 as words") streamed — mid-turn screenshot at 4.9 s with partial text and the **Stop** button; after the turn the transcript refetched from `state.db` (2 bubbles, ends with "sixty"); 390 `scrollWidth==390`, session picker lists 83 sessions incl. `wm-run-*`. Hardened: transient gateway errors (connect/502/503) retried up to 8 s on session create; 502 details now logged server-side. Coder gateway disabled after.
 - Chat proxy 2026-08-29: `pytest tests/backend` 35 passed (4 new in `test_chat.py` against an in-process fake gateway: 409 before any gateway call when chat disabled, session create, SSE pass-through with the gateway's event names + tool events, key never in the response body, idle `touch`, stop route, 502 on gateway error, invalid ids refused, history endpoints without a state.db). Real: `create_session("coder")` → `api_1788026204_f8a3f64f`; `stream_turn` streamed `run.started … assistant.delta … done` (7 events, 6.5 s), assistant text `pong`; `state.db` transcript shows the user + assistant rows; gateway stopped after. Fixed: `http.client` drops `sock` after `getresponse()` on HTTP/1.0 servers → set the long read timeout right after `connect()`.
 - Agents UI 2026-08-29: `tsc` + `npm run build` clean; live Playwright 1440/390: `/agents` (7 cards, `+ Agent` modal shows 6× installed, Apply-soul button present), `/agents/coder` `scrollWidth==390`; clicking **Enable chat** → "chat on :8653" + Disable button, **Disable chat** → "chat off :8653", `:8653` closed afterwards. Fixed a React #31 crash (detail lists now `recent_runs`/`recent_sessions`). `pytest tests/backend` 31 passed.
