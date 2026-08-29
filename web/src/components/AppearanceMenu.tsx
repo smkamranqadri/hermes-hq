@@ -17,7 +17,7 @@ export function AppearanceMenu() {
     </button>
   )
   return (
-    <Menu keepOpen button={<span className="font-mono text-[10px]">◐ {THEMES.find(t => t.id === theme)?.label.toUpperCase() ?? 'AUTO'}</span>}>
+    <Menu keepOpen button={<span className="font-mono text-[10px]">◐ {THEMES.find(t => t.id === theme)?.label.toUpperCase() ?? 'VIOLET'}</span>}>
       <div className="max-h-[70vh] w-72 overflow-y-auto p-1">
         <p className="px-2.5 pb-1 pt-1 font-mono text-[10px] uppercase tracking-widest text-muted">Theme</p>
         {THEMES.map(t => row(theme === t.id, () => pickTheme(t.id), (<>
@@ -27,11 +27,6 @@ export function AppearanceMenu() {
           <span><span className="block font-mono text-xs uppercase tracking-wider">{t.label}</span>
             <span className="block text-[11px] text-muted">{t.desc}</span></span>
         </>)))}
-        {row(theme === 'system', () => pickTheme('system'), (<>
-          <span className="flex shrink-0 gap-0.5 rounded border border-line p-0.5"><span className="size-3 rounded-sm bg-[#15151F]" /><span className="size-3 rounded-sm bg-[#F6F4FB]" /><span className="size-3 rounded-sm bg-[#8B5CF6]" /></span>
-          <span><span className="block font-mono text-xs uppercase tracking-wider">Auto</span>
-            <span className="block text-[11px] text-muted">Follow the OS: Violet Light by day, Violet in dark mode</span></span>
-        </>))}
         <div className="my-2 border-t border-line" />
         <p className="px-2.5 pb-1 font-mono text-[10px] uppercase tracking-widest text-muted">Font</p>
         {FONTS.map(f => row(font === f.id, () => pickFont(f.id), (
