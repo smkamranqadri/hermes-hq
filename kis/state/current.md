@@ -1,11 +1,10 @@
 # State
 
 ## Status
-Group 1a Read DONE 2026-08-29 on `main`. Server on :9010 (`--no-dispatcher`) over an imported snapshot of the live WM at `/opt/data/hermes-hq/hq.db` (imported 2026-08-29 ~11:54; live WM keeps changing).
+Group 1b phases 1–2 (auth + writes + UI) DONE 2026-08-29 on `main`; phase 3 cutover NOT done. Server on :9010 `--no-dispatcher`, login password in `/opt/data/hermes-hq/password`, snapshot-mode banner shown.
 
 ## Now
-Task: **Group 1b Write + cutover** (plan approved 2026-08-29, `kis/intent/Group1Plan.md`). Not started. Order: auth → write API + tests → UI → screenshots → cutover runbook with owner.
-Verification: pytest auth/writes on scratch DB, manual walk on :9010 (snapshot mode), headless screenshots, live cutover checks.
+Waiting for the owner to pick a quiet moment for the **cutover runbook** (`kis/intent/Group1Plan.md` §1b phase 3). Precondition: old WM has no `running` task (`cd /opt/data/work-manager && ./wm status`).
 
 ## Next
 After 1b: Group 2 Overview (Needs-you first) + Reviews-in-Tasks + Activity feed.
@@ -14,7 +13,8 @@ After 1b: Group 2 Overview (Needs-you first) + Reviews-in-Tasks + Activity feed.
 None.
 
 ## Known debt
-- Task detail action button is a disabled placeholder until 1b.
+- Writes made in snapshot mode (task #101 smoke, #96 reply) are throwaway — the cutover re-imports with `--force`.
+- Cookie session over plain HTTP; HTTPS via reverse proxy is a later item.
 - `readers.py` is a straight port (1100 lines) incl. agents/sessions/files/overview readers not yet exposed; prune or expose as Groups 2–5 need them.
 - `tests/core/test_t2/t5/t7.py` fail identically in the source repo (goal lifecycle draft→planned changed after they were written). Not caused by the move; fix when touching goal release.
 - Mobile top bar stacks into 3 rows (brand / sysbar / tabs); acceptable for now, revisit with Overview.
@@ -22,8 +22,7 @@ None.
 ## How to run
 See `README.md`. Dev: `.venv/bin/hermes-hq serve --no-dispatcher` + `cd frontend && npm run dev` (proxies /api to :9010). Legacy WM dashboard still live on :9009 and untouched. Owner drops reference images in `screenshots/` (git-ignored).
 
-## Proof (Group 1a)
-- `hermes-hq import /opt/data/work-manager` → 15 projects / 23 goals / 98 tasks / 193 runs / 75 reviews (live had moved past the plan's 191/73), 447 path values rewritten, 566 run files copied, 0 old-prefix values left in path columns; re-run without `--force` refused; `--force` kept a `.pre-import-*` backup.
-- `pytest tests/backend` → 10 passed (status mapping incl. UI-mirror check, tasks envelope/newest-first/state filter/search/paging, task detail + deps, project detail human states, 404s).
-- Live API: `/api/tasks` → 60 active-project tasks, stateCounts {done 45, backlog 11, needsyou 2, queued 1, working 1}; #84 → Needs you · blocked with run error; #89 → Queued · waiting on #82,#84,#85,#86; #98 → Working · reviewer checking.
-- Screenshots 1440px: Projects, Tasks list, Tasks board, Project detail (Needs-you strip + tabs), Task detail (deps, runs w/ session id, reviews, history); 390px Tasks + Task detail. Bugs caught by screenshots and fixed: badge overflow on long reasons, project-detail tasks all "Backlog", deps ids missing, board column collapse.
+## Proof (Group 1b phases 1–2)
+- `pytest tests/backend` → 15 passed: 401 gate, 403 without CSRF, login/logout, task create→mark-ready→manual→retry→assign, engine refusals as 409 (dep not done, retry done), feedback refused on planned / accepted on blocked → rework, goal plan/abandon/release rules, project create/patch/archive, pause/resume. Engine t1/t4/t6 still pass after the `OWNER_FEEDBACK_SOURCE_STATUSES` extension.
+- Live API walk (bash, `scratchpad/walk.sh`): created #101 → ready → manual → ready; feedback on blocked #96 → `rework`, feedback text stored, activity/transitions rows written; pause/resume reflected in `/api/system.paused`; `hermes-hq wm task show 101` sees it.
+- Playwright screenshots (1440 + 390): login, Tasks with + Task, New Task modal, #84 action row + reply modal, project header actions, System controls. Bug caught: hooks-after-early-return crash in TaskDetail (React #310) — fixed.

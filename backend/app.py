@@ -7,15 +7,20 @@ from fastapi.responses import FileResponse, JSONResponse
 from fastapi.staticfiles import StaticFiles
 
 from backend import __version__
+from backend import auth as A
 from backend.api import router as api_router
+from backend.writes import router as write_router, make_auth_routes
 from backend.dispatcher import DispatcherLoop
 from core import wm_store
 
 STATIC_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), "static")
 
 
-def create_app(dispatcher_enabled: bool = True, interval: float = 30.0) -> FastAPI:
+def create_app(dispatcher_enabled: bool = True, interval: float = 30.0, password: str | None = None) -> FastAPI:
     dispatcher = DispatcherLoop(interval=interval, enabled=dispatcher_enabled)
+    os.makedirs(wm_store.hq_home(), exist_ok=True)
+    password = password or A.resolve_password()[0]
+    sessions = A.Sessions()
 
     @asynccontextmanager
     async def lifespan(app: FastAPI):
@@ -27,7 +32,10 @@ def create_app(dispatcher_enabled: bool = True, interval: float = 30.0) -> FastA
         dispatcher.stop()
 
     app = FastAPI(title="hermes-hq", version=__version__, lifespan=lifespan)
+    app.add_middleware(A.AuthMiddleware, sessions=sessions)
+    app.include_router(make_auth_routes(sessions, password))
     app.include_router(api_router)
+    app.include_router(write_router)
 
     @app.get("/api/health")
     def health():
@@ -43,6 +51,8 @@ def create_app(dispatcher_enabled: bool = True, interval: float = 30.0) -> FastA
             "hermes": wm_store.resolve_hermes(),
             "profiles_dir": wm_store.resolve_profiles_dir(),
             "schema_version": wm_store.get_meta("schema_version", db_path=wm_store.DEFAULT_DB_PATH),
+            "paused": wm_store.get_meta("paused", db_path=wm_store.DEFAULT_DB_PATH) == "1",
+            "imported_from": wm_store.get_meta("imported_from", db_path=wm_store.DEFAULT_DB_PATH),
             "dispatcher": dispatcher.status(),
         }
 

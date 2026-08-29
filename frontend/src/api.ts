@@ -1,11 +1,36 @@
-import { useQuery } from '@tanstack/react-query'
+import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import type { Human } from './status'
 
-async function get<T>(url: string): Promise<T> {
-  const r = await fetch(url)
-  if (!r.ok) throw new Error(`${r.status} ${url}`)
+export class ApiError extends Error { constructor(public status: number, message: string) { super(message) } }
+let csrf = ''
+export const setCsrf = (t: string) => { csrf = t }
+
+async function parse<T>(r: Response, url: string): Promise<T> {
+  if (r.status === 401) { window.dispatchEvent(new Event('hq:unauthenticated')) }
+  if (!r.ok) {
+    let msg = `${r.status} ${url}`
+    try { const j = await r.json(); msg = j.detail ?? j.error ?? msg } catch {}
+    throw new ApiError(r.status, msg)
+  }
   return r.json()
 }
+async function get<T>(url: string): Promise<T> { return parse<T>(await fetch(url), url) }
+export async function post<T = unknown>(url: string, body?: unknown): Promise<T> {
+  const r = await fetch(url, { method: 'POST', headers: { 'content-type': 'application/json', 'x-csrf': csrf }, body: body === undefined ? undefined : JSON.stringify(body) })
+  return parse<T>(r, url)
+}
+
+/** Mutation that invalidates every list after a write and surfaces the engine's own message. */
+export function useWrite<TBody = unknown>(url: string | ((b: TBody) => string), opts?: { onSuccess?: (d: unknown) => void }) {
+  const qc = useQueryClient()
+  return useMutation({
+    mutationFn: (body: TBody) => post(typeof url === 'function' ? url(body) : url, body),
+    onSuccess: d => { qc.invalidateQueries(); opts?.onSuccess?.(d) },
+  })
+}
+export const useSession = () => useQuery({ queryKey: ['session'], queryFn: () => get<{ authenticated: boolean; csrf: string }>('/api/session'), retry: false })
+export const useRoster = () => useQuery({ queryKey: ['roster'], queryFn: () => get<{ assignees: string[]; review_policies: string[] }>('/api/system/roster'), staleTime: Infinity })
+export const useGoals = (project?: string) => useQuery({ queryKey: ['goals', project], queryFn: () => get<{ goals: Goal[] }>(`/api/goals${project ? `?project=${project}` : ''}`) })
 
 export type Project = {
   id: number; slug: string; name: string; description: string; primary_path: string; archived: number
@@ -13,7 +38,7 @@ export type Project = {
   goals_draft: number; goals_planning: number; goals_planned: number; goals_released: number
   active_agents: string[]; last_activity: { action: string; ts: number; agent_profile: string; detail: string } | null
 }
-export type Goal = { id: number; title: string; description: string; status: string; tasks_total: number; tasks_done: number }
+export type Goal = { id: number; project_id?: number; title: string; description: string; status: string; tasks_total: number; tasks_done: number }
 export type Run = { id: number; task_id: number; agent_profile: string; session_id: string | null; status: string; started_at: number; finished_at: number | null; error: string | null; exit_code: number | null; branch: string | null; workdir: string | null; result_paths: string[] }
 export type Task = {
   id: number; title: string; description: string; definition_of_done: string; status: string; assignee_profile: string | null

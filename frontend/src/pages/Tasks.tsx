@@ -8,6 +8,8 @@ import { Empty, Loading, Select, Input, Label } from '../components/ui'
 import { ORDER, HUMAN_LABEL, type HumanState } from '../status'
 import { usePageTitle } from '../usePageTitle'
 import clsx from 'clsx'
+import { NewTaskModal } from '../components/forms'
+import { Btn } from '../components/Modal'
 
 export function Tasks() {
   usePageTitle('Tasks')
@@ -18,6 +20,7 @@ export function Tasks() {
   const view = sp.get('view') ?? 'list'
   const set = (k: string, v: string) => { const n = new URLSearchParams(sp); v ? n.set(k, v) : n.delete(k); setSp(n, { replace: true }) }
   const [draft, setDraft] = useState(q)
+  const [creating, setCreating] = useState(false)
   const projects = useProjects()
   const tasks = useTasks({ project, state, q })
   const d = tasks.data
@@ -25,12 +28,13 @@ export function Tasks() {
 
   return (
     <section className="mx-auto max-w-6xl p-4 sm:p-6">
-      <PageHeader crumb="tasks" title="Tasks" right={
+      {creating && <NewTaskModal project={project || undefined} onClose={() => setCreating(false)} />}
+      <PageHeader crumb="tasks" title="Tasks" right={<div className="flex items-center gap-2"><Btn onClick={() => setCreating(true)}>+ Task</Btn>
         <div className="flex gap-1 rounded-full border border-line bg-glass p-0.5">
           {(['list', 'board'] as const).map(v => (
             <button key={v} onClick={() => set('view', v)} className={clsx('rounded-full px-3 py-1 font-mono text-[10px] uppercase', view === v ? 'bg-fg text-bg' : 'text-muted hover:text-fg')}>{v}</button>
           ))}
-        </div>} />
+        </div></div>} />
       <div className="mb-4 flex flex-wrap items-center gap-2">
         <Select value={project} onChange={e => set('project', e.target.value)}>
           <option value="">All projects</option>

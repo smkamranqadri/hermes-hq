@@ -34,6 +34,12 @@ def main(argv=None):
     if a.cmd == "serve":
         import uvicorn
         from backend.app import create_app
+        from backend import auth as A
+        pw, src = A.resolve_password()
+        if src == "generated":
+            print("hermes-hq: generated login password: %s  (saved to %s)" % (pw, A.password_path()))
+        elif src == "file":
+            print("hermes-hq: login password from %s" % A.password_path())
         uvicorn.run(create_app(dispatcher_enabled=not a.no_dispatcher, interval=a.interval),
                     host=a.host, port=a.port, log_level="info")
         return 0
