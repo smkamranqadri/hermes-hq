@@ -47,11 +47,11 @@ export function AgentDetail() {
               <li key={s?.id ?? `run-${r?.id ?? i}`} className="min-w-0 py-2 text-xs">
                 <div className="flex min-w-0 items-center gap-2">
                   {r ? <StatusBadge status={r.status} compact /> : <Chip tone={h.kind === 'chat' ? 'accent' : 'muted'}>{h.kind}</Chip>}
-                  <span className="min-w-0 flex-1 truncate">{r?.task_id ? <Link to={`/tasks/${r.task_id}`} className="hover:underline">{title}</Link> : title}</span>
+                  <span className="min-w-0 flex-1 truncate">{s ? <Link to={`/chat/${a.name}/${s.id}`} className="hover:underline">{title}</Link> : r?.task_id ? <Link to={`/tasks/${r.task_id}`} className="hover:underline">{title}</Link> : title}</span>
                   <span className="shrink-0 text-muted">{ago(h.ts)}</span>
                 </div>
                 <div className="mt-0.5 flex flex-wrap items-center gap-x-3 gap-y-0.5 font-mono text-[10px] text-muted">
-                  {r && <span>run #{r.id}{r.review_id ? ' · review' : ''}</span>}
+                  {r && <span>run #{r.id}{r.review_id ? ' · review' : ''}{r.task_id ? <> · <Link to={`/tasks/${r.task_id}`} className="hover:underline">task #{r.task_id}</Link></> : null}</span>}
                   {s ? <><span title={s.id}>{s.id.slice(0, 14)}</span>{s.model && <span>{s.model}</span>}{s.message_count != null && <span>{s.message_count} msgs</span>}{s.estimated_cost_usd != null && <span>${s.estimated_cost_usd.toFixed(2)}</span>}
                     <Link to={`/chat/${a.name}/${s.id}`} className="rounded-full border border-line px-2 py-0.5 uppercase tracking-wider text-fg hover:bg-raised">Open</Link></>
                     : <span>no session{r?.error ? ` · ${r.error.slice(0, 80)}` : ''}</span>}
