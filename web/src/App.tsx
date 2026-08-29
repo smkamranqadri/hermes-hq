@@ -3,8 +3,10 @@ import { useQuery } from '@tanstack/react-query'
 import { TopBar, TABS, TOOLS } from './components/TopBar'
 import { StatusBadge } from './components/StatusBadge'
 import { GlassCard, PageHeader } from './components/GlassCard'
+import { usePageTitle } from './usePageTitle'
 
 function Placeholder({ title }: { title: string }) {
+  usePageTitle(title)
   return (
     <section className="mx-auto max-w-6xl p-4 sm:p-6">
       <PageHeader crumb={title.toLowerCase()} title={title} />
@@ -14,6 +16,7 @@ function Placeholder({ title }: { title: string }) {
 }
 
 function System() {
+  usePageTitle('System')
   const sys = useQuery({ queryKey: ['system'], queryFn: () => fetch('/api/system').then(r => r.json()) })
   return (
     <section className="mx-auto max-w-6xl p-4 sm:p-6">
