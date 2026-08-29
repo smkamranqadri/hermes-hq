@@ -26,7 +26,11 @@ export function useWrite<TBody = unknown>(url: string | ((b: TBody) => string), 
   const qc = useQueryClient()
   return useMutation({
     mutationFn: (body: TBody) => post(typeof url === 'function' ? url(body) : url, body),
-    onSuccess: d => { qc.invalidateQueries(); opts?.onSuccess?.(d) },
+    onSuccess: d => {
+      const t = (d as { task?: TaskDetail } | null)?.task
+      if (t && typeof t.id === 'number') qc.setQueryData(['task', t.id], t)   // task writes return the fresh task: show it now
+      qc.invalidateQueries(); opts?.onSuccess?.(d)
+    },
   })
 }
 export const useSession = () => useQuery({ queryKey: ['session'], queryFn: () => get<{ authenticated: boolean; csrf: string }>('/api/session'), retry: false })
@@ -66,8 +70,9 @@ export const useTasks = (p: { project?: string; state?: string; q?: string; limi
   Object.entries(p).forEach(([k, v]) => { if (v !== undefined && v !== '' && v !== null) qs.set(k, String(v)) })
   return useQuery({ queryKey: ['tasks', p], queryFn: () => get<TasksEnvelope>(`/api/tasks?${qs}`), refetchInterval: 15000 })
 }
+const IN_MOTION = new Set(['ready', 'rework', 'running', 'needs_review', 'waiting_approval'])
 export const useTask = (id: number) =>
-  useQuery({ queryKey: ['task', id], queryFn: () => get<TaskDetail>(`/api/task/${id}`), refetchInterval: 10000 })
+  useQuery({ queryKey: ['task', id], queryFn: () => get<TaskDetail>(`/api/task/${id}`), refetchInterval: q => IN_MOTION.has((q.state.data as TaskDetail | undefined)?.status ?? '') ? 3000 : 15000 })
 
 export function ago(ts?: number | null) {
   if (!ts) return '—'
