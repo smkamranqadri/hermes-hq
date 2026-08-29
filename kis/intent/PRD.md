@@ -6,11 +6,11 @@ On a fresh server with Hermes installed: one command installs hermes-hq → add 
 ## Feature groups (in build order)
 1. **Work core** — Projects → Goals → Tasks → Runs, deps, release gate, dispatcher, completion contract, owner feedback → rework.
 2. **Status & unblock** — Overview led by "Needs you", task detail with live run log, Reviews queue, Activity timeline, retry.
-3. **Agents** — list via `hermes profile list`, add from `agents.yaml` templates, agent detail (runs/sessions), open/resume task session as chat.
+3. **Agents** — installed profiles, add from `agents/` templates via the Hermes CLI, agent detail (runs/sessions), open/resume task session as chat.
 4. **Direct chat** — start/resume with default profile or any agent; global, per project, or per task (resume the task's previous session).
 5. **Project files** — browse/edit, project-scoped or global.
-7. **Schedules** — recurring tasks.
 6. **Browsers** — terminal, memory, skills, MCP (so Hermes dashboard isn't needed).
+7. **Schedules** — recurring tasks.
 
 Out of scope: multi-user, RBAC, messaging channels, secrets vault, integrations factory.
 
