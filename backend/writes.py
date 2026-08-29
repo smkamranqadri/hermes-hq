@@ -5,7 +5,7 @@ from fastapi import APIRouter, HTTPException, Request, Response
 from pydantic import BaseModel, Field
 
 from backend import auth as A
-from backend import tasks as tq
+from backend import stop as stopmod, tasks as tq
 from core import wm_dispatch, wm_store as store
 
 router = APIRouter(prefix="/api")
@@ -184,6 +184,12 @@ def retry(tid: int):
 @router.post("/task/{tid}/manual")
 def manual(tid: int, body: Note | None = None):
     _engine(store.mark_manual, tid, note=(body.note if body else None)); return _after(tid)
+
+
+@router.post("/task/{tid}/stop")
+def stop(tid: int, keep_in_queue: int = 0):
+    res = _engine(stopmod.stop_task, tid, keep_in_queue=bool(keep_in_queue))
+    out = _after(tid); out["stop"] = res; return out
 
 
 @router.post("/task/{tid}/assign")
