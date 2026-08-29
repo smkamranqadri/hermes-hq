@@ -16,7 +16,7 @@ export function LoginScreen({ onDone }: { onDone: () => void }) {
         <p className="font-mono text-[10px] uppercase tracking-widest text-muted">Password</p>
         <TextInput type="password" autoFocus value={pw} onChange={e => setPw(e.target.value)} placeholder="from HERMES_HQ_PASSWORD or the serve log" />
         {err && <p className="mt-2 text-xs text-error">{err}</p>}
-        <Btn type="submit" disabled={busy || !pw} className="mt-4 w-full">{busy ? '…' : 'Sign in'}</Btn>
+        <Btn type="submit" busy={busy} disabled={!pw} className="mt-4 w-full">Sign in</Btn>
       </form>
     </div>
   )

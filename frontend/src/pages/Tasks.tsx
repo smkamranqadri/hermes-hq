@@ -49,7 +49,7 @@ export function Tasks() {
         </form>
         {d && <span className="ml-auto font-mono text-[10px] text-muted">{d.total} task{d.total === 1 ? '' : 's'}</span>}
       </div>
-      {tasks.isLoading && <Loading />}
+      {tasks.isLoading && <Loading rows={5} />}
       {tasks.isError && <Empty error title="Could not load /api/tasks" note={String(tasks.error)} />}
       {d && d.total === 0 && <Empty title="No tasks match" note={project || state || q ? 'Try clearing a filter.' : 'Nothing in active projects yet.'} />}
       {d && view === 'list' && groups.map(([s, list]) => (

@@ -19,7 +19,7 @@ export function ProjectDetail() {
   usePageTitle(p?.name ?? slug)
   const [tab, setTab] = useState<(typeof TABS)[number]>('tasks')
   const [modal, setModal] = useState<'task' | 'goal' | null>(null)
-  if (q.isLoading) return <section className="mx-auto max-w-6xl p-6"><Loading /></section>
+  if (q.isLoading) return <section className="mx-auto max-w-6xl p-4 sm:p-6"><Loading rows={1} /><div className="mt-4"><Loading rows={4} /></div></section>
   if (q.isError || !p) return <section className="mx-auto max-w-6xl p-6"><Empty error title={`Could not load /api/project/${slug}`} note={String(q.error ?? '404')} /></section>
   const pct = p.tasks_total ? Math.round(100 * p.tasks_done / p.tasks_total) : 0
   const stuck = p.tasks.filter(t => t.human?.state === 'needsyou')
