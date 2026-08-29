@@ -10,6 +10,7 @@ from backend import __version__
 from backend import auth as A
 from backend.api import router as api_router
 from backend.writes import router as write_router, make_auth_routes
+from backend import gateways
 from backend.dispatcher import DispatcherLoop
 from core import wm_store
 
@@ -18,6 +19,7 @@ STATIC_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), "static")
 
 def create_app(dispatcher_enabled: bool = True, interval: float = 30.0, password: str | None = None) -> FastAPI:
     dispatcher = DispatcherLoop(interval=interval, enabled=dispatcher_enabled)
+    sweeper = gateways.IdleSweeper(enabled=dispatcher_enabled)
     os.makedirs(wm_store.hq_home(), exist_ok=True)
     password = password or A.resolve_password()[0]
     sessions = A.Sessions()
@@ -28,8 +30,14 @@ def create_app(dispatcher_enabled: bool = True, interval: float = 30.0, password
         os.makedirs(wm_store.resolve_runs_dir(), exist_ok=True)
         wm_store.init_db(db_path=wm_store.DEFAULT_DB_PATH)
         dispatcher.start()
+        sweeper.start()
         yield
+        sweeper.stop()
         dispatcher.stop()
+        try:
+            gateways.stop_started()
+        except Exception:  # never block shutdown
+            pass
 
     app = FastAPI(title="hermes-hq", version=__version__, lifespan=lifespan)
     app.add_middleware(A.AuthMiddleware, sessions=sessions)

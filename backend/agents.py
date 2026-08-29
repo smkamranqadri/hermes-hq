@@ -15,7 +15,7 @@ import time
 
 import yaml
 
-from backend import readers
+from backend import gateways, readers
 from core import wm_store as store
 
 REPO = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
@@ -99,13 +99,8 @@ def read_env(home):
     return env
 
 
-def gateway_state(name):
-    """What the profile's .env says about its HTTP API gateway. `running` is
-    filled by the supervisor (backend.gateways) once it exists; until then None."""
-    env = read_env(profile_home(name))
-    port = env.get("API_SERVER_PORT")
-    return {"configured": bool(port and env.get("API_SERVER_KEY")), "port": int(port) if port and port.isdigit() else None,
-            "running": None}
+def gateway_state(name, db_path=None):
+    return gateways.state(name, db_path)
 
 
 def list_agents(db_path=None):
@@ -119,7 +114,7 @@ def list_agents(db_path=None):
         a.update({"installed": is_installed(name), "home": home,
                   "description": _profile_description(home, name),
                   "has_template": os.path.isfile(os.path.join(templates_dir(), name, "agent.yaml")),
-                  "gateway": gateway_state(name)})
+                  "gateway": gateway_state(name, db_path)})
         if name == store.ORCHESTRATOR_AGENT:
             a["overlay_applied"] = overlay_applied(name)
         out.append(a)
