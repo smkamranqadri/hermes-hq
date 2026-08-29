@@ -44,6 +44,8 @@ export function TaskDetail() {
         <div className="flex basis-full flex-wrap gap-2">
           {st === 'planned' && <ActionBtn url={`/api/task/${t.id}/mark-ready`} label="Mark ready" confirm={t.goal_id && t.goal_status !== 'released' ? 'This bypasses the goal release gate for this task. Continue?' : undefined} />}
           {t.human.action === 'release_goal' && t.goal_id && <ActionBtn url={`/api/goal/${t.goal_id}/release`} label="Release goal" confirm={`Release goal #${t.goal_id}?`} />}
+          {st === 'running' && <ActionBtn url={`/api/task/${t.id}/stop`} label="Stop" kind="warn" confirm="Kill the running agent? The run is marked failed and the task leaves the queue (manual)." />}
+          {st === 'running' && <ActionBtn url={`/api/task/${t.id}/stop?keep_in_queue=1`} label="Stop & re-queue" kind="ghost" confirm="Kill the running agent and put the task back to ready for a fresh run?" />}
           {st === 'blocked' && <Btn onClick={() => setReply(true)}>Reply → rework</Btn>}
           {(st === 'failed' || st === 'stalled') && <ActionBtn url={`/api/task/${t.id}/retry`} label="Retry" confirm="Re-queue this task for a fresh run? Old runs are kept." />}
           {st === 'blocked' && <ActionBtn url={`/api/task/${t.id}/retry`} label="Retry as-is" kind="ghost" confirm="Retry without new information? The agent may block again." />}
