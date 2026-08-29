@@ -47,7 +47,7 @@
   color-scheme: dark;
   --hq-bg: #041c1c;
   --hq-glass: rgba(8, 47, 49, 0.55);
-  --hq-glass-strong: rgba(6, 40, 42, 0.85);
+  --hq-glass-strong: rgba(6, 40, 42, 0.93);
   --hq-raised: rgba(10, 54, 56, 0.75);
   --hq-inset: rgba(3, 20, 20, 0.6);
   --hq-border: rgba(255, 230, 203, 0.20);
@@ -65,7 +65,7 @@
   color-scheme: dark;
   --hq-bg: #0d0f12;
   --hq-glass: rgba(26, 31, 38, 0.55);
-  --hq-glass-strong: rgba(19, 23, 28, 0.86);
+  --hq-glass-strong: rgba(19, 23, 28, 0.93);
   --hq-raised: rgba(31, 37, 45, 0.75);
   --hq-inset: rgba(9, 11, 14, 0.6);
   --hq-border: rgba(185, 138, 68, 0.22);
@@ -83,7 +83,7 @@
   color-scheme: dark;
   --hq-bg: #0d1117;
   --hq-glass: rgba(28, 33, 40, 0.55);
-  --hq-glass-strong: rgba(22, 27, 34, 0.86);
+  --hq-glass-strong: rgba(22, 27, 34, 0.93);
   --hq-raised: rgba(33, 38, 45, 0.75);
   --hq-inset: rgba(8, 11, 15, 0.6);
   --hq-border: #30363d;
@@ -101,7 +101,7 @@
   color-scheme: dark;
   --hq-bg: #0a0e1a;
   --hq-glass: rgba(17, 24, 42, 0.55);
-  --hq-glass-strong: rgba(13, 18, 32, 0.88);
+  --hq-glass-strong: rgba(13, 18, 32, 0.93);
   --hq-raised: rgba(21, 29, 50, 0.75);
   --hq-inset: rgba(6, 9, 20, 0.6);
   --hq-border: #24304a;
