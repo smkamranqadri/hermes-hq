@@ -43,8 +43,14 @@ export function Chat() {
   const [live, setLive] = useState<Live | null>(null)
   const [pendingUser, setPendingUser] = useState<string | null>(null)
   const abort = useRef<AbortController | null>(null)
-  const bottom = useRef<HTMLDivElement>(null)
-  useEffect(() => { bottom.current?.scrollIntoView({ block: 'end' }) }, [detail.data?.transcript.length, live?.text, live?.tools.length, pendingUser])
+  const box = useRef<HTMLDivElement>(null)
+  useEffect(() => {
+    const el = box.current; if (!el) return
+    const down = () => { el.scrollTop = el.scrollHeight }
+    down(); const raf = requestAnimationFrame(down); const t = setTimeout(down, 200)
+    const ro = new ResizeObserver(down); ro.observe(el); Array.from(el.children).forEach(c => ro.observe(c))
+    return () => { cancelAnimationFrame(raf); clearTimeout(t); ro.disconnect() }
+  }, [detail.data?.transcript.length, live?.text, live?.tools.length, pendingUser, id])
   const installed = useMemo(() => (agents.data?.agents ?? []).filter(a => a.installed), [agents.data])
   const busy = live !== null
 
@@ -106,23 +112,23 @@ export function Chat() {
       {!profile && <Empty title="Pick an agent to chat with" note="Each agent talks through its own Hermes gateway; chat must be enabled on the Agents page for specialists." />}
       {profile && (
         <div className="grid min-w-0 gap-4 lg:grid-cols-[16rem_1fr]">
-          <GlassCard className="hidden min-w-0 lg:block">
+          <GlassCard className="hidden min-w-0 lg:flex lg:h-[calc(100dvh-12.5rem)] lg:flex-col">
             <div className="flex items-center justify-between"><Label>Sessions</Label>{agent && <GatewayDot g={agent.gateway} />}</div>
             <Link to={`/chat/${profile}`} className={clsx('mt-2 block rounded-lg px-2 py-1.5 text-xs hover:bg-raised', !id && 'bg-raised')}>+ New session</Link>
             {sessions.isLoading && <Loading rows={4} />}
-            <ul className="mt-1 flex max-h-[60vh] flex-col gap-0.5 overflow-y-auto">
+            <ul className="mt-1 flex min-h-0 flex-1 flex-col gap-0.5 overflow-y-auto">
               {(sessions.data?.sessions ?? []).map(s => (
                 <li key={s.id}><Link to={`/chat/${profile}/${s.id}`} className={clsx('block truncate rounded-lg px-2 py-1.5 text-xs hover:bg-raised', s.id === id && 'bg-raised')} title={s.id}>{s.title || s.id}<span className="ml-1 text-[10px] text-muted">{ago(s.last_activity_at ?? s.started_at)}</span></Link></li>
               ))}
             </ul>
           </GlassCard>
-          <GlassCard className="flex min-h-[60vh] min-w-0 flex-col overflow-hidden">
+          <GlassCard className="flex h-[calc(100dvh-15.5rem)] min-h-[22rem] min-w-0 flex-col overflow-hidden sm:h-[calc(100dvh-12.5rem)]">
             <div className="mb-2 flex flex-wrap items-center gap-2 text-xs text-muted">
               <span className="font-mono text-accent-2">{profile}</span>{agent && <GatewayDot g={agent.gateway} />}
               {id && <span className="truncate font-mono text-[10px]">{id}</span>}
               {detail.data?.model && <Chip>{detail.data.model}</Chip>}
             </div>
-            <div className="flex min-h-0 flex-1 flex-col gap-2 overflow-y-auto pr-1">
+            <div ref={box} data-transcript className="flex min-h-0 flex-1 flex-col gap-2 overflow-y-auto pr-1">
               {id && detail.isLoading && <Loading rows={3} />}
               {id && detail.isError && <Empty error title="Could not load this session" note={String(detail.error)} />}
               {detail.data && <Transcript rows={detail.data.transcript} />}
@@ -132,7 +138,6 @@ export function Chat() {
               {live && live.thinking && <Bubble role="tool" tool><span className="italic">thinking…</span> {live.thinking.slice(-160)}</Bubble>}
               {live && (live.text || live.tools.length === 0) && <Bubble role="assistant"><div className="whitespace-pre-wrap break-words">{live.text || <span className="animate-pulse text-muted">…</span>}</div></Bubble>}
               {live?.error && <p className="text-xs text-needsyou">{live.error}</p>}
-              <div ref={bottom} />
             </div>
             <div className="mt-3 border-t border-line pt-3">
               {chatDisabled ? (
