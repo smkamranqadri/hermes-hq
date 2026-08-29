@@ -12,7 +12,7 @@ export const TABS = [
 // Secondary surfaces behind the Tools menu (Group 5–7 + browsers).
 export const TOOLS = [
   ['Files', '/files'], ['Terminal', '/terminal'], ['Memory', '/memory'],
-  ['Skills', '/skills'], ['MCP', '/mcp'], ['Schedules', '/schedules'],
+  ['Skills', '/skills'], ['MCP', '/mcp'], ['Schedules', '/schedules'], ['Activity', '/activity'],
 ] as const
 
 function useClock() {

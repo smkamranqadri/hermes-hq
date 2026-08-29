@@ -10,6 +10,8 @@ import { Btn } from './components/Modal'
 import { Loading } from './components/ui'
 import { post, setCsrf, useSession } from './api'
 import { usePageTitle } from './usePageTitle'
+import { Overview } from './pages/Overview'
+import { Activity } from './pages/Activity'
 import { Projects } from './pages/Projects'
 import { ProjectDetail } from './pages/ProjectDetail'
 import { Tasks } from './pages/Tasks'
@@ -121,7 +123,9 @@ export default function App() {
         <SnapshotBanner />
         <main>
           <Routes>
-            {[...TABS, ...TOOLS].filter(([, to]) => to !== '/projects' && to !== '/tasks').map(([label, to]) => <Route key={to} path={to} element={<Placeholder title={label} />} />)}
+            {[...TABS, ...TOOLS].filter(([, to]) => !['/projects', '/tasks', '/', '/activity'].includes(to)).map(([label, to]) => <Route key={to} path={to} element={<Placeholder title={label} />} />)}
+            <Route path="/" element={<Overview />} />
+            <Route path="/activity" element={<Activity />} />
             <Route path="/projects" element={<Projects />} />
             <Route path="/projects/:slug" element={<ProjectDetail />} />
             <Route path="/tasks" element={<Tasks />} />

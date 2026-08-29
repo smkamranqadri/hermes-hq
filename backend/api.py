@@ -1,7 +1,7 @@
 """Read API for Group 1a. Every handler is read-only over hq.db."""
 from fastapi import APIRouter, HTTPException, Query
 
-from backend import readers, sysinfo, tasks as tq
+from backend import overview as ov, readers, sysinfo, tasks as tq
 from core import wm_store
 
 router = APIRouter(prefix="/api")
@@ -51,3 +51,19 @@ def task(task_id: int):
 @router.get("/system/stats")
 def system_stats():
     return sysinfo.collect()
+
+
+@router.get("/overview")
+def overview():
+    return ov.overview(_db())
+
+
+@router.get("/activity")
+def activity(project: str | None = None, agent: str | None = None, task_id: int | None = None,
+             before: float | None = None, limit: int = Query(100, ge=1, le=500)):
+    return ov.activity(_db(), project=project, agent=agent, task_id=task_id, before=before, limit=limit)
+
+
+@router.get("/run/{run_id}/log")
+def run_log(run_id: int, offset: int = Query(0, ge=0)):
+    return ov.run_log(run_id, offset)

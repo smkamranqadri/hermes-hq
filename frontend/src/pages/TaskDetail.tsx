@@ -8,6 +8,7 @@ import { Btn } from '../components/Modal'
 import { usePageTitle } from '../usePageTitle'
 import { useState } from 'react'
 import { ActionBtn, FeedbackModal } from '../components/forms'
+import { RunLog } from '../components/RunLog'
 
 
 function Block({ title, children }: { title: string; children: React.ReactNode }) {
@@ -61,6 +62,7 @@ export function TaskDetail() {
             {t.feedback && <Block title="Owner feedback">{t.feedback}</Block>}
             {t.result_paths.length > 0 && <Block title="Results">{t.result_paths.map(p => <p key={p} className="break-all font-mono text-xs">{p}</p>)}</Block>}
           </GlassCard>
+          {latest && <RunLog key={latest.id} runId={latest.id} active={latest.status === 'running'} />}
           <div>
             <Label>Runs · {t.runs.length}</Label>
             {t.runs.length === 0 ? <p className="mt-1 text-xs text-muted">No run yet — this task has never been dispatched.</p> : (
