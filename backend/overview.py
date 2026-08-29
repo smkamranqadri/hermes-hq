@@ -22,13 +22,15 @@ def overview(db_path):
                              "LEFT JOIN projects p ON p.id=a.project_id LEFT JOIN tasks t ON t.id=a.task_id "
                              "ORDER BY a.id DESC LIMIT 10")
         meta = {r["key"]: r["value"] for r in con.execute("SELECT key, value FROM wm_meta")}
+        slots_used = con.execute("SELECT COUNT(*) FROM runs WHERE status='running'").fetchone()[0]
     finally:
         con.close()
     return {
         "stats": {"needsyou": len(by.get("needsyou", [])), "working": len(by.get("working", [])),
                   "queued": len(by.get("queued", [])), "backlog": len(by.get("backlog", [])),
                   "done_today": done_today, "open_reviews": open_reviews,
-                  "paused": meta.get("paused") == "1", "cap": int(meta.get("concurrency_cap") or 0)},
+                  "paused": meta.get("paused") == "1", "cap": int(meta.get("concurrency_cap") or 3),
+                  "slots_used": slots_used},
         "needsyou": by.get("needsyou", []),
         "working": by.get("working", []),
         "queued": by.get("queued", [])[:10],

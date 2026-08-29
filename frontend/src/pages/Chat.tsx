@@ -96,6 +96,7 @@ export function Chat() {
 
   const agentKnown = !!agent
   const chatDisabled = agentKnown && agent.name !== 'orchestrator' && !agent.gateway.enabled
+  const liveRun = detail.data?.live_run ?? null
   return (
     <section className="mx-auto flex max-w-6xl flex-col p-4 sm:p-6">
       <PageHeader crumb="chat" title="Chat" right={<div className="flex flex-wrap items-center gap-2">
@@ -140,7 +141,9 @@ export function Chat() {
               {live?.error && <p className="text-xs text-needsyou">{live.error}</p>}
             </div>
             <div className="mt-3 border-t border-line pt-3">
-              {chatDisabled ? (
+              {liveRun ? (
+                <div className="flex flex-wrap items-center justify-between gap-2 text-xs"><span className="text-working"><span className="hq-dot-live mr-1.5 inline-block size-1.5 rounded-full bg-current" />{profile} is working in this session (run #{liveRun.run_id}{liveRun.task_id ? `, task #${liveRun.task_id}` : ''}) — chat opens when the run ends.</span>{liveRun.task_id && <Link to={`/tasks/${liveRun.task_id}`} className="rounded-full border border-working/60 px-2 py-0.5 font-mono text-[10px] uppercase tracking-wider text-working hover:bg-working/20">Watch log</Link>}</div>
+              ) : chatDisabled ? (
                 <div className="flex flex-wrap items-center justify-between gap-2 text-xs text-muted"><span>Chat is off for <span className="font-mono text-accent-2">{profile}</span> — its gateway is not enabled.</span><ActionBtn url={`/api/agent/${profile}/gateway`} label="Enable chat" body={{ enabled: true }} confirm={`Start the ${profile} gateway? Its .env gets API_SERVER_PORT/KEY if missing.`} /></div>
               ) : (
                 <div className="flex items-end gap-2">

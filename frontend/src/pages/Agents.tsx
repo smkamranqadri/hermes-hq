@@ -23,6 +23,7 @@ function AgentCard({ a }: { a: AgentSummary }) {
           {a.runs_running > 0 ? <Chip tone="accent">{a.runs_running} running</Chip> : !a.installed ? <Chip>not installed</Chip> : a.name === 'orchestrator' ? <Chip tone={a.overlay_applied ? 'accent' : 'muted'}>{a.overlay_applied ? 'HQ soul' : 'stock soul'}</Chip> : null}
         </div>
         <p className="mt-2 line-clamp-2 min-h-[2rem] text-xs text-muted">{a.description || (a.installed ? '—' : 'Install from template to add this agent.')}</p>
+        {a.live.length > 0 && <p className="mt-2 truncate text-xs text-working"><span className="hq-dot-live mr-1.5 inline-block size-1.5 rounded-full bg-current" />run #{a.live[0].run_id}{a.live[0].task_id ? ` · #${a.live[0].task_id} ${a.live[0].task_title ?? ''}` : ''} · {ago(a.live[0].started_at)}</p>}
         <div className="mt-3 flex flex-wrap gap-x-3 gap-y-1 font-mono text-[10px] text-muted">
           <span>{a.runs} runs</span><span>{a.runs_done} done</span><span>{a.runs_failed} failed</span><span>{a.sessions} sessions</span>
         </div>

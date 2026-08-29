@@ -60,6 +60,8 @@ def create_app(dispatcher_enabled: bool = True, interval: float = 30.0, password
             "profiles_dir": wm_store.resolve_profiles_dir(),
             "schema_version": wm_store.get_meta("schema_version", db_path=wm_store.DEFAULT_DB_PATH),
             "paused": wm_store.get_meta("paused", db_path=wm_store.DEFAULT_DB_PATH) == "1",
+            "running": wm_store.running_run_count(db_path=wm_store.DEFAULT_DB_PATH),
+            "cap": int(wm_store.get_meta("concurrency_cap", db_path=wm_store.DEFAULT_DB_PATH) or 3),
             "imported_from": wm_store.get_meta("imported_from", db_path=wm_store.DEFAULT_DB_PATH),
             "dispatcher": dispatcher.status(),
         }

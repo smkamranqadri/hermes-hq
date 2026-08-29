@@ -88,12 +88,29 @@ def sessions(profile, limit=100):
         return []
 
 
-def transcript(profile, session_id, limit=400):
+def transcript(profile, session_id, limit=400, db_path=None):
     _check_profile(profile); _check_session(session_id)
     try:
-        return readers.session_detail(store.resolve_profiles_dir(), profile, session_id, transcript=True, limit=limit)
+        d = readers.session_detail(store.resolve_profiles_dir(), profile, session_id, transcript=True, limit=limit)
     except (ValueError, FileNotFoundError):
         return None
+    if d is not None:
+        d["live_run"] = live_run_for_session(profile, session_id, d.get("title"), db_path)
+    return d
+
+
+def live_run_for_session(profile, session_id, title=None, db_path=None):
+    """The running run that owns this session (by captured id, or by the
+    `wm-run-<id>` marker title while the id is not captured yet), else None."""
+    conn = store._connect(db_path or store.DEFAULT_DB_PATH)
+    try:
+        row = conn.execute(
+            "SELECT r.id AS run_id, r.task_id, r.started_at, t.title AS task_title FROM runs r LEFT JOIN tasks t ON t.id=r.task_id "
+            "WHERE r.status='running' AND r.agent_profile=? AND (r.session_id=? OR (r.session_id IS NULL AND ?=('wm-run-' || r.id))) "
+            "ORDER BY r.id DESC LIMIT 1", (profile, session_id, title or "")).fetchone()
+    finally:
+        conn.close()
+    return dict(row) if row else None
 
 
 # ---- gateway-backed ---------------------------------------------------------

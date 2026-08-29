@@ -22,7 +22,7 @@ export function TaskRow({ t, showProject = true, stacked = false }: { t: Task; s
         )}
       </span>
       <span className={`flex shrink-0 flex-wrap items-center gap-3 ${stacked ? '' : 'sm:justify-end'}`}>
-        <StatusBadge human={{ ...t.human, reason: t.human.reason && t.human.reason.length > 40 ? t.human.reason.split(':')[0] : t.human.reason }} />
+        <StatusBadge human={{ ...t.human, reason: t.human.reason && t.human.reason.length > 40 ? t.human.reason.split(':')[0] : t.human.reason }} live={t.status === 'running'} />
         <span className="font-mono text-[10px] text-muted">{ago(t.updated_at ?? t.created_at)}</span>
       </span>
     </Link>

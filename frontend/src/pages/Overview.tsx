@@ -25,7 +25,7 @@ export function Overview() {
         <>
           <div className="grid grid-cols-2 gap-3 sm:grid-cols-4">
             <Stat label="Needs you" value={d.stats.needsyou} to="/tasks?state=needsyou" tone={d.stats.needsyou ? 'text-needsyou' : ''} />
-            <Stat label="Working" value={d.stats.working} to="/tasks?state=working" tone={d.stats.working ? 'text-working' : ''} />
+            <Stat label={`Working · ${d.stats.slots_used}/${d.stats.cap} slots`} value={d.stats.working} to="/tasks?state=working" tone={d.stats.working ? 'text-working' : ''} />
             <Stat label="Queued" value={d.stats.queued} to="/tasks?state=queued" tone="text-queued" />
             <Stat label="Done · 24h" value={d.stats.done_today} to="/tasks?state=done" tone="text-done" />
           </div>
@@ -41,7 +41,7 @@ export function Overview() {
                 <Link key={t.id} to={`/tasks/${t.id}`} className="glass flex flex-wrap items-center gap-x-3 gap-y-1 rounded-xl px-4 py-3 text-sm hover:bg-raised">
                   <span className="font-mono text-xs text-muted">#{t.id}</span><span className="min-w-0 basis-full truncate font-medium sm:flex-1 sm:basis-auto">{t.title}</span>
                   <Agent name={t.last_run?.agent_profile ?? t.assignee_profile} />
-                  <StatusBadge human={t.human} />
+                  <StatusBadge human={t.human} live={t.status === 'running'} />
                   <span className="font-mono text-[10px] text-muted">{t.last_run?.started_at ? `since ${ago(t.last_run.started_at)}` : ''}</span>
                 </Link>))}</div> : <Empty title="No agent working right now" />}
               <div className="mt-6 mb-2 flex items-center gap-2"><StatusBadge human={{ state: 'queued' }} compact /><Label>{d.stats.queued}</Label></div>
