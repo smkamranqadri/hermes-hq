@@ -2,10 +2,11 @@
 all policy (release gate, rework path, refusals). ValueError from the engine
 becomes a 409 with the engine's own message, never a fabricated success."""
 from fastapi import APIRouter, HTTPException, Request, Response
+from fastapi.responses import StreamingResponse
 from pydantic import BaseModel, Field
 
 from backend import auth as A
-from backend import agents as ag, gateways as gw, stop as stopmod, tasks as tq
+from backend import agents as ag, chat, gateways as gw, stop as stopmod, tasks as tq
 from core import wm_dispatch, wm_store as store
 
 router = APIRouter(prefix="/api")
@@ -225,6 +226,41 @@ class GatewayIn(BaseModel):
 @router.post("/agent/{name}/gateway")
 def agent_gateway(name: str, body: GatewayIn):
     return {"gateway": _engine(gw.set_enabled, name, body.enabled)}
+
+
+# ---- chat --------------------------------------------------------------
+class NewSession(BaseModel):
+    title: str | None = None
+
+
+class ChatIn(BaseModel):
+    message: str
+
+
+def _chat(fn, *a, **kw):
+    try:
+        return fn(*a, db_path=_db(), **kw)
+    except ValueError as e:
+        raise HTTPException(409, str(e))
+    except chat.GatewayError as e:
+        raise HTTPException(502, str(e))
+
+
+@router.post("/chat/{profile}/sessions")
+def chat_new_session(profile: str, body: NewSession | None = None):
+    return _chat(chat.create_session, profile, title=(body.title if body else None))
+
+
+@router.post("/chat/{profile}/{session_id}/stop/{run_id}")
+def chat_stop(profile: str, session_id: str, run_id: str):
+    return _chat(chat.stop_turn, profile, run_id)
+
+
+@router.post("/chat/{profile}/{session_id}")
+def chat_send(profile: str, session_id: str, body: ChatIn):
+    gen = _chat(chat.stream_turn, profile, session_id, body.message)
+    return StreamingResponse(gen, media_type="text/event-stream",
+                             headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"})
 
 
 # ---- system ------------------------------------------------------------
