@@ -4,9 +4,8 @@
 **hermes-hq is the live control plane since 2026-08-29 13:40 UTC.** `hermes-hq serve --host 0.0.0.0 --port 9010 --interval 20` with the dispatcher ON (log `/opt/data/hermes-hq-serve.log`, password `/opt/data/hermes-hq/password`). Old WM crons paused (not deleted): `dfe30ff9e8bf` wm-dispatch, `040334fe79ae` wm completion watchdog, `b84db989076d` wm-planning-pickup. Rollback = `hermes cron resume <id>` ×3 and stop hermes-hq; old `/opt/data/work-manager/` untouched. Legacy dashboard :9009 still up but stale.
 
 ## Now
-Task: **Group 3b Chat** (`kis/intent/Group3Plan.md`), not started. Group 3a done 2026-08-29 (stop-run, templates, agents API, gateways, Agents UI).
-Plan for 3b: `POST /api/chat/{profile}` SSE proxy to the profile gateway (`gateways.ensure_running` + `touch`, `stream:true`, `X-Hermes-Session-Id`), `GET /api/agent/{name}/sessions`, `GET /api/session/{profile}/{id}` (transcript from `state.db` via `readers.session_detail`); Chat page (agent picker, session list, streaming transcript, resume), Task detail "Open session" (disabled while running), Project "Chat about this project".
-Verification: pytest with a fake SSE gateway; real chat against coder's gateway on this box; Playwright 1440/390.
+Task: **Group 3b Chat** — plan approved 2026-08-29 (Phase mode, 3 sub-slices in `kis/intent/Group3Plan.md`), not started. Ledger: [ ] proxy · [ ] Chat page · [ ] Task→session. Group 3a done 2026-08-29 (stop-run, templates, agents API, gateways, Agents UI).
+Verification: pytest with a fake gateway (sessions + SSE), real chat with coder and orchestrator on this box, Playwright 1440/390 incl. a streaming screenshot and Task→session.
 
 ## Next
 Group 3b Chat (SSE proxy + Chat page), then Group 4 direct chat scopes.

@@ -9,15 +9,22 @@ Decisions: chat via the Hermes gateway HTTP API with SSE streaming (like hermes-
 - [x] DONE 2026-08-29 — `backend/gateways.py` — **revised 2026-08-29 (pre-flight + owner rule: never assume docker/s6):** supervisor-agnostic. hermes-hq ensures `API_SERVER_PORT`/`API_SERVER_KEY` in the profile `.env` (lines marked `# hermes-hq`; ports analyst 8650 … reviewer 8655), asks the platform first (`hermes --profile X gateway start|stop` — s6 here, systemd/launchd elsewhere) and, when no service exists, runs `hermes --profile X gateway run` as a detached child it owns (pid in wm_meta, killed on stop/exit); checks health with `GET /v1/models` + bearer key, idle-stops (15 min since last chat use) from a small sweeper thread, and on serve exit stops the specialist gateways it started. Default profile = `:8642` + key from `$HERMES_HOME/.env` (key generated only if absent); stopped only if hermes-hq spawned it. `POST /api/agent/{name}/gateway {enabled}`; `GET /api/agents` shows `gateway.running`.
 - [x] DONE 2026-08-29 — UI: `/agents` cards (description, run stats, gateway dot, orchestrator soul chip) + `+ Agent` modal (templates, Install / installed) + `Apply Orchestrator soul to default` (shown until applied); `/agents/:name` detail (Enable/Disable chat, last 50 runs → task links, last 50 sessions, home path). `ActionBtn` gained `body`.
 
-## 3b — Chat — ACTIVE (next to plan/act)
-- `POST /api/chat/{profile}` `{message, session_id?}` → SSE proxy (`stream:true`, `X-Hermes-Session-Id`), returns session id in a header/first event; `GET /api/agent/{name}/sessions`, `GET /api/session/{profile}/{id}` (transcript from `state.db`).
-- Chat page: agent picker, session list, streaming transcript, resume; "Open session" from Task detail (disabled while the task is running — the agent's own turn would interleave); "Chat about this project" from Project detail.
+## 3b — Chat — ACTIVE (approved 2026-08-29, Phase mode)
+Decisions: use the gateway **session API** (not /v1/chat/completions): structured SSE with text deltas and tool events; transcripts read from the profile `state.db` (works with the gateway off, sees dispatched-run sessions); gateway auto-starts on first message only when chat is enabled for the agent (else inline "Enable chat"); orchestrator chat via the default gateway `:8642` + root key; project chat deferred to Group 4.
+
+Sub-slices (each with proof):
+1. [ ] **Proxy** — `backend/chat.py`: `GET /api/agent/{name}/sessions` (state.db RO), `GET /api/session/{profile}/{id}` (transcript + usage via `readers.session_detail`), `POST /api/chat/{profile}/sessions {title?}` → `gateways.ensure_running` + gateway `POST /api/sessions` → `{id}`, `POST /api/chat/{profile}/{session_id} {message}` → proxy `POST /api/sessions/{id}/chat/stream`, forward SSE bytes unbuffered with the gateway's own event names, `gateways.touch()` per event; 409 (engine message) when chat disabled, 502 on gateway error; `POST /api/chat/{profile}/{session_id}/stop` → gateway `/v1/runs/{run_id}/stop` (run id captured from `run.started`). Keys never leave the server. pytest with a fake gateway (sessions + SSE).
+2. [ ] **Chat page** — `/chat` and `/chat/:profile/:id`: agent picker (installed + gateway dot), session list, transcript (user/assistant/tool rows, tool events collapsed), composer, streaming render, Stop, inline "Enable chat" when disabled; refetch transcript from state.db after the turn. Playwright 1440/390 with a streaming screenshot.
+3. [ ] **Task → session** — Task detail "Open session" → `/chat/<assignee>/<run session id>` (disabled while the task is running). Proof: continue a done task's session for real.
+
+Out of scope: project chat (Group 4), model picker, fork/rename/delete sessions, images, voice.
+Risks: sending into a CLI-created session (verify with the first real message; fallback `POST /api/sessions {"id": same}` upsert); long turns vs the 15-min idle sweeper (touch per event); SSE buffering through the Vite dev proxy (verify on :9010).
 
 ## Acceptance
 - Stop: processes gone, run failed with note, task manual/stalled, activity written.
 - Agents API lists installed + templates with gateway state; install on a scratch HERMES_HOME creates the profile via the real CLI with SOUL + skill present.
 - Enable chat for coder: `.env` gains PORT/KEY, gateway child healthy through hermes-hq; disable stops it; no orphans after serve exit.
-- Chat streams tokens; second message resumes the same session; transcript from `state.db` matches; a done task's session can be continued.
+- Chat streams tokens and tool events; second message resumes the same session; transcript from `state.db` matches what streamed; a done task's session can be continued; a disabled agent shows inline Enable chat; orchestrator chat via :8642 works; no gateway key in any response.
 - pytest with a fake SSE gateway; Playwright 1440/390: Agents, Agent detail, Chat streaming, Task→session.
 
 Out of scope: files/terminal/memory/skills/MCP, schedules, multi-user, gateway pools, voice.
