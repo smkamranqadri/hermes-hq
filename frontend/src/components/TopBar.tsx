@@ -30,15 +30,15 @@ export function TopBar() {
   const live = sys.data?.dispatcher?.alive
   return (
     <header className="glass sticky top-0 z-20 flex flex-wrap items-center gap-x-3 border-x-0 border-t-0 px-3 py-1.5 sm:h-16 sm:gap-x-4 sm:px-4 sm:py-2 sm:flex-nowrap">
-      <div className="flex h-10 min-w-0 shrink-0 items-center gap-2 sm:h-auto sm:gap-2.5">
+      <div className="flex h-10 min-w-0 shrink-0 items-center gap-2 sm:h-auto sm:gap-2.5" title="Hermes // HQ">
         <img src="/icon.svg" alt="" className="size-[26px] drop-shadow-[0_0_6px_var(--hq-accent-2)]" />
-        <span className="hq-wordmark truncate text-xs font-bold uppercase sm:text-sm">Hermes // HQ</span>
+        <span className="hq-wordmark hidden truncate text-xs font-bold uppercase min-[420px]:inline sm:text-sm">Hermes // HQ</span>
         <span className="hidden rounded-full border border-line px-1.5 py-0.5 font-mono text-[10px] text-muted sm:inline">v{sys.data?.version ?? '—'}</span>
       </div>
       <nav className="order-last mb-1 flex basis-full items-center gap-1 overflow-x-auto rounded-full border border-line bg-glass p-1 [scrollbar-width:none] sm:order-none sm:mx-auto sm:mb-0 sm:basis-auto">
         {TABS.map(([label, to]) => (
           <NavLink key={to} to={to} end={to === '/'}
-            className={({ isActive }) => clsx('rounded-full px-3.5 py-1.5 text-sm whitespace-nowrap transition-colors',
+            className={({ isActive }) => clsx('rounded-full px-2.5 py-1 text-[13px] whitespace-nowrap transition-colors sm:px-3.5 sm:py-1.5 sm:text-sm',
               isActive ? 'bg-fg font-semibold text-bg' : 'text-muted hover:text-fg')}>
             {label}
           </NavLink>

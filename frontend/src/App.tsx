@@ -70,25 +70,25 @@ function System() {
           </div>
         </div>
       </GlassCard>
-      {st.isLoading && <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-4"><Loading rows={4} card /></div>}
+      {st.isLoading && <div className="grid grid-cols-2 gap-3 lg:grid-cols-4"><Loading rows={4} card /></div>}
       {x && (
         <>
           <p className="mb-2 font-mono text-[10px] uppercase tracking-widest text-muted">Hermes</p>
-          <div className="mb-4 grid gap-3 sm:grid-cols-2 lg:grid-cols-4">
+          <div className="mb-4 grid grid-cols-2 gap-3 lg:grid-cols-4">
             <Tile label="Gateway :8642" value={gwOk ? 'OK' : 'DOWN'} tone={gwOk ? 'ok' : 'err'} sub={gwOk ? `hermes-agent ${x.hermes.gateway.version}` : x.hermes.gateway?.error} />
             <Tile label="Dashboard :9119" value={x.hermes.dashboard?.gateway_state ?? x.hermes.dashboard?.error ?? '—'} tone={x.hermes.dashboard?.gateway_running ? 'ok' : 'warn'} sub={x.hermes.dashboard?.version ? `v${x.hermes.dashboard.version}` : undefined} />
             <Tile label="Agent processes" value={procs.reduce((a, [, n]) => a + n, 0)} sub={procs.length ? procs.map(([p, n]) => `${p}×${n}`).join(' · ') : 'none running'} />
             <Tile label="Profiles" value={x.hermes.profiles.length} sub={x.hermes.profiles.join(', ')} />
           </div>
           <p className="mb-2 font-mono text-[10px] uppercase tracking-widest text-muted">Store</p>
-          <div className="mb-4 grid gap-3 sm:grid-cols-2 lg:grid-cols-4">
+          <div className="mb-4 grid grid-cols-2 gap-3 lg:grid-cols-4">
             <Tile label="Tasks" value={x.store?.counts.tasks ?? '—'} sub={`${x.store?.counts.projects} projects · ${x.store?.counts.goals} goals`} />
             <Tile label="Runs" value={x.store?.counts.runs ?? '—'} sub={`${x.store?.runs_running ?? 0} running · ${x.store?.counts.reviews} reviews`} tone={x.store?.runs_running ? 'ok' : undefined} />
             <Tile label="Activity" value={x.store?.counts.activity ?? '—'} sub={x.store?.last_activity ? `last ${new Date(x.store.last_activity * 1000).toLocaleString()}` : 'none'} />
             <Tile label="On disk" value={fmtB((x.store?.db_bytes ?? 0) + x.runs_dir.bytes)} sub={`db ${fmtB(x.store?.db_bytes)} · runs ${fmtB(x.runs_dir.bytes)}`} />
           </div>
           <p className="mb-2 font-mono text-[10px] uppercase tracking-widest text-muted">Host</p>
-          <div className="mb-4 grid gap-3 sm:grid-cols-2 lg:grid-cols-4">
+          <div className="mb-4 grid grid-cols-2 gap-3 lg:grid-cols-4">
             <Tile label="Load" value={x.host.load ? x.host.load.map((n: number) => n.toFixed(2)).join(' ') : '—'} sub={`${x.host.cpus} cpus`} tone={x.host.load && x.host.load[0] > (x.host.cpus ?? 1) ? 'warn' : undefined} />
             <Tile label="Memory" value={memPct != null ? `${memPct}%` : '—'} sub={`${fmtB(x.host.mem?.available)} free of ${fmtB(x.host.mem?.total)}`} tone={memPct != null && memPct > 90 ? 'warn' : undefined} />
             <Tile label="Disk" value={diskPct != null ? `${diskPct}%` : '—'} sub={`${fmtB(x.host.disk_hq?.free)} free · ${x.host.disk_hq?.path}`} tone={diskPct != null && diskPct > 90 ? 'warn' : undefined} />

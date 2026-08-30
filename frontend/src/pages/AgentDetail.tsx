@@ -1,3 +1,4 @@
+import { useState } from 'react'
 import { Link, useParams } from 'react-router-dom'
 import { useAgent, ago, when } from '../api'
 import { GlassCard } from '../components/GlassCard'
@@ -11,6 +12,7 @@ export function AgentDetail() {
   const name = useParams().name ?? ''
   const q = useAgent(name)
   const a = q.data
+  const [shown, setShown] = useState(30)
   usePageTitle(a ? `Agent ${a.name}` : 'Agent')
   if (q.isLoading) return <section className="mx-auto max-w-6xl p-4 sm:p-6"><Loading rows={1} /><div className="mt-4 grid gap-4 lg:grid-cols-2"><Loading rows={3} /><Loading rows={3} /></div></section>
   if (q.isError || !a) return <section className="mx-auto max-w-6xl p-6"><Empty error title={`Could not load /api/agent/${name}`} note={String(q.error ?? '404')} /></section>
@@ -44,14 +46,14 @@ export function AgentDetail() {
         </div>}
         {a.history.length === 0 && <p className="mt-2 text-xs text-muted">Nothing yet — no runs and no sessions in this profile's state.db.</p>}
         <ul className="mt-2 divide-y divide-line">
-          {a.history.filter(h => !(h.run && h.run.status === 'running')).map((h, i) => {
+          {a.history.filter(h => !(h.run && h.run.status === 'running')).slice(0, shown).map((h, i) => {
             const s = h.session, r = h.run
             const title = s ? (s.title || s.id) : `run #${r?.id} (no session)`
             return (
               <li key={s?.id ?? `run-${r?.id ?? i}`} className="min-w-0 py-2 text-xs">
                 <div className="flex min-w-0 items-center gap-2">
                   {r ? <StatusBadge status={r.status} compact /> : <Chip tone={h.kind === 'chat' ? 'accent' : 'muted'}>{h.kind}</Chip>}
-                  <span className="min-w-0 flex-1 truncate">{s ? <Link to={`/chat/${a.name}/${s.id}`} className="hover:underline">{title}</Link> : title}</span>
+                  <span className="min-w-0 flex-1 truncate">{s ? <Link to={`/chat/${a.name}/${s.id}`} className="block truncate hover:underline">{title}</Link> : title}</span>
                   <span className="shrink-0 text-muted">{ago(h.ts)}</span>
                 </div>
                 <div className="mt-0.5 flex flex-wrap items-center gap-x-3 gap-y-0.5 font-mono text-[10px] text-muted">
