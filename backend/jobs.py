@@ -161,9 +161,12 @@ def _trim():
             pass
 
 
+SURVIVE_SHUTDOWN = ("hq-update",)     # the updater must outlive the restart it triggers
+
+
 def stop_all():
     with LOCK:
-        running = [j for j in JOBS.values() if j.status == "running"]
+        running = [j for j in JOBS.values() if j.status == "running" and j.kind not in SURVIVE_SHUTDOWN]
     for j in running:
         j.stop()
 

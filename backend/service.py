@@ -69,34 +69,43 @@ def detect() -> str:
     return "none"
 
 
+def _sq(v) -> str:
+    """POSIX single-quote for the s6 run script."""
+    return "'" + str(v).replace("'", "'\\''") + "'"
+
+
 def serve_cmd(flags: dict) -> str:
+    import shlex
     parts = [hq_bin(), "serve", "--host", str(flags.get("host", "127.0.0.1")), "--port", str(flags.get("port", 9010)),
              "--interval", str(flags.get("interval", 30.0))]
-    return " ".join(parts)
+    return " ".join(shlex.quote(x) for x in parts)
 
 
 # -- templates ------------------------------------------------------------------------------------
 def systemd_unit(flags: dict) -> str:
-    env = "".join("Environment=%s=%s\n" % (k, v) for k, v in _kept_env().items())
+    env = "".join('Environment="%s=%s"\n' % (k, str(v).replace('"', '\\"')) for k, v in _kept_env(flags).items())
+    # KillMode=process: a restart must kill only the server, not the detached updater child
     return ("[Unit]\nDescription=hermes-hq control plane\nAfter=network.target\n\n"
-            "[Service]\nType=simple\nWorkingDirectory=%s\n%sExecStart=%s\nRestart=on-failure\nRestartSec=3\n\n"
+            "[Service]\nType=simple\nWorkingDirectory=%s\n%sExecStart=%s\nRestart=on-failure\nRestartSec=3\nKillMode=process\n\n"
             "[Install]\nWantedBy=multi-user.target\n" % (repo_root(), env, serve_cmd(flags)))
 
 
 def s6_run_script(flags: dict) -> str:
-    env = "".join("export %s='%s'\n" % (k, v) for k, v in _kept_env().items())
-    return "#!/bin/sh\n# hermes-hq — written by `hermes-hq service install`\nset -e\ncd '%s'\n%sexec %s 2>&1\n" % (repo_root(), env, serve_cmd(flags))
+    env = "".join("export %s=%s\n" % (k, _sq(v)) for k, v in _kept_env(flags).items())
+    return "#!/bin/sh\n# hermes-hq — written by `hermes-hq service install`\nset -e\ncd %s\n%sexec %s 2>&1\n" % (_sq(repo_root()), env, serve_cmd(flags))
 
 
 def s6_log_script() -> str:
     return "#!/bin/sh\nmkdir -p '%s'\nexec s6-log -b n10 s5000000 T '%s'\n" % (s6_log_dir(), s6_log_dir())
 
 
-def _kept_env() -> dict:
+def _kept_env(flags: dict | None = None) -> dict:
     keep = {}
     for k in ("HERMES_HQ_HOME", "HERMES_HOME", "WM_PROFILES_DIR", "WM_PROJECTS_ROOT", "HERMES_HQ_PASSWORD_FILE"):
         if os.environ.get(k):
             keep[k] = os.environ[k]
+    if flags:          # bake the port so the updater's health check and children agree with ExecStart
+        keep["HERMES_HQ_PORT"] = str(flags.get("port", 9010))
     return keep
 
 
@@ -120,8 +129,11 @@ def install(flags: dict, out=print) -> int:
     sup = detect()
     if sup == "systemd":
         unit = os.path.join(systemd_dir(), SERVICE + ".service")
-        with open(unit, "w") as f:
-            f.write(systemd_unit(flags))
+        try:
+            with open(unit, "w") as f:
+                f.write(systemd_unit(flags))
+        except OSError as e:
+            out("cannot write %s (%s) — run as root?" % (unit, e)); return 1
         for cmd in (["systemctl", "daemon-reload"], ["systemctl", "enable", "--now", SERVICE]):
             code, msg = _run(cmd)
             if code != 0:
@@ -136,7 +148,10 @@ def install(flags: dict, out=print) -> int:
             wrote_etc = False
             out("warning: could not write %s (%s) — the service will not survive a reboot" % (s6_etc_dir(), e))
         live = os.path.join(s6_scan_dir(), SERVICE)
-        _write_service_dir(live, flags)
+        try:
+            _write_service_dir(live, flags)
+        except OSError as e:
+            out("cannot write the scan dir %s (%s) — run as root?" % (live, e)); return 1
         code, msg = _run(["s6-svscanctl", "-a", s6_scan_dir()])
         if code != 0:
             out("s6-svscanctl failed: %s" % msg); return 1
@@ -249,12 +264,21 @@ def set_auto_update(cron: str | None, db_path=None) -> str:
     return val
 
 
+RETRY_WINDOW = 4 * 3600      # how long a runs-blocked window stays open before it is abandoned
+_last_check = 0.0
+
+
 def auto_update_pass(now=None, db_path=None):
     """Dispatcher hook: fire the updater when the auto-update window passes. Skips (and logs a reason)
-    when disabled, not due, the tree is dirty, a WM run is running, or an update is already running."""
+    when disabled, not due, no supervisor can restart us, the tree is dirty, a WM run is running, or
+    an update is already running. The runs-blocked retry is bounded to RETRY_WINDOW."""
+    global _last_check
     from core import schedule as sch
     from core import wm_store as store
     now = now or time.time()
+    if now - _last_check < 55:          # one sqlite/git touch per minute, like cron.minute_pass
+        return None
+    _last_check = now
     cron = auto_update_cron(db_path=db_path)
     if not cron:
         return None
@@ -265,36 +289,38 @@ def auto_update_pass(now=None, db_path=None):
     if now < float(nxt):
         return None
     advance = str(sch.next_fires(cron, sch.DEFAULT_ZONE, 1, now)[0])
+    if detect() == "none":               # a pull without a restart just skews code vs process
+        store._set_meta(NEXT_KEY, advance, db_path=db_path)
+        return {"skipped": "no supervisor to restart under"}
     code, out = _run(["git", "-C", repo_root(), "status", "--porcelain"], timeout=20)
-    running = store.count_running_runs(db_path=db_path)
     if code != 0 or out.strip():
         store._set_meta(NEXT_KEY, advance, db_path=db_path)
         return {"skipped": "dirty tree" if code == 0 else "git failed"}
+    running = store.running_run_count(db_path=db_path)
     if running:
-        # do NOT advance: retry next minute until the runs finish (the window stays open for the day)
+        if now - float(nxt) > RETRY_WINDOW:          # runs kept going all window: give up until tomorrow
+            store._set_meta(NEXT_KEY, advance, db_path=db_path)
+            return {"skipped": "window expired with %d run(s) still running" % running}
         return {"skipped": "%d run(s) running" % running}
     try:
         job = start_update_job("scheduled")
-    except RuntimeError as e:
-        return {"skipped": str(e)}
+    except Exception as e:               # jobs.start raises HTTPException on the cap / missing binary
+        return {"skipped": str(getattr(e, "detail", e))}
     store._set_meta(NEXT_KEY, advance, db_path=db_path)
     return {"job": job.id}
 
 
 def handle_update_result(job, db_path=None):
-    """jobs.on_done for updates: Inbox rows. `info` on a real update, needs_you on failure."""
+    """jobs.on_done for updates. The updater writes its own Inbox rows (it outlives the restart that
+    kills this process, where on_done can never run) — this hook only covers an updater that died
+    without printing a result at all."""
     from core import wm_store as store
-    res = job.result if isinstance(job.result, dict) else {}
-    if job.status == "done" and res.get("noop"):
+    res = job.result if isinstance(job.result, dict) else None
+    if res is not None:          # the updater reported (and notified) itself
         return
-    if job.status == "done":
-        store.add_notification("info", "hermes-hq updated to %s" % (res.get("sha", "?")[:9]),
-                               body=", ".join(res.get("steps", [])), href="/",
-                               source_key="hq-update:%s" % res.get("sha", job.id), db_path=db_path)
-    else:
-        store.add_notification("needs_you", "hermes-hq update failed",
-                               body=(res.get("error") or "see the job log")[:300], href="/",
-                               source_key="hq-update-fail:%s" % job.id, db_path=db_path)
+    store.add_notification("needs_you", "hermes-hq update failed",
+                           body="the updater died without a result — see the job log", href="/",
+                           source_key="hq-update-fail:%s" % job.id, db_path=db_path)
 
 
 def cli(argv, out=print) -> int:
