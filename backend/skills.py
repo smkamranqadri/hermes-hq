@@ -17,19 +17,19 @@ from core import wm_store as store
 
 router = APIRouter(prefix="/api/skills")
 
-NAME_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9_.-]{0,63}$")
-IDENT_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9_./:@#+=-]{0,255}$")
-CATEGORY_RE = re.compile(r"^[a-z0-9][a-z0-9_-]{0,63}$")
+NAME_RE = re.compile(r"[A-Za-z0-9][A-Za-z0-9_.-]{0,63}")
+IDENT_RE = re.compile(r"[A-Za-z0-9][A-Za-z0-9_./:@#+=-]{0,255}")
+CATEGORY_RE = re.compile(r"[a-z0-9][a-z0-9_-]{0,63}")
 
 
 def _name(n: str) -> str:
-    if not NAME_RE.match(n or ""):
+    if not NAME_RE.fullmatch(n or ""):
         raise HTTPException(400, "bad skill name")
     return n
 
 
 def _ident(i: str) -> str:
-    if not IDENT_RE.match(i or "") or ".." in i:
+    if not IDENT_RE.fullmatch(i or "") or ".." in i:
         raise HTTPException(400, "bad skill identifier")
     return i
 
@@ -41,16 +41,17 @@ def _ok(res: dict, default=400):
 
 
 def hermes_argv(profile: str, *args: str) -> list[str]:
-    cmd = [store.resolve_hermes()]
-    if profile != store.ORCHESTRATOR_AGENT:
-        cmd += ["--profile", profile]
-    return cmd + list(args)
+    """Always `--profile` (orchestrator → `default`): Hermes ignores a root-shaped HERMES_HOME and would
+    otherwise follow a sticky <root>/active_profile into some specialist."""
+    return [store.resolve_hermes(), "--profile", store.hermes_profile_arg(profile), *args]
 
 
 def _job(profile: str, kind: str, label: str, *args: str):
     prof, home = memory.home_of(profile)
     memory.invalidate(home)
-    return {"job": jobs.start(kind, label, hermes_argv(prof, "skills", *args), env=memory.bridge_env(home), cwd=memory.hermes_root()).info(tail_bytes=0)}
+    job = jobs.start(kind, label, hermes_argv(prof, "skills", *args), env=memory.bridge_env(home), cwd=memory.hermes_root(),
+                     on_done=lambda j: memory.invalidate(home))
+    return {"job": job.info(tail_bytes=0)}
 
 
 # -- installed --------------------------------------------------------------------------
@@ -93,7 +94,7 @@ class CreateBody(BaseModel):
 @router.post("/create")
 def create_skill(b: CreateBody):
     _, home = memory.home_of(b.profile)
-    if b.category and not CATEGORY_RE.match(b.category):
+    if b.category and not CATEGORY_RE.fullmatch(b.category):
         raise HTTPException(400, "bad category")
     res = _ok(memory.bridge(home, "skills_create", {"name": _name(b.name), "category": b.category, "content": b.content}))
     memory.invalidate(home)
@@ -124,7 +125,7 @@ def hub_sources(profile: str | None = None):
 @router.get("/hub/search")
 def hub_search(q: str = Query(..., min_length=1), source: str = "all", limit: int = 20, profile: str | None = None):
     _, home = memory.home_of(profile)
-    if not re.match(r"^[A-Za-z0-9_-]{1,32}$", source):
+    if not re.fullmatch(r"[A-Za-z0-9_-]{1,32}", source):
         raise HTTPException(400, "bad source")
     return _ok(memory.bridge(home, "hub_search", {"q": q[:200], "source": source, "limit": max(1, min(50, limit))}, timeout=120), 502)
 
@@ -151,7 +152,7 @@ class InstallBody(BaseModel):
 def hub_install(b: InstallBody):
     args = ["install", _ident(b.identifier), "--yes"]
     if b.category:
-        if not CATEGORY_RE.match(b.category):
+        if not CATEGORY_RE.fullmatch(b.category):
             raise HTTPException(400, "bad category")
         args += ["--category", b.category]
     return _job(b.profile or store.ORCHESTRATOR_AGENT, "skill-install", f"Install {b.identifier}", *args)
