@@ -233,8 +233,13 @@ def read_file(root: str, path: str):
     return out
 
 
+# Preview of html inside a sandboxed iframe: opaque origin (no cookies/storage), scripts allowed,
+# but no network calls back to the app and no nested frames.
+PREVIEW_CSP = "sandbox allow-scripts; default-src * data: blob: 'unsafe-inline' 'unsafe-eval'; connect-src 'none'; frame-src 'none'"
+
+
 @router.get("/raw")
-def raw_file(root: str, path: str, download: int = 0):
+def raw_file(root: str, path: str, download: int = 0, preview: int = 0):
     root_real, abs_path = _resolve(root, path)
     if os.path.isdir(abs_path):
         raise HTTPException(400, "is a directory")
@@ -245,12 +250,16 @@ def raw_file(root: str, path: str, download: int = 0):
     name = os.path.basename(abs_path)
     media = mimetypes.guess_type(name)[0] or "application/octet-stream"
     # active content from a checkout must never run on the app origin (review #2)
+    csp = "sandbox; default-src 'none'"
     if media in ("text/html", "application/xhtml+xml", "image/svg+xml"):
-        download = 1
+        if preview and not download:
+            csp = PREVIEW_CSP
+        else:
+            download = 1
     disp = "attachment" if download else "inline"
     headers = {"Content-Disposition": f"{disp}; filename*=UTF-8''{quote(_safe_name(name))}",
                "X-Content-Type-Options": "nosniff",
-               "Content-Security-Policy": "sandbox; default-src 'none'"}
+               "Content-Security-Policy": csp}
     return FileResponse(abs_path, media_type=media, headers=headers)
 
 

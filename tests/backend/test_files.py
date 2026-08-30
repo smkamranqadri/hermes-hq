@@ -141,6 +141,13 @@ def test_raw_active_content_and_dangling(env):
         r = c.get("/api/files/raw", params={"root": "project:alpha", "path": n})
         assert r.status_code == 200 and r.headers["content-disposition"].startswith("attachment"), n
         assert r.headers["x-content-type-options"] == "nosniff" and "sandbox" in r.headers["content-security-policy"]
+    # sandboxed preview: inline, scripts allowed, no network back to the app
+    r = c.get("/api/files/raw", params={"root": "project:alpha", "path": "page.html", "preview": 1})
+    assert r.status_code == 200 and r.headers["content-disposition"].startswith("inline")
+    csp = r.headers["content-security-policy"]
+    assert "sandbox allow-scripts" in csp and "connect-src 'none'" in csp and "allow-same-origin" not in csp
+    r = c.get("/api/files/raw", params={"root": "project:alpha", "path": "page.html", "preview": 1, "download": 1})
+    assert r.headers["content-disposition"].startswith("attachment")
     os.symlink(a / "missing", a / "dangling")
     assert c.get("/api/files/read", params={"root": "project:alpha", "path": "dangling"}).status_code == 404
     assert c.get("/api/files/raw", params={"root": "project:alpha", "path": "dangling"}).status_code == 404
