@@ -4,7 +4,7 @@
 **hermes-hq is the live control plane since 2026-08-29 13:40 UTC** (branch `main`). Process: `nohup .venv/bin/hermes-hq serve --host 0.0.0.0 --port 9010 --interval 20 > /opt/data/hermes-hq-serve.log 2>&1 &` with the dispatcher ON; restart by hand after backend changes (`pkill -f 'hermes-hq serve'` in its own command, then that line). Password file `/opt/data/hermes-hq/password` is `test` for the owner's review (generated one kept in `password.prev`). Frontend builds go live without a restart. Legacy WM rollback recipe: `knowledge/technical.md` → Legacy WM. Latest commit at sync: see `git log`.
 
 ## Now
-Task: **Group 4 — direct chat scopes — COMPLETE 2026-08-30** (`intent/Group4Plan.md`). Next: **Group 4b — Chat polish + notifications** (`intent/Group4bPlan.md`, Phase mode, planned 2026-08-30); 4b-1 … 4b-4, 4b-5.1 and 4b-5.2 DONE 2026-08-30; next 4b-5.3 Web Push (service worker + local VAPID keys + `pywebpush`; needs HTTPS — owner to confirm Tailscale; otherwise skip to 4b-6 mobile) via `/kis:act`. Group 5 files after 4b.
+Task: **Group 4 — direct chat scopes — COMPLETE 2026-08-30** (`intent/Group4Plan.md`). Next: **Group 4b — Chat polish + notifications** (`intent/Group4bPlan.md`, Phase mode, planned 2026-08-30); 4b-1 … 4b-4, 4b-5.1 and 4b-5.2 DONE 2026-08-30; 4b-5.3 Web Push is **deferred**: `tailscale` is not installed on this box and nothing serves HTTPS (checked 2026-08-30), and browsers refuse service workers/push over plain http on a LAN address — owner decides (install Tailscale + `tailscale serve`, or a reverse proxy with a cert); next actionable phase is 4b-6 mobile via `/kis:act`. Group 5 files after 4b.
 Groups 1–4 are complete as of 2026-08-30.
 
 ## Next
