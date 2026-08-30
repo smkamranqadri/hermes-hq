@@ -24,7 +24,7 @@ type FileRead = { root: string; path: string; name: string; kind: 'text' | 'imag
 type Artifact = { path: string; name: string; is_dir: boolean; size: number | null; inside_primary: boolean; rel: string | null; task_id: number; task_title: string; agent: string; run_id: number }
 
 const q = (o: Record<string, string | number | undefined>) => Object.entries(o).filter(([, v]) => v !== undefined && v !== '').map(([k, v]) => `${k}=${encodeURIComponent(String(v))}`).join('&')
-const rawUrl = (root: string, path: string, download = false) => `/api/files/raw?${q({ root, path, download: download ? 1 : undefined })}`
+const rawUrl = (root: string, path: string, download = false, preview = false) => `/api/files/raw?${q({ root, path, download: download ? 1 : undefined, preview: preview ? 1 : undefined })}`
 const fmtSize = (n: number | null) => n == null ? '' : n < 1024 ? `${n} B` : n < 1048576 ? `${(n / 1024).toFixed(1)} KB` : `${(n / 1048576).toFixed(1)} MB`
 const parent = (p: string) => p.includes('/') ? p.slice(0, p.lastIndexOf('/')) : ''
 const base = (p: string) => p.slice(p.lastIndexOf('/') + 1)
@@ -114,7 +114,7 @@ export function Files() {
     <div className="flex min-h-0 flex-1 flex-col">
       <div className="mb-2 flex flex-wrap items-center gap-1.5">
         <select value={root} onChange={e => { setParams({ root: e.target.value, path: '', dir: '' }) }} aria-label="Root"
-          className="min-w-0 flex-1 rounded-lg border border-line bg-inset px-2 py-1.5 text-sm outline-none focus:border-accent">
+          className="hq-select min-w-0 flex-1 appearance-none truncate rounded-lg border border-line bg-inset py-1.5 pl-2 pr-8 text-sm outline-none focus:border-accent">
           {roots.data?.roots.map(r => <option key={r.root} value={r.root} disabled={!r.exists}>{r.label}{r.archived ? ' (archived)' : ''}{r.exists ? '' : ' — missing'}</option>) ?? <option value={root}>{root}</option>}
         </select>
         <Menu button={<span>＋</span>}>
@@ -279,6 +279,7 @@ function Editor({ root, path, onDeleted, onCrumb }: { root: string; path: string
   useEffect(() => { if (f.data?.kind === 'text' && f.data.content !== undefined && loadedMtime === null) { setText(f.data.content); setLoadedMtime(f.data.mtime) } }, [f.data, loadedMtime])
   const dirty = text !== null && f.data?.content !== undefined && text !== f.data.content
   const isMd = /\.(md|markdown)$/i.test(path)
+  const isHtml = /\.(html?|xhtml)$/i.test(path)
 
   const save = useCallback(async (force = false) => {
     if (text === null || saving) return
@@ -323,7 +324,7 @@ function Editor({ root, path, onDeleted, onCrumb }: { root: string; path: string
       </nav>
       {f.data && <span className="hidden shrink-0 font-mono text-[10px] text-muted sm:inline">{fmtSize(f.data.size)}</span>}
       {dirty && <Chip>unsaved</Chip>}
-      {isMd && f.data?.kind === 'text' && <Btn kind="ghost" onClick={() => setPreview(p => !p)}>{preview ? 'Edit' : 'Preview'}</Btn>}
+      {(isMd || isHtml) && f.data?.kind === 'text' && <Btn kind="ghost" onClick={() => setPreview(p => !p)}>{preview ? 'Edit' : 'Preview'}</Btn>}
       {f.data && f.data.kind !== 'text' && <a href={rawUrl(root, path, true)} className="rounded-full border border-line px-3 py-1 font-mono text-[11px] uppercase tracking-wider text-muted hover:text-fg">Download</a>}
       {f.data?.kind === 'text' && !f.data.too_large && <Btn busy={saving} disabled={!dirty} onClick={() => save()}>Save</Btn>}
     </div>
@@ -339,6 +340,11 @@ function Editor({ root, path, onDeleted, onCrumb }: { root: string; path: string
   if (d.kind === 'image') body = <div className="flex min-h-0 flex-1 items-center justify-center overflow-auto rounded-lg bg-inset p-3"><img src={rawUrl(root, path)} alt={d.name} className="max-h-full max-w-full object-contain" /></div>
   else if (d.kind === 'pdf') body = <Empty title={d.name} note={`PDF · ${fmtSize(d.size)}`} />
   else if (d.kind === 'binary' || d.too_large) body = <Empty title={d.name} note={d.too_large ? `Text files over 1 MB open read-only via Download (${fmtSize(d.size)}).` : `Binary file · ${fmtSize(d.size)}`} />
+  else if (preview && isHtml) body = (
+    <div className="flex min-h-0 flex-1 flex-col overflow-hidden rounded-lg border border-line-subtle bg-white">
+      {dirty && <p className="bg-inset px-3 py-1 font-mono text-[10px] text-muted">Preview shows the saved file — save to refresh.</p>}
+      <iframe key={loadedMtime ?? 0} title={d.name} sandbox="allow-scripts" src={rawUrl(root, path, false, true)} className="min-h-0 flex-1 w-full" />
+    </div>)
   else if (preview) body = <div className="min-h-0 flex-1 overflow-auto rounded-lg bg-inset p-4 text-sm"><Markdown text={text ?? ''} /></div>
   else body = (
     <div className="min-h-0 flex-1 overflow-hidden rounded-lg border border-line-subtle bg-inset" data-editor>
