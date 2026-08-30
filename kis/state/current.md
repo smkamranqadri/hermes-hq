@@ -4,7 +4,8 @@
 **hermes-hq is the live control plane since 2026-08-29 13:40 UTC** (branch `main`). Process: `nohup .venv/bin/hermes-hq serve --host 0.0.0.0 --port 9010 --interval 20 > /opt/data/hermes-hq-serve.log 2>&1 &` with the dispatcher ON; restart by hand after backend changes (`pkill -f 'hermes-hq serve'` in its own command, then that line). Password file `/opt/data/hermes-hq/password` is `test` for the owner's review (generated one kept in `password.prev`). Frontend builds go live without a restart. HTTPS for the phone: `tailscale serve` on the owner's Mac fronts this VM's `:9010` (Knowledge → Web Push). Legacy WM rollback recipe: `knowledge/technical.md` → Legacy WM.
 
 ## Now
-Task: **Group 6 — Browsers**, sub-phase **6-1 Terminal** (`intent/Group6Plan.md`, approved 2026-08-30, Phase mode). Next command: `/kis:act`.
+Task: **Group 6 — Browsers**, sub-phase **6-1 Terminal** (`intent/Group6Plan.md`, approved 2026-08-30, Phase mode) — IN PROGRESS 2026-08-30.
+Ledger: [ ] 1 backend `terminal.py` (WS auth is route-level: `AuthMiddleware` never sees WebSocket handshakes) + tests → [ ] 2 desktop page/tabs/panel → [ ] 3 phone → [ ] security review → proof on live :9010 (Playwright 1440 + 390 `isMobile`).
 Groups 1–5 are complete as of 2026-08-30.
 
 ## Next
