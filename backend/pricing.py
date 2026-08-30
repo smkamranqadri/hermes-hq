@@ -144,3 +144,71 @@ def providers():
     """[{id, name, models: n}] from models.dev, sorted by name."""
     _load()
     return sorted(({"id": p["id"], "name": p["name"], "models": len(p["models"])} for p in _providers.values()), key=lambda p: p["name"].lower())
+
+
+# ---- Hermes-configured providers (owner: the picker lists what Hermes has, not the whole catalogue) ----
+# Hermes provider id -> models.dev provider id for model suggestions (None = free text, all ids)
+HERMES_TO_MODELS_DEV = {
+    "openai-codex": "openai", "openai-api": "openai", "anthropic": "anthropic", "copilot": "github-copilot",
+    "copilot-acp": "github-copilot", "gemini": "google", "xai-oauth": "xai", "xai": "xai", "openrouter": "openrouter",
+    "opencode-go": "opencode-go", "opencode": "opencode", "qwen-oauth": "alibaba", "deepseek": "deepseek",
+    "mistral": "mistral", "groq": "groq", "minimax-oauth": "minimax", "minimax": "minimax", "nous": None,
+    "lmstudio": None, "ollama": None,
+}
+_REGISTRY_NAMES = {}
+
+
+def _registry_names():
+    """{id: display name} parsed from Hermes' provider registry when the source is readable; ids otherwise."""
+    if _REGISTRY_NAMES:
+        return _REGISTRY_NAMES
+    import re
+    for path in ("/opt/hermes/hermes_cli/auth.py", os.path.join(os.environ.get("HERMES_SRC", ""), "hermes_cli", "auth.py")):
+        try:
+            with open(path) as f:
+                src = f.read()
+        except OSError:
+            continue
+        for m in re.finditer(r'id="([a-z0-9-]+)",\s*name="([^"]+)"', src):
+            _REGISTRY_NAMES[m.group(1)] = m.group(2)
+        break
+    return _REGISTRY_NAMES
+
+
+def hermes_providers(profile=None):
+    """Providers Hermes can route for this profile: auth.json `providers` + `credential_pool` (profile file first,
+    then the root one) + config.yaml `model.provider`. [{id, name, active}]."""
+    homes = []
+    if profile and profile != store.ORCHESTRATOR_AGENT:
+        homes.append(os.path.join(store.resolve_profiles_dir(), profile))
+    homes.append(store.hermes_home())
+    ids, active, cfg_active = [], None, None
+    for home in homes:
+        try:
+            with open(os.path.join(home, "auth.json")) as f:
+                a = json.load(f)
+        except (OSError, ValueError):
+            a = {}
+        for k in list((a.get("providers") or {}).keys()) + list((a.get("credential_pool") or {}).keys()):
+            if k not in ids:
+                ids.append(k)
+        active = active or a.get("active_provider")
+        try:
+            import yaml
+            with open(os.path.join(home, "config.yaml")) as f:
+                c = yaml.safe_load(f) or {}
+            p = (c.get("model") or {}).get("provider") if isinstance(c.get("model"), dict) else None
+            if p and p not in ids:
+                ids.append(p)
+            cfg_active = cfg_active or p
+        except Exception:
+            pass
+    active = cfg_active or active   # config.yaml model.provider is what the agent actually runs with
+    names = _registry_names()
+    return [{"id": i, "name": names.get(i, i), "active": i == active} for i in ids]
+
+
+def models_for_hermes_provider(hermes_id, prefix=None, limit=200):
+    _load()
+    md = HERMES_TO_MODELS_DEV.get(hermes_id, hermes_id)
+    return model_ids(prefix, limit=limit, provider=md if md in _providers else None)

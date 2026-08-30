@@ -95,14 +95,14 @@ function ContextLine({ d, opts, onOptions }: { d: SessionDetail; opts: TurnOptio
 }
 
 /** Model / reasoning effort / fast for this session; models suggested from models.dev, free text allowed. */
-function OptionsPanel({ opts, current, onChange, onClose }: { opts: TurnOptions; current: string | null; onChange: (o: TurnOptions) => void; onClose: () => void }) {
+function OptionsPanel({ opts, current, profile, onChange, onClose }: { opts: TurnOptions; current: string | null; profile: string; onChange: (o: TurnOptions) => void; onClose: () => void }) {
   const [q, setQ] = useState(opts.model ?? '')
-  const models = useModels(opts.provider ? '' : (q.length >= 2 ? q : ''), opts.provider ?? '')
+  const models = useModels(opts.provider ? '' : (q.length >= 2 ? q : ''), opts.provider ?? '', profile)
   return (
     <div className="mt-2 grid gap-2 rounded-lg border border-line bg-inset p-2 text-xs sm:grid-cols-[auto_1fr_auto_auto_auto]">
       <label className="flex items-center gap-2"><span className="text-muted">Provider</span>
-        <select value={opts.provider ?? ''} onChange={e => onChange({ provider: e.target.value || undefined })} className="hq-select max-w-[11rem] appearance-none rounded-md border border-line bg-glass py-1 pl-2 pr-7 font-mono text-[11px] outline-none focus:border-accent" title="Provider for this session (routed through Hermes' provider credentials); blank = gateway default">
-          <option value="">default</option>{(models.data?.providers ?? []).map(p => <option key={p.id} value={p.id}>{p.name}</option>)}</select></label>
+        <select value={opts.provider ?? ''} onChange={e => onChange({ provider: e.target.value || undefined })} className="hq-select max-w-[11rem] appearance-none rounded-md border border-line bg-glass py-1 pl-2 pr-7 font-mono text-[11px] outline-none focus:border-accent" title="Providers Hermes has credentials for (auth.json / config.yaml of this agent); blank = the agent's default">
+          <option value="">default{(models.data?.providers ?? []).find(p => p.active) ? ` (${(models.data?.providers ?? []).find(p => p.active)!.name})` : ''}</option>{(models.data?.providers ?? []).map(p => <option key={p.id} value={p.id}>{p.name}</option>)}</select></label>
       <label className="flex min-w-0 items-center gap-2"><span className="shrink-0 text-muted">Model</span>
         <input list="hq-models" value={q} placeholder={current ? `${current} (gateway default)` : 'gateway default'} onChange={e => setQ(e.target.value)} onBlur={() => onChange({ model: q.trim() || undefined })} onKeyDown={e => { if (e.key === 'Enter') { onChange({ model: q.trim() || undefined }); onClose() } }} className="min-w-0 flex-1 rounded-md border border-line bg-glass px-2 py-1 font-mono text-[11px] outline-none focus:border-accent" />
         <datalist id="hq-models">{(models.data?.models ?? []).slice(0, 50).map(m => <option key={m} value={m} />)}</datalist></label>
@@ -424,7 +424,7 @@ export function Chat() {
                 </div>
               )}
               {detail.data && <ContextLine d={detail.data} opts={opts} onOptions={() => setShowOpts(o => !o)} />}
-              {showOpts && profile && <OptionsPanel opts={opts} current={detail.data?.model ?? null} onChange={setOpt} onClose={() => setShowOpts(false)} />}
+              {showOpts && profile && <OptionsPanel opts={opts} current={detail.data?.model ?? null} profile={profile} onChange={setOpt} onClose={() => setShowOpts(false)} />}
             </div>
           </GlassCard>
         </div>
