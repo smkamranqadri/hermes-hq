@@ -113,8 +113,10 @@ def task_chat_sessions(task_id: int):
 @router.get("/chat/models")
 def chat_models(q: str = Query("", max_length=80), provider: str = Query("", max_length=80), profile: str = Query("", max_length=80)):
     from backend import pricing
-    return {"models": pricing.models_for_hermes_provider(provider, q or None) if provider else pricing.model_ids(q or None),
-            "providers": pricing.hermes_providers(profile or None), "efforts": list(chat.EFFORTS)}
+    provs = pricing.hermes_providers(profile or None)
+    pid = provider or next((p["id"] for p in provs if p.get("active")), None)
+    models = pricing.hermes_models_for_provider(pid, profile or None, q or None) if pid else []
+    return {"provider": pid, "models": models, "providers": provs, "efforts": list(chat.EFFORTS)}
 
 
 @router.get("/chat/search")

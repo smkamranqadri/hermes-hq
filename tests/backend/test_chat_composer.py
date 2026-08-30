@@ -55,8 +55,8 @@ def test_steer_passthrough_and_models_list(env):
     import json as _j
     os.environ["HERMES_HOME"] = str(root)   # providers are read from <HERMES_HOME>/auth.json, not the live box
     m = c.get("/api/chat/models?q=luna").json()
-    assert "high" in m["efforts"] and isinstance(m["models"], list) and m["providers"] == []
-    # providers come from Hermes auth.json / config.yaml, per profile
+    assert "high" in m["efforts"] and m["models"] == [] and m["providers"] == [] and m["provider"] is None
+    # providers come from Hermes auth.json / config.yaml, per profile; models from Hermes' own caches
     (root / "auth.json").write_text(_j.dumps({"providers": {"openai-codex": {}}, "credential_pool": {"nous": {}}, "active_provider": "openai-codex"}))
     (root / "profiles" / "coder" / "auth.json").write_text(_j.dumps({"credential_pool": {"opencode-go": {}}}))
     (root / "profiles" / "coder" / "config.yaml").write_text("model:\n  default: x\n  provider: copilot\n")
@@ -64,3 +64,13 @@ def test_steer_passthrough_and_models_list(env):
     assert ids == ["openai-codex", "nous"]
     ids = [p["id"] for p in c.get("/api/chat/models?profile=coder").json()["providers"]]
     assert ids == ["opencode-go", "copilot", "openai-codex", "nous"]
+    (root / "provider_models_cache.json").write_text(_j.dumps({"openai-codex": {"models": ["gpt-5.6-luna", "gpt-5.5"]}}))
+    (root / "cache").mkdir(exist_ok=True)
+    (root / "cache" / "model_catalog.json").write_text(_j.dumps({"providers": {"openai-codex": {"models": [{"id": "gpt-5.5", "description": "older"}, {"id": "gpt-5.3-codex", "description": "code"}]}, "nous": {"models": [{"id": "hermes-4", "description": ""}]}}}))
+    (root / "profiles" / "coder" / "provider_models_cache.json").write_text(_j.dumps({"opencode-go": {"models": ["kimi-k3"]}}))
+    m = c.get("/api/chat/models?profile=orchestrator").json()          # no provider given → the active one
+    assert m["provider"] == "openai-codex" and [x["id"] for x in m["models"]] == ["gpt-5.6-luna", "gpt-5.5", "gpt-5.3-codex"]
+    assert m["models"][2]["description"] == "code"
+    assert [x["id"] for x in c.get("/api/chat/models?profile=orchestrator&provider=nous").json()["models"]] == ["hermes-4"]
+    assert [x["id"] for x in c.get("/api/chat/models?profile=coder&provider=opencode-go").json()["models"]] == ["kimi-k3"]
+    assert [x["id"] for x in c.get("/api/chat/models?profile=orchestrator&provider=openai-codex&q=codex").json()["models"]] == ["gpt-5.3-codex"]
