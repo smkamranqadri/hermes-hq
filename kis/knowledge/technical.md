@@ -83,3 +83,9 @@ Hermes v0.20.5 at `/opt/hermes`, `HERMES_HOME=/opt/data`, profiles under `/opt/d
 - Cookie session (`httponly, samesite=lax`, no `secure` flag) works over plain HTTP on the LAN and behind an HTTPS proxy; hermes-hq never terminates TLS itself (the owner uses `tailscale serve` on the Mac that hosts this OrbStack VM).
 - `backend/readers.py` is a straight 1100-line port; agents/sessions/files/overview readers get exposed or pruned as groups need them.
 - `tests/core/test_t2/t5/t7.py` fail identically in the source repo (goal lifecycle draft→planned changed after they were written); fix when touching goal release.
+
+## Files API (Group 5, 2026-08-30) — `backend/files.py`
+- Roots: `projects` = `WM_PROJECTS_ROOT` or `<hq home>/../projects` (`/opt/data/projects` live); `project:<slug>` = that project's `primary_path`. Nothing outside these two is reachable; every path is realpath-contained (absolute, `..`, symlink in any component → 403 "outside root"). Escaping symlinks are listed with `outside: true`, never followed.
+- `GET /api/files/roots|list?root&path&hidden|read|raw?download=1`; `POST /api/files/write|mkdir|rename|delete|upload` (JSON except upload = multipart `root,path,files[]`). `read` returns `kind: text|image|pdf|binary`, `content` only for text ≤ 1 MB (`too_large` otherwise), plus `mtime`; `write` needs that `mtime` (409 "changed on disk" / "already exists" / "deleted on disk"; `force` overrides). Uploads ≤ 20 MB each, basename only. Writes are atomic through `tempfile.mkstemp` in the target folder.
+- Rename/delete refuse (409) anything that is or contains a project's `primary_path`. `raw` serves html/xhtml/svg as attachment with `nosniff` + `CSP: sandbox` (no active content on the app origin).
+- `GET /api/project/{slug}/artifacts` = `result_paths` of the project's runs/tasks that exist on disk, with `inside_primary`/`rel` for the Files page. The old RO tree/preview readers were removed.

@@ -4,11 +4,11 @@
 **hermes-hq is the live control plane since 2026-08-29 13:40 UTC** (branch `main`). Process: `nohup .venv/bin/hermes-hq serve --host 0.0.0.0 --port 9010 --interval 20 > /opt/data/hermes-hq-serve.log 2>&1 &` with the dispatcher ON; restart by hand after backend changes (`pkill -f 'hermes-hq serve'` in its own command, then that line). Password file `/opt/data/hermes-hq/password` is `test` for the owner's review (generated one kept in `password.prev`). Frontend builds go live without a restart. HTTPS for the phone: `tailscale serve` on the owner's Mac fronts this VM's `:9010` (Knowledge → Web Push). Legacy WM rollback recipe: `knowledge/technical.md` → Legacy WM.
 
 ## Now
-Task: **Group 5 — Project files** — planned 2026-08-30 (`intent/Group5Plan.md`, Phase mode: 5-1 backend API → 5-2 desktop page → 5-3 phone). Not started; next session `/kis:act`. Reference explorer in hermes-workspace is on the lineage allow-list. Then Group 6 browsers (Hermes gateway has `GET /v1/skills` and `GET /v1/toolsets` for it).
+Task: **Group 5 — Project files** — planned 2026-08-30 (`intent/Group5Plan.md`, Phase mode: 5-1 backend API → 5-2 desktop page → 5-3 phone). 5-1 backend API DONE 2026-08-30 (live). Next: **5-2 desktop Files page** (`frontend/src/pages/Files.tsx`, CodeMirror 6, root switcher, artifacts group, Project-detail link), then 5-3 phone. Reference explorer in hermes-workspace is on the lineage allow-list. Then Group 6 browsers (Hermes gateway has `GET /v1/skills` and `GET /v1/toolsets` for it).
 Groups 1–4 and 4b (chat polish, option cards, notifications incl. Web Push, mobile IA) are complete as of 2026-08-30 (`intent/Group4bPlan.md`).
 
 ## Next
-Group 5 project files (plan first), then Group 6 browsers, then Group 7 schedules.
+Group 5: 5-2 desktop page → 5-3 phone; then Group 6 browsers, then Group 7 schedules.
 
 ## Blocker
 None.
@@ -28,7 +28,8 @@ None.
 `README.md`. Dev: `.venv/bin/hermes-hq serve --no-dispatcher` + `cd frontend && npm run dev`. Owner drops reference images in `screenshots/` (git-ignored). Playwright: settings in memory `hermes-hq-ops` (browser path, 390×844 + `isMobile` for phones); scripts are per-session.
 
 ## Proof (latest, one line per shipped area — details are in git history)
-- Suite: `tests/backend` **51 passed** (2026-08-30).
+- Suite: `tests/backend` **61 passed** (2026-08-30, incl. 10 in `test_files.py`).
+- Files API 5-1 2026-08-30: live `personal-brand` root — list/read 200, write created → second write 409, `../hermes-hq/password` 403, absolute path 403, POST without CSRF 403, delete 200 and gone from disk, artifacts lists `result_paths`. Reviewer (security lens) found 0 Critical / 2 Important, both fixed with regression tests (planted `.hq-tmp` symlink, HTML/SVG forced to attachment + nosniff + CSP sandbox).
 - Web Push 2026-08-30: owner's iPhone (Home-Screen app over Tailscale https) — `POST /api/push/test` → `{subscriptions: 1, delivered: 1}` after switching the VAPID contact off `@localhost` (Apple 403 BadJwtToken before). Fake-push-service pytest covers aes128gcm body + VAPID header + 410 pruning.
 - Notifications 2026-08-30: transitions → bell/Inbox rows (no backfill), chat replies recorded server-side per finished turn and marked read by the watching device (two-browser proof: watcher unread 0, away → phone badge 1), browser alerts + chime with stubbed APIs.
 - Phone IA 2026-08-30: floating pill tab bar (Overview · Tasks · Chat · Inbox · More), top row logo · LIVE, safe-area insets, opaque menus, 16 px fields, chat card measured to the visible viewport (keyboard case 533/544), sessions bottom sheet; desktop unchanged. All 11 pages screened at 390.
