@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react'
+import { lazy, Suspense, useEffect, useState } from 'react'
 import { Route, Routes } from 'react-router-dom'
 import { useQuery, useQueryClient } from '@tanstack/react-query'
 import { TopBar, TABS, TOOLS } from './components/TopBar'
@@ -22,6 +22,7 @@ import { TaskDetail } from './pages/TaskDetail'
 import { Agents } from './pages/Agents'
 import { AgentDetail } from './pages/AgentDetail'
 import { Chat } from './pages/Chat'
+const Files = lazy(() => import('./pages/Files').then(m => ({ default: m.Files })))
 
 function Placeholder({ title }: { title: string }) {
   usePageTitle(title)
@@ -130,8 +131,9 @@ export default function App() {
         <SnapshotBanner />
         <main>
           <Routes>
-            {[...TABS, ...TOOLS].filter(([, to]) => !['/projects', '/tasks', '/', '/activity', '/agents', '/chat'].includes(to)).map(([label, to]) => <Route key={to} path={to} element={<Placeholder title={label} />} />)}
+            {[...TABS, ...TOOLS].filter(([, to]) => !['/projects', '/tasks', '/', '/activity', '/agents', '/chat', '/files'].includes(to)).map(([label, to]) => <Route key={to} path={to} element={<Placeholder title={label} />} />)}
             <Route path="/" element={<Overview />} />
+            <Route path="/files" element={<Suspense fallback={<section className="mx-auto max-w-7xl p-4 sm:p-6"><Loading rows={8} /></section>}><Files /></Suspense>} />
             <Route path="/activity" element={<Activity />} />
             <Route path="/projects" element={<Projects />} />
             <Route path="/projects/:slug" element={<ProjectDetail />} />

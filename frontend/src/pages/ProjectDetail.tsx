@@ -37,6 +37,7 @@ export function ProjectDetail() {
         </div>
         <div className="flex w-full flex-wrap items-center gap-2 sm:w-auto">
           <Btn onClick={() => setModal('task')}>+ Task</Btn><Btn kind="ghost" onClick={() => setModal('goal')}>+ Goal</Btn>
+          <Link to={`/files?root=${encodeURIComponent('project:' + slug)}`} className="inline-flex items-center justify-center gap-2 rounded-full border border-line px-4 py-1.5 font-mono text-[11px] uppercase tracking-wider text-muted hover:text-fg">Files</Link>
           <ActionBtn url={`/api/project/${slug}/archive?archived=${p.archived ? 0 : 1}`} label={p.archived ? 'Restore' : 'Archive'} kind="ghost" confirm={p.archived ? undefined : `Archive ${p.name}? Its tasks leave the global Tasks view.`} />
           <div className="flex basis-full gap-2 sm:basis-auto">
           {[['tasks', `${p.tasks_done}/${p.tasks_total}`], ['runs', String(p.runs.length)], ['goals', `${p.goals.filter(g => g.status === 'released').length}/${p.goals.length}`]].map(([k, v]) => (
