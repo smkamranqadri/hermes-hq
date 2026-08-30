@@ -10,6 +10,7 @@ from backend import __version__
 from backend import auth as A
 from backend.api import router as api_router
 from backend.writes import router as write_router, make_auth_routes
+from backend.files import router as files_router, artifacts_router
 from backend import gateways
 from backend.dispatcher import DispatcherLoop
 from core import wm_store
@@ -44,6 +45,8 @@ def create_app(dispatcher_enabled: bool = True, interval: float = 30.0, password
     app.include_router(make_auth_routes(sessions, password))
     app.include_router(api_router)
     app.include_router(write_router)
+    app.include_router(files_router)
+    app.include_router(artifacts_router)
 
     @app.get("/api/health")
     def health():
