@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useRef, useState } from 'react'
-import { Link, useNavigate, useParams } from 'react-router-dom'
+import { Link, useLocation, useNavigate, useParams } from 'react-router-dom'
 import { useQueryClient } from '@tanstack/react-query'
 import clsx from 'clsx'
 import { useAgents, useAgentSessions, useSessionDetail, streamChat, post, ago, ApiError, type SseEvent, type ChatMessage } from '../api'
@@ -24,6 +24,13 @@ function Bubble({ role, children, tool }: { role: string; children: React.ReactN
   )
 }
 
+function ScopeChip({ scope, className }: { scope: { project_slug: string | null; project_name: string | null; task_id: number | null; task_title: string | null } | null | undefined; className?: string }) {
+  if (!scope) return null
+  const to = scope.task_id ? `/tasks/${scope.task_id}` : `/projects/${scope.project_slug}`
+  const label = scope.task_id ? `Task #${scope.task_id}` : `Project ${scope.project_name ?? scope.project_slug}`
+  return <Link to={to} title={scope.task_title ?? scope.project_name ?? ''} onClick={e => e.stopPropagation()} className={clsx('inline-flex shrink-0 items-center rounded-full border border-accent/50 bg-accent/10 px-2 py-0.5 font-mono text-[10px] uppercase tracking-wider text-accent-2 hover:bg-accent/20', className)}>{label}</Link>
+}
+
 function Transcript({ rows }: { rows: ChatMessage[] }) {
   return <>{rows.filter(m => m.role !== 'system').map(m => {
     if (m.role === 'tool' || m.tool_name) return <Bubble key={m.id} role="tool" tool><span className="text-accent-2">{m.tool_name ?? 'tool'}</span> {(m.content ?? '').slice(0, 300)}</Bubble>
@@ -33,7 +40,8 @@ function Transcript({ rows }: { rows: ChatMessage[] }) {
 
 export function Chat() {
   const { profile, id } = useParams()
-  const nav = useNavigate(); const qc = useQueryClient(); const toast = useToast()
+  const nav = useNavigate(); const qc = useQueryClient(); const toast = useToast(); const loc = useLocation()
+  useEffect(() => { if (!profile) nav('/chat/orchestrator', { replace: true }) }, [profile, nav])
   const agents = useAgents()
   const agent = agents.data?.agents.find(a => a.name === profile)
   const sessions = useAgentSessions(profile)
@@ -54,13 +62,15 @@ export function Chat() {
   const installed = useMemo(() => (agents.data?.agents ?? []).filter(a => a.installed), [agents.data])
   const busy = live !== null
 
-  async function send() {
-    if (!profile || !draft.trim() || busy) return
+  async function send(text?: string) {
+    const msg = (text ?? draft).trim()
+    if (!profile || !msg || busy) return
     let sid = id
     try {
-      if (!sid) { const s = await post<{ id: string }>(`/api/chat/${profile}/sessions`, { title: draft.trim().slice(0, 60) }); sid = s.id; nav(`/chat/${profile}/${sid}`, { replace: true }) }
+      if (!sid) { const s = await post<{ id: string }>(`/api/chat/${profile}/sessions`, { title: msg.slice(0, 60) }); sid = s.id; nav(`/chat/${profile}/${sid}`, { replace: true }) }
     } catch (e) { toast(e instanceof ApiError ? e.message : String(e), 'err'); return }
-    const msg = draft.trim(); setDraft(''); setPendingUser(msg); setLive(emptyLive())
+    if (text === undefined) setDraft('')
+    setPendingUser(msg); setLive(emptyLive())
     let failed = false
     abort.current = new AbortController()
     const onEvent = (e: SseEvent) => setLive(l => {
@@ -88,6 +98,16 @@ export function Chat() {
       qc.invalidateQueries({ queryKey: ['session', profile, sid] }); qc.invalidateQueries({ queryKey: ['agent-sessions', profile] }); qc.invalidateQueries({ queryKey: ['agents'] })
     }
   }
+  // A scoped session arrives with its brief in router state: send it as the first visible turn, once.
+  const seed = (loc.state as { seed?: string } | null)?.seed
+  const seeded = useRef<string | null>(null)
+  useEffect(() => {
+    if (!seed || !id || !profile || busy || seeded.current === id) return
+    seeded.current = id
+    nav(loc.pathname, { replace: true, state: null })
+    void send(seed)
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [seed, id, profile])
   async function stop() {
     if (!profile || !id || !live) return
     if (live.runId) { try { await post(`/api/chat/${profile}/${id}/stop/${live.runId}`) } catch (e) { toast(e instanceof ApiError ? e.message : String(e), 'err') } }
@@ -107,7 +127,7 @@ export function Chat() {
         {profile && <Select value={id ?? ''} onChange={e => nav(e.target.value ? `/chat/${profile}/${e.target.value}` : `/chat/${profile}`)} className="max-w-[46vw] sm:max-w-xs">
           <option value="">New session</option>
           {id && !(sessions.data?.sessions ?? []).some(s => s.id === id) && <option value={id}>{id}</option>}
-          {(sessions.data?.sessions ?? []).map(s => <option key={s.id} value={s.id}>{s.title || s.id}</option>)}
+          {(sessions.data?.sessions ?? []).map(s => <option key={s.id} value={s.id}>{s.scope ? (s.scope.task_id ? `[#${s.scope.task_id}] ` : `[${s.scope.project_slug}] `) : ''}{s.title || s.id}</option>)}
         </Select>}
       </div>} />
       {!profile && <Empty title="Pick an agent to chat with" note="Each agent talks through its own Hermes gateway; chat must be enabled on the Agents page for specialists." />}
@@ -119,13 +139,14 @@ export function Chat() {
             {sessions.isLoading && <Loading rows={4} />}
             <ul className="mt-1 flex min-h-0 flex-1 flex-col gap-0.5 overflow-y-auto">
               {(sessions.data?.sessions ?? []).map(s => (
-                <li key={s.id}><Link to={`/chat/${profile}/${s.id}`} className={clsx('block truncate rounded-lg px-2 py-1.5 text-xs hover:bg-raised', s.id === id && 'bg-raised')} title={s.id}>{s.title || s.id}<span className="ml-1 text-[10px] text-muted">{ago(s.last_activity_at ?? s.started_at)}</span></Link></li>
+                <li key={s.id}><Link to={`/chat/${profile}/${s.id}`} className={clsx('block truncate rounded-lg px-2 py-1.5 text-xs hover:bg-raised', s.id === id && 'bg-raised')} title={s.id}>{s.scope && <span className="mr-1 font-mono text-[10px] text-accent-2">{s.scope.task_id ? `#${s.scope.task_id}` : s.scope.project_slug}</span>}{s.title || s.id}<span className="ml-1 text-[10px] text-muted">{ago(s.last_activity_at ?? s.started_at)}</span></Link></li>
               ))}
             </ul>
           </GlassCard>
           <GlassCard className="flex h-[calc(100dvh-15.5rem)] min-h-[22rem] min-w-0 flex-col overflow-hidden sm:h-[calc(100dvh-12.5rem)]">
             <div className="mb-2 flex flex-wrap items-center gap-2 text-xs text-muted">
               <span className="font-mono text-accent-2">{profile}</span>{agent && <GatewayDot g={agent.gateway} />}
+              <ScopeChip scope={detail.data?.scope} />
               {id && <span className="truncate font-mono text-[10px]">{id}</span>}
               {detail.data?.model && <Chip>{detail.data.model}</Chip>}
             </div>

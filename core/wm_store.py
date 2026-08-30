@@ -378,6 +378,17 @@ CREATE TABLE IF NOT EXISTS state_transitions (
     detail      TEXT
 );
 
+CREATE TABLE IF NOT EXISTS chat_sessions (
+    id          INTEGER PRIMARY KEY,
+    profile     TEXT NOT NULL,
+    session_id  TEXT NOT NULL,
+    project_id  INTEGER REFERENCES projects(id),
+    task_id     INTEGER REFERENCES tasks(id),
+    title       TEXT,
+    created_at  REAL,
+    UNIQUE (profile, session_id)
+);
+
 CREATE INDEX IF NOT EXISTS idx_tasks_project ON tasks(project_id);
 CREATE INDEX IF NOT EXISTS idx_tasks_goal    ON tasks(goal_id);
 CREATE INDEX IF NOT EXISTS idx_tasks_status  ON tasks(status);
@@ -2982,3 +2993,118 @@ def prune_history(retention_days=None, keep_transitions=True, db_path=None):
                  detail="retention_days=%s removed=%s" % (retention_days, counts),
                  db_path=db_path)
     return counts
+
+# ---- Group 4: direct chat scopes -------------------------------------------
+# A chat session started from a project or task page is linked here so the
+# scope can list/resume it. Titles are copied at creation time (each profile's
+# transcript lives in its own Hermes state.db; no cross-DB join).
+
+def link_chat_session(profile, session_id, project_id=None, task_id=None, title=None, db_path=None):
+    conn = _connect(db_path)
+    try:
+        with conn:
+            conn.execute(
+                "INSERT OR REPLACE INTO chat_sessions (profile, session_id, project_id, task_id, title, created_at) "
+                "VALUES (?,?,?,?,?,?)", (profile, session_id, project_id, task_id, title, time.time()))
+        return dict(conn.execute("SELECT * FROM chat_sessions WHERE profile=? AND session_id=?",
+                                 (profile, session_id)).fetchone())
+    finally:
+        conn.close()
+
+
+_CHAT_SCOPE_SQL = ("SELECT c.*, p.slug AS project_slug, p.name AS project_name, t.title AS task_title "
+                   "FROM chat_sessions c LEFT JOIN projects p ON p.id=c.project_id LEFT JOIN tasks t ON t.id=c.task_id ")
+
+
+def chat_sessions_for_project(project_id, db_path=None):
+    conn = _connect(db_path)
+    try:
+        return [dict(r) for r in conn.execute(_CHAT_SCOPE_SQL + "WHERE c.project_id=? ORDER BY c.created_at DESC", (project_id,))]
+    finally:
+        conn.close()
+
+
+def chat_sessions_for_task(task_id, db_path=None):
+    conn = _connect(db_path)
+    try:
+        return [dict(r) for r in conn.execute(_CHAT_SCOPE_SQL + "WHERE c.task_id=? ORDER BY c.created_at DESC", (task_id,))]
+    finally:
+        conn.close()
+
+
+def chat_session_scopes(profile, db_path=None):
+    """{session_id: scope row} for every linked session of a profile."""
+    conn = _connect(db_path)
+    try:
+        return {r["session_id"]: dict(r) for r in conn.execute(_CHAT_SCOPE_SQL + "WHERE c.profile=?", (profile,))}
+    finally:
+        conn.close()
+
+
+_CHAT_BRIEF_FOOTER = [
+    "",
+    "This is a conversation with the owner, NOT a dispatched task: do not start work, "
+    "change task status or write completion files unless the owner asks in this chat.",
+    "Acknowledge in one short line and wait for the owner's question.",
+]
+
+
+def _clip(text, n):
+    text = (text or "").strip()
+    return text if len(text) <= n else text[:n - 1].rstrip() + "…"
+
+
+def render_project_brief(project_id, db_path=None):
+    """Opening turn for a project-scoped chat: identity, path, goals, open tasks (≤15)."""
+    project = get_project(project_id, db_path=db_path)
+    if project is None:
+        raise ValueError("no project %s" % project_id)
+    conn = _connect(db_path)
+    try:
+        goals = conn.execute("SELECT id, title, status FROM goals WHERE project_id=? ORDER BY id", (project_id,)).fetchall()
+        open_tasks = conn.execute(
+            "SELECT id, title, status, assignee_profile FROM tasks WHERE project_id=? AND status!='done' "
+            "ORDER BY updated_at DESC, id DESC LIMIT 16", (project_id,)).fetchall()
+        n_open = conn.execute("SELECT COUNT(*) FROM tasks WHERE project_id=? AND status!='done'", (project_id,)).fetchone()[0]
+    finally:
+        conn.close()
+    lines = [
+        "PROJECT CHAT — %s" % project["name"],
+        "=" * 40,
+        "Project: %s (slug %s)" % (project["name"], project["slug"]),
+        "Primary path: %s" % (project["primary_path"] or "-"),
+        "Description: %s" % (_clip(project["description"], 600) or "-"),
+        "",
+        "GOALS (%d)" % len(goals),
+    ]
+    lines += ["- #%s %s [%s]" % (g["id"], _clip(g["title"], 90), g["status"]) for g in goals] or ["- none"]
+    lines += ["", "OPEN TASKS (%d%s)" % (n_open, ", newest 15" if n_open > 15 else "")]
+    lines += ["- #%s %s [%s%s]" % (t["id"], _clip(t["title"], 90), t["status"], (", " + t["assignee_profile"]) if t["assignee_profile"] else "")
+              for t in open_tasks[:15]] or ["- none"]
+    return "\n".join(lines + _CHAT_BRIEF_FOOTER)
+
+
+def render_task_brief(task_id, db_path=None):
+    """Opening turn for a task-scoped chat: the task, its DoD, project path, latest run."""
+    task = get_task(task_id, db_path=db_path)
+    if task is None:
+        raise ValueError("no task %s" % task_id)
+    project = get_project(task["project_id"], db_path=db_path)
+    run = get_task_latest_run(task_id, db_path=db_path)
+    lines = [
+        "TASK CHAT — #%s %s" % (task["id"], task["title"] or "-"),
+        "=" * 40,
+        "Project: %s" % (project["name"] if project else "-"),
+        "Primary path: %s" % ((project["primary_path"] if project else None) or "-"),
+        "Status: %s   |   Assignee: %s   |   Review policy: %s" % (task["status"], task["assignee_profile"] or "-", task["review_policy"]),
+        "",
+        "Description: %s" % (_clip(task["description"], 800) or "-"),
+        "Definition of done: %s" % (_clip(task["definition_of_done"], 500) or "-"),
+        "Result path: %s" % (task["result_path"] or "-"),
+        "Latest summary: %s" % (_clip(task["summary"], 500) or "-"),
+        "Owner/reviewer feedback: %s" % (_clip(task["feedback"], 500) or "-"),
+    ]
+    if run:
+        lines.append("Latest run: #%s by %s [%s]%s" % (run["id"], run["agent_profile"], run["status"],
+                     (", session " + run["session_id"]) if run["session_id"] else ""))
+    return "\n".join(lines + _CHAT_BRIEF_FOOTER)

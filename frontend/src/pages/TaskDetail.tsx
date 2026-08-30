@@ -9,6 +9,7 @@ import { usePageTitle } from '../usePageTitle'
 import { useState } from 'react'
 import { ActionBtn, FeedbackModal } from '../components/forms'
 import { RunLog } from '../components/RunLog'
+import { ScopedChat } from '../components/ScopedChat'
 
 
 function Block({ title, children }: { title: string; children: React.ReactNode }) {
@@ -87,6 +88,7 @@ export function TaskDetail() {
           </div>
         </div>
         <div className="flex min-w-0 flex-col gap-4">
+          <ScopedChat kind="task" id={t.id} />
           {(t.deps.length > 0 || t.dependents.length > 0) && (
             <GlassCard className="text-xs">
               {t.deps.length > 0 && <><Label>Waits on</Label><ul className="mb-3 mt-1">{t.deps.map(d => <li key={d.id}><Link to={`/tasks/${d.id}`} className="hover:text-accent-2">#{d.id} {d.title}</Link> <span className="font-mono text-muted">{d.status}</span></li>)}</ul></>}

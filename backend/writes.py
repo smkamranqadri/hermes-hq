@@ -237,6 +237,13 @@ class ChatIn(BaseModel):
     message: str
 
 
+class ChatStart(BaseModel):
+    profile: str
+    project_id: int | None = None
+    task_id: int | None = None
+    title: str | None = None
+
+
 def _chat(fn, *a, **kw):
     try:
         return fn(*a, db_path=_db(), **kw)
@@ -251,6 +258,11 @@ def _chat(fn, *a, **kw):
 @router.post("/chat/{profile}/sessions")
 def chat_new_session(profile: str, body: NewSession | None = None):
     return _chat(chat.create_session, profile, title=(body.title if body else None))
+
+
+@router.post("/chat/start")
+def chat_start(body: ChatStart):
+    return _chat(chat.start_scoped, body.profile, project_id=body.project_id, task_id=body.task_id, title=body.title)
 
 
 @router.post("/chat/{profile}/{session_id}/stop/{run_id}")
