@@ -4,7 +4,7 @@ import { useQueryClient } from '@tanstack/react-query'
 import clsx from 'clsx'
 import { useAgents, useAgentSessions, useSessionDetail, useProjects, startScopedChat, streamChat, post, get, ago, when, ApiError, type SseEvent, type ChatMessage, type ScopedSession, type SessionDetail } from '../api'
 import { GlassCard, PageHeader } from '../components/GlassCard'
-import { Empty, Loading, Chip, Select, Label } from '../components/ui'
+import { Empty, Loading, Select } from '../components/ui'
 import { ActionBtn } from '../components/forms'
 import { Btn, TextArea } from '../components/Modal'
 import { useToast } from '../components/Toast'
@@ -60,15 +60,26 @@ function ScopeChip({ scope, className }: { scope: { project_slug: string | null;
   return <Link to={to} title={scope.task_title ?? scope.project_name ?? ''} onClick={e => e.stopPropagation()} className={clsx('inline-flex shrink-0 items-center rounded-full border border-accent/50 bg-accent/10 px-2 py-0.5 font-mono text-[10px] uppercase tracking-wider text-accent-2 hover:bg-accent/20', className)}>{label}</Link>
 }
 
-function UsageStrip({ d }: { d: SessionDetail }) {
+/** Model + context line under the composer; click to expand tokens and cost. */
+function ContextLine({ d }: { d: SessionDetail }) {
+  const [open, setOpen] = useState(false)
   const cost = d.actual_cost_usd || d.estimated_cost_usd
   const est = d.cost_estimate
-  if (!d.input_tokens && !d.output_tokens) return null
+  const ctx = (d.input_tokens ?? 0) + (d.output_tokens ?? 0)
   return (
-    <span className="inline-flex flex-wrap items-center gap-x-2 font-mono text-[10px] text-muted" title={`in ${d.input_tokens ?? 0} · out ${d.output_tokens ?? 0} · cache read ${d.cache_read_tokens ?? 0} · cache write ${d.cache_write_tokens ?? 0}`}>
-      <span>↓{fmtTokens(d.input_tokens)} ↑{fmtTokens(d.output_tokens)}{d.cache_read_tokens ? ` ⟳${fmtTokens(d.cache_read_tokens)}` : ''}</span>
-      {cost ? <span>${cost.toFixed(3)}</span> : est ? <span title={`≈ from models.dev prices for ${est.model}; Hermes reports this session as included`}>≈${est.usd.toFixed(3)}</span> : null}
-    </span>
+    <div className="mt-1.5 flex flex-wrap items-center gap-x-3 font-mono text-[10px] text-muted">
+      <button type="button" onClick={() => setOpen(o => !o)} className="inline-flex items-center gap-1.5 hover:text-fg" title="Model and token use of this session — click for the breakdown (context meter comes with 4b-3)">
+        {d.model && <span>{d.model}</span>}
+        {ctx > 0 && <span>· tokens {fmtTokens(ctx)}</span>}
+        <span>{open ? '▾' : '▸'}</span>
+      </button>
+      {open && <>
+        <span>↓ in {fmtTokens(d.input_tokens)}</span><span>↑ out {fmtTokens(d.output_tokens)}</span>
+        {d.cache_read_tokens ? <span>⟳ cache {fmtTokens(d.cache_read_tokens)}</span> : null}
+        {cost ? <span>${cost.toFixed(3)}</span> : est ? <span title={`≈ from models.dev prices for ${est.model}; Hermes reports this session as included`}>≈ ${est.usd.toFixed(3)} (models.dev)</span> : null}
+        <span className="truncate">{d.id}</span>
+      </>}
+    </div>
   )
 }
 
@@ -195,15 +206,8 @@ export function Chat() {
   return (
     <section className="mx-auto flex max-w-6xl flex-col p-4 sm:p-6">
       <PageHeader crumb="chat" title="Chat" right={<div className="flex flex-wrap items-center gap-2">
-        <Select value={profile ?? ''} onChange={e => nav(e.target.value ? `/chat/${e.target.value}` : '/chat')}>
-          <option value="">Pick an agent…</option>
-          {installed.map(a => <option key={a.name} value={a.name}>{a.name}</option>)}
-        </Select>
-        {profile && <Select value="" disabled={starting || busy} onChange={e => void openProject(e.target.value)} title="Resume this agent's latest chat about a project (or start one)">
-          <option value="">{starting ? 'Opening…' : 'Chat about a project…'}</option>
-          {(projects.data?.projects ?? []).map(p => <option key={p.slug} value={p.slug}>{p.name}</option>)}
-        </Select>}
-        {profile && detail.data?.scope?.project_slug && !detail.data.scope.task_id && <Btn kind="ghost" busy={starting} onClick={() => void openProject(detail.data!.scope!.project_slug!, true)}>+ New chat about {detail.data.scope.project_name}</Btn>}
+        {id && <ScopeChip scope={detail.data?.scope} />}
+        {id && <Btn kind="ghost" busy={starting} onClick={() => { const sc = detail.data?.scope; if (sc?.project_slug && !sc.task_id) void openProject(sc.project_slug, true); else nav(`/chat/${profile}`) }}>+ New chat</Btn>}
         {profile && <Select value={id ?? ''} onChange={e => nav(e.target.value ? `/chat/${profile}/${e.target.value}` : `/chat/${profile}`)} className="max-w-[46vw] sm:max-w-xs lg:hidden">
           <option value="">New session</option>
           {id && !(sessions.data?.sessions ?? []).some(s => s.id === id) && <option value={id}>{id}</option>}
@@ -214,7 +218,12 @@ export function Chat() {
       {profile && (
         <div className="grid min-w-0 gap-4 lg:grid-cols-[16rem_1fr]">
           <GlassCard className="hidden min-w-0 lg:flex lg:h-[calc(100dvh-12.5rem)] lg:flex-col">
-            <div className="flex items-center justify-between"><Label>Sessions</Label>{agent && <GatewayDot g={agent.gateway} />}</div>
+            <div className="flex items-center justify-between gap-2">
+              <Select value={profile ?? ''} onChange={e => nav(e.target.value ? `/chat/${e.target.value}` : '/chat')} className="min-w-0 max-w-[9rem]" aria-label="Agent">
+                {installed.map(a => <option key={a.name} value={a.name}>{a.name}</option>)}
+              </Select>
+              {agent && <GatewayDot g={agent.gateway} />}
+            </div>
             <Link to={`/chat/${profile}`} className={clsx('mt-2 block rounded-lg px-2 py-1.5 text-xs hover:bg-raised', !id && 'bg-raised')}>+ New session</Link>
             {sessions.isLoading && <Loading rows={4} />}
             <ul className="mt-1 flex min-h-0 flex-1 flex-col gap-0.5 overflow-y-auto">
@@ -224,20 +233,31 @@ export function Chat() {
             </ul>
           </GlassCard>
           <GlassCard className="relative flex h-[calc(100dvh-15.5rem)] min-h-[22rem] min-w-0 flex-col overflow-hidden sm:h-[calc(100dvh-12.5rem)]">
-            <div className="mb-2 flex flex-wrap items-center gap-2 text-xs text-muted">
-              <span className="font-mono text-accent-2">{profile}</span>{agent && <GatewayDot g={agent.gateway} />}
-              <ScopeChip scope={detail.data?.scope} />
-              {id && <span className="truncate font-mono text-[10px]">{id}</span>}
-              {detail.data?.model && <Chip>{detail.data.model}</Chip>}
-              {detail.data && <UsageStrip d={detail.data} />}
-            </div>
+            {id && <div className="mb-2 flex min-w-0 items-center gap-2 text-xs">
+              <span className="min-w-0 truncate font-medium" title={detail.data?.title ?? id}>{detail.data?.title || id}</span>
+              <span className="shrink-0 font-mono text-[10px] text-muted">· {profile}</span>
+            </div>}
             <div ref={box} data-transcript className="flex min-h-0 flex-1 flex-col gap-2 overflow-y-auto pr-1">
               {id && detail.isLoading && <Loading rows={3} />}
               {id && detail.isError && <Empty error title="Could not load this session" note={String(detail.error)} />}
               {detail.data && <Transcript rows={detail.data.transcript} />}
               {!id && !pendingUser && (
-                <div className="m-auto flex max-w-md flex-col items-center gap-3 text-center">
-                  <p className="text-xs text-muted">New session with <span className="font-mono text-accent-2">{profile}</span>. Say something, or start with:</p>
+                <div className="m-auto flex w-full max-w-md flex-col items-center gap-4 text-center">
+                  <div>
+                    <p className="text-sm font-medium">New chat</p>
+                    <p className="mt-1 text-xs text-muted">Pick who to talk to and, optionally, which project it is about.</p>
+                  </div>
+                  <div className="flex w-full flex-col gap-2 sm:flex-row sm:justify-center">
+                    <label className="flex items-center gap-2 text-xs text-muted"><span className="w-12 text-right sm:w-auto">Agent</span>
+                      <Select value={profile ?? ''} onChange={e => nav(`/chat/${e.target.value}`)} className="flex-1" aria-label="Agent for the new chat">
+                        {installed.map(a => <option key={a.name} value={a.name}>{a.name}</option>)}
+                      </Select>{agent && <GatewayDot g={agent.gateway} />}</label>
+                    <label className="flex items-center gap-2 text-xs text-muted"><span className="w-12 text-right sm:w-auto">Project</span>
+                      <Select value="" disabled={starting || busy || chatDisabled} onChange={e => void openProject(e.target.value)} className="flex-1" aria-label="Project for the new chat" title="Resume this agent's latest chat about the project, or start one seeded with its brief">
+                        <option value="">{starting ? 'Opening…' : 'None — just chat'}</option>
+                        {(projects.data?.projects ?? []).map(p => <option key={p.slug} value={p.slug}>{p.name}</option>)}
+                      </Select></label>
+                  </div>
                   <div className="flex flex-wrap justify-center gap-2">{starters.map(s => <button key={s} type="button" onClick={() => void send(s)} disabled={!agentKnown || chatDisabled} className="rounded-full border border-line bg-glass px-3 py-1 text-xs text-fg hover:bg-raised disabled:opacity-50">{s}</button>)}</div>
                 </div>
               )}
@@ -260,6 +280,7 @@ export function Chat() {
                   {busy ? <Btn kind="warn" onClick={() => void stop()}>Stop</Btn> : <Btn onClick={() => void send()} disabled={!draft.trim() || !agentKnown}>Send</Btn>}
                 </div>
               )}
+              {detail.data && <ContextLine d={detail.data} />}
             </div>
           </GlassCard>
         </div>
