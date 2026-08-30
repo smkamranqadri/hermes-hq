@@ -14,7 +14,7 @@ import re
 import socket
 import time
 
-from backend import gateways, readers
+from backend import gateways, pricing, readers
 from core import wm_store as store
 
 log = logging.getLogger("backend.chat")
@@ -109,6 +109,10 @@ def transcript(profile, session_id, limit=400, db_path=None):
     if d is not None:
         d["live_run"] = live_run_for_session(profile, session_id, d.get("title"), db_path)
         d["scope"] = _scope(store.chat_session_scopes(profile, db_path=db_path or store.DEFAULT_DB_PATH).get(session_id))
+        d["cost_estimate"] = None
+        if not (d.get("actual_cost_usd") or d.get("estimated_cost_usd")):
+            d["cost_estimate"] = pricing.estimate(d.get("model"), d.get("input_tokens"), d.get("output_tokens"),
+                                                  d.get("cache_read_tokens"), d.get("cache_write_tokens"))
     return d
 
 

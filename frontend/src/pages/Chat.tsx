@@ -1,8 +1,8 @@
-import { useEffect, useMemo, useRef, useState } from 'react'
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { Link, useLocation, useNavigate, useParams } from 'react-router-dom'
 import { useQueryClient } from '@tanstack/react-query'
 import clsx from 'clsx'
-import { useAgents, useAgentSessions, useSessionDetail, useProjects, startScopedChat, streamChat, post, get, ago, ApiError, type SseEvent, type ChatMessage, type ScopedSession } from '../api'
+import { useAgents, useAgentSessions, useSessionDetail, useProjects, startScopedChat, streamChat, post, get, ago, when, ApiError, type SseEvent, type ChatMessage, type ScopedSession, type SessionDetail } from '../api'
 import { GlassCard, PageHeader } from '../components/GlassCard'
 import { Empty, Loading, Chip, Select, Label } from '../components/ui'
 import { ActionBtn } from '../components/forms'
@@ -10,18 +10,47 @@ import { Btn, TextArea } from '../components/Modal'
 import { useToast } from '../components/Toast'
 import { usePageTitle } from '../usePageTitle'
 import { GatewayDot } from './Agents'
+import { Markdown } from '../components/chat/Markdown'
+import { ToolCard, Thinking, fmtTokens, type ToolView } from '../components/chat/Blocks'
 
-type LiveTool = { key: string; name: string; state: 'started' | 'completed' | 'failed'; preview?: string }
-type Live = { text: string; tools: LiveTool[]; thinking: string; runId: string | null; error: string | null }
-const emptyLive = (): Live => ({ text: '', tools: [], thinking: '', runId: null, error: null })
+type Live = { text: string; tools: ToolView[]; thinking: string; runId: string | null; error: string | null; startedAt: number }
+const emptyLive = (): Live => ({ text: '', tools: [], thinking: '', runId: null, error: null, startedAt: Date.now() })
 
-function Bubble({ role, children, tool }: { role: string; children: React.ReactNode; tool?: boolean }) {
+function Bubble({ role, children, ts, tokens }: { role: string; children: React.ReactNode; ts?: number | null; tokens?: number | null }) {
   const mine = role === 'user'
   return (
-    <div className={clsx('flex min-w-0', mine ? 'justify-end' : 'justify-start')}>
-      <div className={clsx('min-w-0 max-w-[92%] rounded-2xl px-3.5 py-2 text-sm sm:max-w-[80%]', mine ? 'bg-accent/20 text-fg' : tool ? 'border border-line bg-inset font-mono text-[11px] text-muted' : 'bg-raised text-fg')}>{children}</div>
+    <div className={clsx('group/msg flex min-w-0 flex-col', mine ? 'items-end' : 'items-start')}>
+      <div className={clsx('min-w-0 max-w-[92%] rounded-2xl px-3.5 py-2 text-sm sm:max-w-[80%]', mine ? 'bg-accent/20 text-fg' : 'bg-raised text-fg')}>{children}</div>
+      {(ts || tokens) ? <span className="mt-0.5 px-1 font-mono text-[10px] text-muted opacity-0 transition group-hover/msg:opacity-100">{ts ? when(ts) : ''}{tokens ? ` · ${fmtTokens(tokens)} tok` : ''}</span> : null}
     </div>
   )
+}
+
+/** Stored transcript → bubbles; an assistant row's tool_calls become cards, fed by the tool rows that follow. */
+function Transcript({ rows }: { rows: ChatMessage[] }) {
+  const items = useMemo(() => {
+    const out: React.ReactNode[] = []
+    const pending: ToolView[] = []
+    for (const m of rows) {
+      if (m.role === 'system') continue
+      if (m.role === 'tool' || (m.tool_name && m.role !== 'assistant')) {
+        const i = pending.findIndex(t => t.name === m.tool_name && t.result == null)
+        if (i >= 0) { pending[i].result = m.content ?? ''; pending[i].endedAt = m.timestamp ?? undefined; continue }
+        out.push(<ToolCard key={m.id} t={{ key: String(m.id), name: m.tool_name ?? 'tool', state: 'completed', result: m.content ?? '', preview: (m.content ?? '').slice(0, 120) }} />)
+        continue
+      }
+      if (m.reasoning) out.push(<Thinking key={`r${m.id}`} text={m.reasoning} />)
+      if (m.tool_calls?.length) {
+        for (const c of m.tool_calls) {
+          const t: ToolView = { key: `${m.id}:${c.id ?? c.name}`, name: c.name, state: 'completed', args: c.arguments, result: null, startedAt: m.timestamp ?? undefined }
+          pending.push(t); out.push(<ToolCard key={t.key} t={t} />)
+        }
+      }
+      if (m.content && m.content.trim()) out.push(<Bubble key={m.id} role={m.role} ts={m.timestamp} tokens={m.token_count}>{m.role === 'assistant' ? <Markdown text={m.content} /> : <div className="whitespace-pre-wrap break-words">{m.content}</div>}</Bubble>)
+    }
+    return out
+  }, [rows])
+  return <>{items}</>
 }
 
 function ScopeChip({ scope, className }: { scope: { project_slug: string | null; project_name: string | null; task_id: number | null; task_title: string | null } | null | undefined; className?: string }) {
@@ -31,12 +60,24 @@ function ScopeChip({ scope, className }: { scope: { project_slug: string | null;
   return <Link to={to} title={scope.task_title ?? scope.project_name ?? ''} onClick={e => e.stopPropagation()} className={clsx('inline-flex shrink-0 items-center rounded-full border border-accent/50 bg-accent/10 px-2 py-0.5 font-mono text-[10px] uppercase tracking-wider text-accent-2 hover:bg-accent/20', className)}>{label}</Link>
 }
 
-function Transcript({ rows }: { rows: ChatMessage[] }) {
-  return <>{rows.filter(m => m.role !== 'system').map(m => {
-    if (m.role === 'tool' || m.tool_name) return <Bubble key={m.id} role="tool" tool><span className="text-accent-2">{m.tool_name ?? 'tool'}</span> {(m.content ?? '').slice(0, 300)}</Bubble>
-    return <Bubble key={m.id} role={m.role}><div className="whitespace-pre-wrap break-words">{m.content}</div></Bubble>
-  })}</>
+function UsageStrip({ d }: { d: SessionDetail }) {
+  const cost = d.actual_cost_usd || d.estimated_cost_usd
+  const est = d.cost_estimate
+  if (!d.input_tokens && !d.output_tokens) return null
+  return (
+    <span className="inline-flex flex-wrap items-center gap-x-2 font-mono text-[10px] text-muted" title={`in ${d.input_tokens ?? 0} · out ${d.output_tokens ?? 0} · cache read ${d.cache_read_tokens ?? 0} · cache write ${d.cache_write_tokens ?? 0}`}>
+      <span>↓{fmtTokens(d.input_tokens)} ↑{fmtTokens(d.output_tokens)}{d.cache_read_tokens ? ` ⟳${fmtTokens(d.cache_read_tokens)}` : ''}</span>
+      {cost ? <span>${cost.toFixed(3)}</span> : est ? <span title={`≈ from models.dev prices for ${est.model}; Hermes reports this session as included`}>≈${est.usd.toFixed(3)}</span> : null}
+    </span>
+  )
 }
+
+const STARTERS: Record<string, string[]> = {
+  orchestrator: ['What is blocked right now and what do you need from me?', 'Summarize the state of every project in three lines each.', 'Which tasks should run next, and why?'],
+  reviewer: ['What did you flag in your last review?', 'What are the recurring quality issues across tasks?', 'Review policy: what would you tighten?'],
+  coder: ['What did you change in your last run?', 'What is failing in the test suite right now?', 'List the open technical debt you noticed.'],
+}
+const DEFAULT_STARTERS = ['What did you do in your last session?', 'What are you good at, in three lines?', 'What information do you need from me to work well?']
 
 export function Chat() {
   const { profile, id } = useParams()
@@ -54,13 +95,27 @@ export function Chat() {
   const [pendingUser, setPendingUser] = useState<string | null>(null)
   const abort = useRef<AbortController | null>(null)
   const box = useRef<HTMLDivElement>(null)
+  // stick-to-bottom unless the reader scrolled up; count what arrived while they were up
+  const [atBottom, setAtBottom] = useState(true)
+  const [unread, setUnread] = useState(0)
+  const rowCount = (detail.data?.transcript.length ?? 0) + (live ? 1 : 0)
+  const lastSeen = useRef(0)
+  const scrollDown = useCallback(() => { const el = box.current; if (el) el.scrollTop = el.scrollHeight; setUnread(0); setAtBottom(true) }, [])
   useEffect(() => {
     const el = box.current; if (!el) return
+    const onScroll = () => { const near = el.scrollHeight - el.scrollTop - el.clientHeight < 48; setAtBottom(near); if (near) setUnread(0) }
+    el.addEventListener('scroll', onScroll, { passive: true }); return () => el.removeEventListener('scroll', onScroll)
+  }, [id])
+  useEffect(() => { lastSeen.current = 0; setUnread(0); setAtBottom(true) }, [id])
+  useEffect(() => {
+    const el = box.current; if (!el) return
+    if (!atBottom) { if (rowCount > lastSeen.current) setUnread(u => u + (rowCount - lastSeen.current)); lastSeen.current = rowCount; return }
+    lastSeen.current = rowCount
     const down = () => { el.scrollTop = el.scrollHeight }
     down(); const raf = requestAnimationFrame(down); const t = setTimeout(down, 200)
     const ro = new ResizeObserver(down); ro.observe(el); Array.from(el.children).forEach(c => ro.observe(c))
     return () => { cancelAnimationFrame(raf); clearTimeout(t); ro.disconnect() }
-  }, [detail.data?.transcript.length, live?.text, live?.tools.length, pendingUser, id])
+  }, [rowCount, live?.text, live?.tools.length, live?.thinking, pendingUser, id, atBottom])
   const installed = useMemo(() => (agents.data?.agents ?? []).filter(a => a.installed), [agents.data])
   const busy = live !== null
 
@@ -72,7 +127,7 @@ export function Chat() {
       if (!sid) { const s = await post<{ id: string }>(`/api/chat/${profile}/sessions`, { title: msg.slice(0, 60) }); sid = s.id; nav(`/chat/${profile}/${sid}`, { replace: true }) }
     } catch (e) { toast(e instanceof ApiError ? e.message : String(e), 'err'); return }
     if (text === undefined) setDraft('')
-    setPendingUser(msg); setLive(emptyLive())
+    setPendingUser(msg); setLive(emptyLive()); setAtBottom(true)
     let failed = false
     abort.current = new AbortController()
     const onEvent = (e: SseEvent) => setLive(l => {
@@ -80,12 +135,12 @@ export function Chat() {
       const d = e.data as Record<string, string | undefined>
       switch (e.name) {
         case 'run.started': return { ...l, runId: (d.run_id as string) ?? l.runId }
-        case 'assistant.delta': return { ...l, text: l.text + (d.delta ?? ''), thinking: '' }
-        case 'tool.progress': return { ...l, thinking: (l.thinking + (d.delta ?? '')).slice(-400) }
-        case 'tool.started': return { ...l, tools: [...l.tools, { key: `${l.tools.length}`, name: d.tool_name ?? 'tool', state: 'started', preview: d.preview }] }
+        case 'assistant.delta': return { ...l, text: l.text + (d.delta ?? '') }
+        case 'tool.progress': return { ...l, thinking: (l.thinking + (d.delta ?? '')).slice(-4000) }
+        case 'tool.started': return { ...l, tools: [...l.tools, { key: `${l.tools.length}`, name: d.tool_name ?? 'tool', state: 'started', preview: d.preview, args: typeof d.args === 'string' ? d.args : d.args ? JSON.stringify(d.args) : undefined, startedAt: Date.now() / 1000 }] }
         case 'tool.completed': case 'tool.failed': {
           const tools = [...l.tools]; const i = tools.map(t => t.state).lastIndexOf('started')
-          if (i >= 0) tools[i] = { ...tools[i], state: e.name === 'tool.failed' ? 'failed' : 'completed', preview: d.preview ?? tools[i].preview }
+          if (i >= 0) tools[i] = { ...tools[i], state: e.name === 'tool.failed' ? 'failed' : 'completed', preview: d.preview ?? tools[i].preview, endedAt: Date.now() / 1000 }
           return { ...l, tools }
         }
         case 'error': return { ...l, error: d.message ?? 'error' }
@@ -100,16 +155,6 @@ export function Chat() {
       qc.invalidateQueries({ queryKey: ['session', profile, sid] }); qc.invalidateQueries({ queryKey: ['agent-sessions', profile] }); qc.invalidateQueries({ queryKey: ['agents'] })
     }
   }
-  // A scoped session arrives with its brief in router state: send it as the first visible turn, once.
-  const seed = (loc.state as { seed?: string } | null)?.seed
-  const seeded = useRef<string | null>(null)
-  useEffect(() => {
-    if (!seed || !id || !profile || busy || seeded.current === id) return
-    seeded.current = id
-    nav(loc.pathname, { replace: true, state: null })
-    void send(seed)
-  // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [seed, id, profile])
   /** Project picker: resume this agent's latest chat about the project, or start a new one (seeded with the brief) when none exists / forced. */
   async function openProject(slug: string, fresh = false) {
     const p = projects.data?.projects.find(x => x.slug === slug)
@@ -126,6 +171,16 @@ export function Chat() {
     } catch (e) { toast(e instanceof ApiError ? e.message : String(e), 'err') }
     finally { setStarting(false) }
   }
+  // A scoped session arrives with its brief in router state: send it as the first visible turn, once.
+  const seed = (loc.state as { seed?: string } | null)?.seed
+  const seeded = useRef<string | null>(null)
+  useEffect(() => {
+    if (!seed || !id || !profile || busy || seeded.current === id) return
+    seeded.current = id
+    nav(loc.pathname, { replace: true, state: null })
+    void send(seed)
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [seed, id, profile])
   async function stop() {
     if (!profile || !id || !live) return
     if (live.runId) { try { await post(`/api/chat/${profile}/${id}/stop/${live.runId}`) } catch (e) { toast(e instanceof ApiError ? e.message : String(e), 'err') } }
@@ -135,6 +190,8 @@ export function Chat() {
   const agentKnown = !!agent
   const chatDisabled = agentKnown && agent.name !== 'orchestrator' && !agent.gateway.enabled
   const liveRun = detail.data?.live_run ?? null
+  const starters = (profile && STARTERS[profile]) || DEFAULT_STARTERS
+  const waitingFirstToken = live && !live.text && live.tools.length === 0 && !live.thinking
   return (
     <section className="mx-auto flex max-w-6xl flex-col p-4 sm:p-6">
       <PageHeader crumb="chat" title="Chat" right={<div className="flex flex-wrap items-center gap-2">
@@ -166,24 +223,31 @@ export function Chat() {
               ))}
             </ul>
           </GlassCard>
-          <GlassCard className="flex h-[calc(100dvh-15.5rem)] min-h-[22rem] min-w-0 flex-col overflow-hidden sm:h-[calc(100dvh-12.5rem)]">
+          <GlassCard className="relative flex h-[calc(100dvh-15.5rem)] min-h-[22rem] min-w-0 flex-col overflow-hidden sm:h-[calc(100dvh-12.5rem)]">
             <div className="mb-2 flex flex-wrap items-center gap-2 text-xs text-muted">
               <span className="font-mono text-accent-2">{profile}</span>{agent && <GatewayDot g={agent.gateway} />}
               <ScopeChip scope={detail.data?.scope} />
               {id && <span className="truncate font-mono text-[10px]">{id}</span>}
               {detail.data?.model && <Chip>{detail.data.model}</Chip>}
+              {detail.data && <UsageStrip d={detail.data} />}
             </div>
             <div ref={box} data-transcript className="flex min-h-0 flex-1 flex-col gap-2 overflow-y-auto pr-1">
               {id && detail.isLoading && <Loading rows={3} />}
               {id && detail.isError && <Empty error title="Could not load this session" note={String(detail.error)} />}
               {detail.data && <Transcript rows={detail.data.transcript} />}
-              {!id && !pendingUser && <p className="m-auto text-center text-xs text-muted">New session with <span className="font-mono text-accent-2">{profile}</span>. Say something.</p>}
+              {!id && !pendingUser && (
+                <div className="m-auto flex max-w-md flex-col items-center gap-3 text-center">
+                  <p className="text-xs text-muted">New session with <span className="font-mono text-accent-2">{profile}</span>. Say something, or start with:</p>
+                  <div className="flex flex-wrap justify-center gap-2">{starters.map(s => <button key={s} type="button" onClick={() => void send(s)} disabled={!agentKnown || chatDisabled} className="rounded-full border border-line bg-glass px-3 py-1 text-xs text-fg hover:bg-raised disabled:opacity-50">{s}</button>)}</div>
+                </div>
+              )}
               {pendingUser && <Bubble role="user"><div className="whitespace-pre-wrap break-words">{pendingUser}</div></Bubble>}
-              {live && live.tools.map(t => <Bubble key={t.key} role="tool" tool><span className={clsx(t.state === 'failed' ? 'text-needsyou' : 'text-accent-2')}>{t.name}</span> {t.preview ?? ''} <span className="text-muted">· {t.state}</span></Bubble>)}
-              {live && live.thinking && <Bubble role="tool" tool><span className="italic">thinking…</span> {live.thinking.slice(-160)}</Bubble>}
-              {live && (live.text || live.tools.length === 0) && <Bubble role="assistant"><div className="whitespace-pre-wrap break-words">{live.text || <span className="animate-pulse text-muted">…</span>}</div></Bubble>}
+              {live && live.thinking && <Thinking text={live.thinking} live />}
+              {live && live.tools.map(t => <ToolCard key={t.key} t={t} />)}
+              {live && (live.text || waitingFirstToken) && <Bubble role="assistant">{live.text ? <Markdown text={live.text} /> : <span className="inline-flex items-center gap-1 text-muted"><span className="hq-dot-live inline-block size-1.5 rounded-full bg-current" />thinking…</span>}</Bubble>}
               {live?.error && <p className="text-xs text-needsyou">{live.error}</p>}
             </div>
+            {!atBottom && <button type="button" onClick={scrollDown} className="absolute bottom-24 left-1/2 z-10 -translate-x-1/2 rounded-full border border-line bg-glass-strong px-3 py-1 font-mono text-[10px] uppercase tracking-wider text-fg shadow-lg hover:bg-raised">↓ {unread > 0 ? `${unread} new` : 'latest'}</button>}
             <div className="mt-3 border-t border-line pt-3">
               {liveRun ? (
                 <div className="flex flex-wrap items-center justify-between gap-2 text-xs"><span className="text-working"><span className="hq-dot-live mr-1.5 inline-block size-1.5 rounded-full bg-current" />{profile} is working in this session (run #{liveRun.run_id}{liveRun.task_id ? `, task #${liveRun.task_id}` : ''}) — chat opens when the run ends.</span>{liveRun.task_id && <Link to={`/tasks/${liveRun.task_id}`} className="rounded-full border border-working/60 px-2 py-0.5 font-mono text-[10px] uppercase tracking-wider text-working hover:bg-working/20">Watch log</Link>}</div>

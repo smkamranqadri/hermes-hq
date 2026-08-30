@@ -4,7 +4,7 @@
 **hermes-hq is the live control plane since 2026-08-29 13:40 UTC** (branch `main`). Process: `nohup .venv/bin/hermes-hq serve --host 0.0.0.0 --port 9010 --interval 20 > /opt/data/hermes-hq-serve.log 2>&1 &` with the dispatcher ON; restart by hand after backend changes (`pkill -f 'hermes-hq serve'` in its own command, then that line). Password file `/opt/data/hermes-hq/password` is `test` for the owner's review (generated one kept in `password.prev`). Frontend builds go live without a restart. Legacy WM rollback recipe: `knowledge/technical.md` → Legacy WM. Latest commit at sync: see `git log`.
 
 ## Now
-Task: **Group 4 — direct chat scopes — COMPLETE 2026-08-30** (`intent/Group4Plan.md`). Next: **Group 4b — Chat polish + notifications** (`intent/Group4bPlan.md`, Phase mode, planned 2026-08-30); start with 4b-1 transcript rendering via `/kis:act`. Group 5 files after 4b.
+Task: **Group 4 — direct chat scopes — COMPLETE 2026-08-30** (`intent/Group4Plan.md`). Next: **Group 4b — Chat polish + notifications** (`intent/Group4bPlan.md`, Phase mode, planned 2026-08-30); 4b-1 transcript rendering DONE 2026-08-30; next 4b-2 sessions (rename/delete/pin/auto-title/find/search/export) via `/kis:act`. Group 5 files after 4b.
 Groups 1–4 are complete as of 2026-08-30.
 
 ## Next
@@ -26,6 +26,7 @@ None.
 `README.md`. Dev: `.venv/bin/hermes-hq serve --no-dispatcher` + `cd frontend && npm run dev`. Owner drops reference images in `screenshots/` (git-ignored).
 
 ## Proof (latest)
+- 2026-08-30 4b-1 transcript (live :9010, Playwright 1440/390): coder `wm-run-217` session renders 41 tool cards + 18 thinking blocks from `tool_calls`/`reasoning` in state.db (card expands to args/result), usage strip `↓75.4k ↑4.5k ⟳1.2M ≈$0.220` (models.dev `gpt-5.6-luna`, Hermes says included); orchestrator turn rendered a GFM table, code block (Copy → clipboard `print("hello")`), bullet list; scroll-up shows the `↓ latest` pill and it clears on click; 3 starter chips; timestamps/tokens on hover; scrollWidth 390 on both sessions. Suite 41 passed.
 - 2026-08-30 resume-first (owner request): Chat picker → resumed `api_1788067190_445dc5f1` for orchestrator × Personal Brand and showed "+ New chat about Personal Brand"; Project and Task cards show Resume + New chat; 390 no overflow.
 - 2026-08-30 fix: second chat about the same project failed with 502 (gateway 400 duplicate title); titles now time-suffixed — live `POST /api/chat/start` → `Project: Personal Brand · Aug 30 05:17:42`; suite 41 passed.
 - 2026-08-30 owner follow-up: Chat page project picker (orchestrator × Riyadh project → `api_1788066823_f88465f9`, brief + reply, chip shown) and the session dropdown hidden at ≥lg (2 selects at 1440, 3 at 390, scrollWidth 390).
