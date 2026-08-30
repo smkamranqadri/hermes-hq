@@ -25,9 +25,26 @@ The engine keeps its precise state machine (`planned, waiting_approval, ready, r
 | **Needs you** | owner approval, blocked, failed, stalled — each with the one action that unblocks it |
 | **Done** | done, manual |
 
-## Run (dev)
+## Install
 
 Requires Python ≥ 3.11 with [`uv`](https://github.com/astral-sh/uv), Node ≥ 22, and `hermes` on `PATH`.
+
+```bash
+git clone <this repo> && cd hermes-hq
+bash install.sh                    # venv + deps + UI build + supervised service (auto-detects systemd/s6)
+```
+
+`install.sh` is re-runnable; `--no-service` skips the supervisor step, `--host/--port/--interval` are passed through. The service runs as the installing user; logs go to journald (systemd) or an `s6-log` dir (`/var/log/hermes-hq`).
+
+```bash
+hermes-hq service status|restart|uninstall
+hermes-hq service update                  # git pull + rebuild what changed + restart + health check
+hermes-hq service auto-update --show      # daily 05:00 Asia/Karachi by default; --cron '…' | --off
+```
+
+If an update breaks the server (the supervisor will restart-loop it): `git reset --hard @{1} && hermes-hq service restart`.
+
+## Run (dev)
 
 ```bash
 uv venv .venv && uv pip install --python .venv/bin/python -e .
