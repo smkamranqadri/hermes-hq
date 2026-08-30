@@ -15,6 +15,7 @@ export function ScopedChat({ kind, id, slug }: { kind: 'project' | 'task'; id: n
   const installed = useMemo(() => (agents.data?.agents ?? []).filter(a => a.installed), [agents.data])
   const [profile, setProfile] = useState('orchestrator')
   const [busy, setBusy] = useState(false)
+  const [showAll, setShowAll] = useState(false)
   const sessions = useScopedSessions(kind, kind === 'project' ? slug : id)
   const noun = kind === 'project' ? 'project' : 'task'
   const last = sessions.data?.sessions.find(s => s.profile === profile && (kind === 'task' || !s.task_id))
@@ -46,7 +47,7 @@ export function ScopedChat({ kind, id, slug }: { kind: 'project' | 'task'; id: n
       {sessions.isLoading && <div className="mt-2"><Loading rows={2} /></div>}
       {sessions.data && sessions.data.sessions.length > 0 && (
         <ul className="mt-2 flex flex-col gap-1">
-          {sessions.data.sessions.map(s => (
+          {(showAll ? sessions.data.sessions : sessions.data.sessions.slice(0, 3)).map(s => (
             <li key={s.id} className="flex flex-wrap items-center gap-2 rounded-lg border border-line-subtle px-2 py-1.5">
               <Agent name={s.profile} />
               <span className="min-w-0 flex-1 truncate" title={s.session_id}>{s.title || s.session_id}{kind === 'project' && s.task_id ? <Link to={`/tasks/${s.task_id}`} className="ml-1 font-mono text-[10px] text-muted hover:text-accent-2">task #{s.task_id}</Link> : null}</span>
@@ -55,6 +56,7 @@ export function ScopedChat({ kind, id, slug }: { kind: 'project' | 'task'; id: n
             </li>))}
         </ul>
       )}
+      {sessions.data && sessions.data.sessions.length > 3 && !showAll && <button type="button" onClick={() => setShowAll(true)} className="mt-1 font-mono text-[10px] uppercase tracking-wider text-muted hover:text-fg">Show all {sessions.data.sessions.length}</button>}
       {sessions.data && sessions.data.sessions.length === 0 && <p className="mt-2 text-muted">No chats about this {noun} yet.</p>}
     </GlassCard>
   )

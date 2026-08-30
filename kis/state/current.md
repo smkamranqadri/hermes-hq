@@ -14,7 +14,7 @@ Group 5 project files (plan first), then Group 6 browsers; Web Push (4b-5.3) whe
 None.
 
 ## Known debt (open items only; accepted limits live in Knowledge → Known limits)
-- Agent detail history is one unified list capped at 120 rows with no paging/"show more".
+- Agent detail history shows 30 rows + "Show more" (40 at a time) over the 120-row cap; the cap itself is unchanged.
 - Specialist `.env` files carry the root `API_SERVER_KEY` (template-inherited); per-profile keys are an owner choice.
 - `mark_stalled` prefixes the transition detail with `liveness:` even for an owner stop; cosmetic.
 - `runs/<id>.log` holds only the wrapper's lines; the agent transcript is the Hermes session (Chat).
@@ -26,6 +26,7 @@ None.
 `README.md`. Dev: `.venv/bin/hermes-hq serve --no-dispatcher` + `cd frontend && npm run dev`. Owner drops reference images in `screenshots/` (git-ignored).
 
 ## Proof (latest)
+- 2026-08-30 mobile review round (owner: "more review for mobile"; Playwright 390 mobile emulation, full-page shots of all 11 pages + overflow scan): fixed the clipped 5th nav tab (smaller pills on phones), header now 2 rows (wordmark hidden < 420 px), Agent detail paged 30 + Show more (6,478 → 2,609 px) with truncated titles, project chat card capped at 3 + Show all, System tiles 2-up (1,710 → 1,171 px). Remaining overflow flags are truncated feed lines (clipped by design). Pages without faults: Overview, Projects, Tasks, Task detail, Chat, Activity.
 - 2026-08-30 4b-6 mobile (Playwright 390, isMobile): no header selects, Sessions button → bottom sheet listing 30 sessions (list box y306 h491), tapping one navigated and closed the sheet; simulated keyboard (visualViewport −300 px) → `--hq-kb: 300px`, chat card 596 → 296 px, composer bottom inside the visual viewport; scrollWidth 390.
 - 2026-08-30 4b-5.2 browser alerts + chime (live :9010, Playwright with `notifications` permission and stubbed `Notification`/`AudioContext`): enabling "Browser alerts" → test OS notification + `hq-notify {browser:true}`; enabling Sound → AudioContext created; server-side `question` while `hasFocus()=false` → OS notification `{title: 'coder asked you a question', body: 'Which branch?', tag: 'hq-3'}` within one poll; a second event while focused → bell 2, no extra OS notification. (Chime count beyond the first cannot be observed through the stub — the AudioContext is reused.)
 - 2026-08-30 4b-5.1 bell (live :9010, Playwright 1440/390): bell 0 at start (watermark, no backfill); throwaway project `hq-proof` (archived after) → task #101 → Take over → bell 1 "Task #101 needs you — manual · Notification proof task · acknowledged out of queue" → click opened `/tasks/101`, count 0; sent "pong" to the orchestrator and left for Overview → "orchestrator replied" appeared; Mark all read → 0; 390 menu is a full-width sheet (x 9, w 372), no overflow. Suite 48 passed.
