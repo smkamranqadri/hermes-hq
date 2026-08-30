@@ -11,7 +11,7 @@ from backend import auth as A
 from backend.api import router as api_router
 from backend.writes import router as write_router, make_auth_routes
 from backend.files import router as files_router, artifacts_router
-from backend import gateways
+from backend import gateways, terminal
 from backend.dispatcher import DispatcherLoop
 from core import wm_store
 
@@ -39,6 +39,7 @@ def create_app(dispatcher_enabled: bool = True, interval: float = 30.0, password
             gateways.stop_started()
         except Exception:  # never block shutdown
             pass
+        terminal.REGISTRY.close_all()
 
     app = FastAPI(title="hermes-hq", version=__version__, lifespan=lifespan)
     app.add_middleware(A.AuthMiddleware, sessions=sessions)
@@ -47,6 +48,8 @@ def create_app(dispatcher_enabled: bool = True, interval: float = 30.0, password
     app.include_router(write_router)
     app.include_router(files_router)
     app.include_router(artifacts_router)
+    app.include_router(terminal.router)
+    app.state.sessions = sessions
 
     @app.get("/api/health")
     def health():
