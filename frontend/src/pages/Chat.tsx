@@ -314,7 +314,7 @@ export function Chat() {
                     onChange={e => { setDraft(e.target.value); e.target.style.height = 'auto'; e.target.style.height = `${e.target.scrollHeight}px` }}
                     ref={el => { if (el) { el.style.height = 'auto'; el.style.height = draft ? `${el.scrollHeight}px` : '' } }}
                     onKeyDown={e => { if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); void send() } }} />
-                  {busy ? <Btn kind="warn" onClick={() => void stop()}>Stop</Btn> : <Btn onClick={() => void send()} disabled={!draft.trim() || !agentKnown}>Send</Btn>}
+                  {busy ? <Btn kind="warn" className="h-[38px] shrink-0" onClick={() => void stop()}>Stop</Btn> : <Btn className="h-[38px] shrink-0" onClick={() => void send()} disabled={!draft.trim() || !agentKnown}>Send</Btn>}
                 </div>
               )}
               {detail.data && <ContextLine d={detail.data} />}
