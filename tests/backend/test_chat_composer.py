@@ -11,14 +11,14 @@ def test_parts_and_model_options_reach_the_gateway(env):
     c, store, gw, root = env
     h = login(c)
     r = c.post("/api/chat/orchestrator/api_1_abc", json={"message": [{"type": "text", "text": "what colour?"}, {"type": "image_url", "image_url": {"url": PNG}}],
-                                                        "model": "gpt-5.6-luna", "effort": "high", "fast": True}, headers=h)
+                                                        "model": "gpt-5.6-luna", "provider": "openai", "effort": "high", "fast": True}, headers=h)
     assert r.status_code == 200
     ev = dict(_events(r.text))
     assert ev["assistant.completed"]["content"] == "Hello " + "what colour? [img]"[::-1]
     path, body = FakeGateway.calls[-1]
     assert path == "/api/sessions/api_1_abc/chat/stream"
     assert body["message"] == [{"type": "text", "text": "what colour?"}, {"type": "image_url", "image_url": {"url": PNG}}]
-    assert body["model"] == "gpt-5.6-luna" and body["model_options"] == {"reasoning_effort": "high", "fast": True}
+    assert body["model"] == "gpt-5.6-luna" and body["provider"] == "openai" and body["model_options"] == {"reasoning_effort": "high", "fast": True}
     # plain text still plain, no options keys when none given
     c.post("/api/chat/orchestrator/api_1_abc", json={"message": "hi"}, headers=h)
     assert FakeGateway.calls[-1][1] == {"message": "hi"}
@@ -53,4 +53,4 @@ def test_steer_passthrough_and_models_list(env):
     assert c.post("/api/chat/orchestrator/api_1_abc/steer/run_done", json={"message": "x"}, headers=h).status_code == 502
     assert c.post("/api/chat/orchestrator/api_1_abc/steer/run_9", json={"message": " "}, headers=h).status_code == 409
     m = c.get("/api/chat/models?q=luna").json()
-    assert "high" in m["efforts"] and isinstance(m["models"], list)
+    assert "high" in m["efforts"] and isinstance(m["models"], list) and isinstance(m["providers"], list)

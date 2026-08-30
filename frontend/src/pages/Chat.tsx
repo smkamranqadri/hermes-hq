@@ -77,7 +77,7 @@ function ContextLine({ d, opts, onOptions }: { d: SessionDetail; opts: TurnOptio
   return (
     <div className="mt-1.5 flex flex-wrap items-center gap-x-3 font-mono text-[10px] text-muted">
       <button type="button" onClick={() => setOpen(o => !o)} className="inline-flex flex-wrap items-center gap-x-3 hover:text-fg" title={c ? `context ≈ ${c.used.toLocaleString()} of ${c.limit ? c.limit.toLocaleString() : '?'} tokens — transcript ${c.transcript.toLocaleString()} + system overhead ${c.overhead.toLocaleString()} (${c.source}); click for the breakdown` : 'click for the breakdown'}>
-        <span className="text-accent-2" onClick={e => { e.stopPropagation(); onOptions() }} title="Model, reasoning effort and fast mode for this session">{opts.model || d.model}{opts.effort ? ` · ${opts.effort}` : ''}{opts.fast ? ' · fast' : ''}</span>
+        <span className="text-accent-2" onClick={e => { e.stopPropagation(); onOptions() }} title="Provider, model, reasoning effort and fast mode for this session">{opts.provider ? `${opts.provider}/` : ''}{opts.model || d.model}{opts.effort ? ` · ${opts.effort}` : ''}{opts.fast ? ' · fast' : ''}</span>
         {c && c.used > 0 && <span className={tone}>{bar} {pct != null ? `${pct < 1 ? '<1' : pct.toFixed(0)}%` : fmtTokens(c.used)}{c.limit ? <span className="text-muted"> {fmtTokens(c.limit)}</span> : null}</span>}
         {cost ? <span>${cost.toFixed(2)}</span> : est ? <span title={`≈ from models.dev prices for ${est.model}; Hermes reports this session as included`}>≈${est.usd.toFixed(2)}</span> : null}
         {scope && <span className="opacity-70">{scope}</span>}
@@ -97,9 +97,12 @@ function ContextLine({ d, opts, onOptions }: { d: SessionDetail; opts: TurnOptio
 /** Model / reasoning effort / fast for this session; models suggested from models.dev, free text allowed. */
 function OptionsPanel({ opts, current, onChange, onClose }: { opts: TurnOptions; current: string | null; onChange: (o: TurnOptions) => void; onClose: () => void }) {
   const [q, setQ] = useState(opts.model ?? '')
-  const models = useModels(q.length >= 2 ? q : '')
+  const models = useModels(opts.provider ? '' : (q.length >= 2 ? q : ''), opts.provider ?? '')
   return (
-    <div className="mt-2 grid gap-2 rounded-lg border border-line bg-inset p-2 text-xs sm:grid-cols-[1fr_auto_auto_auto]">
+    <div className="mt-2 grid gap-2 rounded-lg border border-line bg-inset p-2 text-xs sm:grid-cols-[auto_1fr_auto_auto_auto]">
+      <label className="flex items-center gap-2"><span className="text-muted">Provider</span>
+        <select value={opts.provider ?? ''} onChange={e => onChange({ provider: e.target.value || undefined })} className="hq-select max-w-[11rem] appearance-none rounded-md border border-line bg-glass py-1 pl-2 pr-7 font-mono text-[11px] outline-none focus:border-accent" title="Provider for this session (routed through Hermes' provider credentials); blank = gateway default">
+          <option value="">default</option>{(models.data?.providers ?? []).map(p => <option key={p.id} value={p.id}>{p.name}</option>)}</select></label>
       <label className="flex min-w-0 items-center gap-2"><span className="shrink-0 text-muted">Model</span>
         <input list="hq-models" value={q} placeholder={current ? `${current} (gateway default)` : 'gateway default'} onChange={e => setQ(e.target.value)} onBlur={() => onChange({ model: q.trim() || undefined })} onKeyDown={e => { if (e.key === 'Enter') { onChange({ model: q.trim() || undefined }); onClose() } }} className="min-w-0 flex-1 rounded-md border border-line bg-glass px-2 py-1 font-mono text-[11px] outline-none focus:border-accent" />
         <datalist id="hq-models">{(models.data?.models ?? []).slice(0, 50).map(m => <option key={m} value={m} />)}</datalist></label>
@@ -107,7 +110,7 @@ function OptionsPanel({ opts, current, onChange, onClose }: { opts: TurnOptions;
         <select value={opts.effort ?? ''} onChange={e => onChange({ effort: e.target.value || undefined })} className="hq-select appearance-none rounded-md border border-line bg-glass py-1 pl-2 pr-7 font-mono text-[11px] outline-none focus:border-accent">
           <option value="">default</option>{(models.data?.efforts ?? ['none', 'minimal', 'low', 'medium', 'high', 'xhigh', 'max', 'ultra']).map(e => <option key={e} value={e}>{e}</option>)}</select></label>
       <label className="flex items-center gap-2 text-muted"><input type="checkbox" checked={!!opts.fast} onChange={e => onChange({ fast: e.target.checked || undefined })} /> fast</label>
-      <div className="flex items-center gap-2"><button type="button" onClick={() => { setQ(''); onChange({ model: undefined, effort: undefined, fast: undefined }) }} className="text-muted hover:text-fg">reset</button><button type="button" onClick={onClose} className="text-muted hover:text-fg">✕</button></div>
+      <div className="flex items-center gap-2"><button type="button" onClick={() => { setQ(''); onChange({ model: undefined, provider: undefined, effort: undefined, fast: undefined }) }} className="text-muted hover:text-fg">reset</button><button type="button" onClick={onClose} className="text-muted hover:text-fg">✕</button></div>
     </div>
   )
 }
