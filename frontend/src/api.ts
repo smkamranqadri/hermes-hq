@@ -15,7 +15,7 @@ async function parse<T>(r: Response, url: string): Promise<T> {
   }
   return r.json()
 }
-async function get<T>(url: string): Promise<T> { return parse<T>(await fetch(url), url) }
+export async function get<T>(url: string): Promise<T> { return parse<T>(await fetch(url), url) }
 export async function post<T = unknown>(url: string, body?: unknown): Promise<T> {
   const r = await fetch(url, { method: 'POST', headers: { 'content-type': 'application/json', 'x-csrf': csrf }, body: body === undefined ? undefined : JSON.stringify(body) })
   return parse<T>(r, url)

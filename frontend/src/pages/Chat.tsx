@@ -2,7 +2,7 @@ import { useEffect, useMemo, useRef, useState } from 'react'
 import { Link, useLocation, useNavigate, useParams } from 'react-router-dom'
 import { useQueryClient } from '@tanstack/react-query'
 import clsx from 'clsx'
-import { useAgents, useAgentSessions, useSessionDetail, useProjects, startScopedChat, streamChat, post, ago, ApiError, type SseEvent, type ChatMessage } from '../api'
+import { useAgents, useAgentSessions, useSessionDetail, useProjects, startScopedChat, streamChat, post, get, ago, ApiError, type SseEvent, type ChatMessage, type ScopedSession } from '../api'
 import { GlassCard, PageHeader } from '../components/GlassCard'
 import { Empty, Loading, Chip, Select, Label } from '../components/ui'
 import { ActionBtn } from '../components/forms'
@@ -110,13 +110,20 @@ export function Chat() {
     void send(seed)
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [seed, id, profile])
-  /** Project picker: start a NEW session for this agent seeded with the project brief. */
-  async function startProject(slug: string) {
+  /** Project picker: resume this agent's latest chat about the project, or start a new one (seeded with the brief) when none exists / forced. */
+  async function openProject(slug: string, fresh = false) {
     const p = projects.data?.projects.find(x => x.slug === slug)
     if (!profile || !p || starting || busy) return
     setStarting(true)
-    try { const s = await startScopedChat({ profile, project_id: p.id }); qc.invalidateQueries({ queryKey: ['agent-sessions', profile] }); nav(`/chat/${s.profile}/${s.id}`, { state: { seed: s.brief } }) }
-    catch (e) { toast(e instanceof ApiError ? e.message : String(e), 'err') }
+    try {
+      if (!fresh) {
+        const { sessions } = await get<{ sessions: ScopedSession[] }>(`/api/project/${slug}/chat-sessions`)
+        const last = sessions.find(x => x.profile === profile && !x.task_id)
+        if (last) { nav(`/chat/${profile}/${last.session_id}`); return }
+      }
+      const s = await startScopedChat({ profile, project_id: p.id }); qc.invalidateQueries({ queryKey: ['agent-sessions', profile] }); qc.invalidateQueries({ queryKey: ['chat-scoped'] })
+      nav(`/chat/${s.profile}/${s.id}`, { state: { seed: s.brief } })
+    } catch (e) { toast(e instanceof ApiError ? e.message : String(e), 'err') }
     finally { setStarting(false) }
   }
   async function stop() {
@@ -135,10 +142,11 @@ export function Chat() {
           <option value="">Pick an agent…</option>
           {installed.map(a => <option key={a.name} value={a.name}>{a.name}</option>)}
         </Select>
-        {profile && <Select value="" disabled={starting || busy} onChange={e => void startProject(e.target.value)} title="Start a new chat seeded with a project brief">
-          <option value="">{starting ? 'Starting…' : 'New chat about a project…'}</option>
+        {profile && <Select value="" disabled={starting || busy} onChange={e => void openProject(e.target.value)} title="Resume this agent's latest chat about a project (or start one)">
+          <option value="">{starting ? 'Opening…' : 'Chat about a project…'}</option>
           {(projects.data?.projects ?? []).map(p => <option key={p.slug} value={p.slug}>{p.name}</option>)}
         </Select>}
+        {profile && detail.data?.scope?.project_slug && !detail.data.scope.task_id && <Btn kind="ghost" busy={starting} onClick={() => void openProject(detail.data!.scope!.project_slug!, true)}>+ New chat about {detail.data.scope.project_name}</Btn>}
         {profile && <Select value={id ?? ''} onChange={e => nav(e.target.value ? `/chat/${profile}/${e.target.value}` : `/chat/${profile}`)} className="max-w-[46vw] sm:max-w-xs lg:hidden">
           <option value="">New session</option>
           {id && !(sessions.data?.sessions ?? []).some(s => s.id === id) && <option value={id}>{id}</option>}
