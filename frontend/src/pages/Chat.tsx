@@ -309,7 +309,10 @@ export function Chat() {
                 <div className="flex flex-wrap items-center justify-between gap-2 text-xs text-muted"><span>Chat is off for <span className="font-mono text-accent-2">{profile}</span> — its gateway is not enabled.</span><ActionBtn url={`/api/agent/${profile}/gateway`} label="Enable chat" body={{ enabled: true }} confirm={`Start the ${profile} gateway? Its .env gets API_SERVER_PORT/KEY if missing.`} /></div>
               ) : (
                 <div className="flex items-end gap-2">
-                  <TextArea rows={2} value={draft} placeholder={agentKnown ? `Message ${profile}… (Enter to send, Shift+Enter for newline)` : 'Loading agent…'} onChange={e => setDraft(e.target.value)} disabled={busy || !agentKnown}
+                  <TextArea rows={1} value={draft} placeholder={agentKnown ? `Message ${profile}… (Enter to send, Shift+Enter for newline)` : 'Loading agent…'} disabled={busy || !agentKnown}
+                    style={{ resize: 'none', maxHeight: '40vh', overflowY: 'auto' }}
+                    onChange={e => { setDraft(e.target.value); e.target.style.height = 'auto'; e.target.style.height = `${e.target.scrollHeight}px` }}
+                    ref={el => { if (el) { el.style.height = 'auto'; el.style.height = draft ? `${el.scrollHeight}px` : '' } }}
                     onKeyDown={e => { if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); void send() } }} />
                   {busy ? <Btn kind="warn" onClick={() => void stop()}>Stop</Btn> : <Btn onClick={() => void send()} disabled={!draft.trim() || !agentKnown}>Send</Btn>}
                 </div>
