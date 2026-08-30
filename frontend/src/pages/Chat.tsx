@@ -156,6 +156,7 @@ export function Chat() {
   const detail = useSessionDetail(profile, id)
   usePageTitle(profile ? `Chat · ${profile}` : 'Chat')
   const [draft, setDraft] = useState('')
+  const carry = useRef<string | null>(null)
   const [live, setLive] = useState<Live | null>(null)
   const liveRef = useRef<Live | null>(null); liveRef.current = live
   const turnRef = useRef({ text: '', runId: '' })   // survives unmount (state updates stop once the page is left)
@@ -204,7 +205,10 @@ export function Chat() {
     setOpts(loadOpts(profile, id)); setDown(null)
     if (abort.current) return   // we navigated here ourselves while sending (new session): keep the composer as it is
     setAtts([])
-    const d = takeDraft(profile, id); if (d) { setDraft(d.text); setRestored(d.pending ? 'pending' : 'draft') } else { setDraft(''); setRestored(null) }
+    // a draft written for a "new" chat (e.g. Skills → Learn) follows the session this page lands on
+    const d = takeDraft(profile, id) ?? (id && carry.current ? { text: carry.current, pending: false } : null)
+    carry.current = !id && d ? d.text : null
+    if (d) { setDraft(d.text); setRestored(d.pending ? 'pending' : 'draft') } else { setDraft(''); setRestored(null) }
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [profile, id])
   const setOpt = (patch: TurnOptions) => { if (!profile) return; const next = { ...opts, ...patch }; setOpts(next); saveOpts(profile, id, next) }
