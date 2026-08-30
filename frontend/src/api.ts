@@ -134,6 +134,12 @@ export const deleteSession = (profile: string, id: string) => post<{ id: string;
 export type SearchHit = { profile: string; id: string; title: string | null; model: string | null; last_activity_at: number | null; hits: number; snippet: string }
 export const useChatSearch = (q: string) => useQuery({ queryKey: ['chat-search', q], queryFn: () => get<{ results: SearchHit[] }>(`/api/chat/search?q=${encodeURIComponent(q)}`), enabled: q.trim().length >= 2, staleTime: 10000 })
 
+// ---- notifications ------------------------------------------------------
+export type Notification = { id: number; ts: number; kind: 'needs_you' | 'done' | 'info' | 'chat' | 'question'; title: string; body: string | null; href: string | null; task_id: number | null; read_at: number | null }
+export const useNotifications = () => useQuery({ queryKey: ['notifications'], queryFn: () => get<{ notifications: Notification[]; unread: number }>('/api/notifications?limit=50'), refetchInterval: 15000 })
+export const markNotificationsRead = (ids?: number[]) => post<{ marked: number }>('/api/notifications/read', ids ? { ids } : {})
+export const addNotification = (n: { kind: 'chat' | 'question'; title: string; body?: string; href?: string; source_key?: string }) => post<{ id: number | null }>('/api/notifications', n)
+
 /** POST a chat message and stream the gateway's SSE events back. Resolves when the stream ends. */
 export type MessagePart = { type: 'text'; text: string } | { type: 'image_url'; image_url: { url: string } }
 export type TurnOptions = { model?: string; provider?: string; effort?: string; fast?: boolean }

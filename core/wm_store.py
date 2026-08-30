@@ -389,6 +389,20 @@ CREATE TABLE IF NOT EXISTS chat_sessions (
     UNIQUE (profile, session_id)
 );
 
+CREATE TABLE IF NOT EXISTS notifications (
+    id          INTEGER PRIMARY KEY,
+    ts          REAL,
+    kind        TEXT,
+    title       TEXT,
+    body        TEXT,
+    href        TEXT,
+    task_id     INTEGER,
+    run_id      INTEGER,
+    project_id  INTEGER,
+    source_key  TEXT UNIQUE,
+    read_at     REAL
+);
+
 CREATE INDEX IF NOT EXISTS idx_tasks_project ON tasks(project_id);
 CREATE INDEX IF NOT EXISTS idx_tasks_goal    ON tasks(goal_id);
 CREATE INDEX IF NOT EXISTS idx_tasks_status  ON tasks(status);
@@ -3126,3 +3140,96 @@ def render_task_brief(task_id, db_path=None):
         lines.append("Latest run: #%s by %s [%s]%s" % (run["id"], run["agent_profile"], run["status"],
                      (", session " + run["session_id"]) if run["session_id"] else ""))
     return "\n".join(lines + _CHAT_BRIEF_FOOTER)
+
+
+# ---- Group 4b-5: notifications -----------------------------------------------
+# Derived from state_transitions (the engine already records every status change) plus
+# client-originated events (chat reply finished off-screen, agent asked a question).
+NOTIFY_NEEDS_YOU = {"blocked", "failed", "stalled", "waiting_approval", "needs_review", "manual"}
+NOTIFY_INFO = {"done", "rework"}
+_NOTIF_WATERMARK = "notif_last_transition_id"
+
+
+def _set_meta(key, value, db_path=None):
+    conn = _connect(db_path)
+    try:
+        with conn:
+            conn.execute("INSERT OR REPLACE INTO wm_meta(key, value) VALUES (?, ?)", (key, str(value)))
+    finally:
+        conn.close()
+
+
+def add_notification(kind, title, body=None, href=None, task_id=None, run_id=None, project_id=None, source_key=None, ts=None, db_path=None):
+    """Insert one notification; a repeated source_key is a no-op (idempotent). Returns the row id or None."""
+    conn = _connect(db_path)
+    try:
+        with conn:
+            cur = conn.execute(
+                "INSERT OR IGNORE INTO notifications(ts, kind, title, body, href, task_id, run_id, project_id, source_key) "
+                "VALUES (?,?,?,?,?,?,?,?,?)", (ts or time.time(), kind, title, body, href, task_id, run_id, project_id, source_key))
+            return cur.lastrowid if cur.rowcount else None
+    finally:
+        conn.close()
+
+
+def sync_notifications(db_path=None):
+    """Turn new state_transitions into notifications. The first call only sets the watermark (no backfill of
+    history). Returns the number of notifications created."""
+    conn = _connect(db_path)
+    try:
+        last = conn.execute("SELECT value FROM wm_meta WHERE key=?", (_NOTIF_WATERMARK,)).fetchone()
+        top = conn.execute("SELECT COALESCE(MAX(id), 0) FROM state_transitions").fetchone()[0]
+        if last is None:
+            with conn:
+                conn.execute("INSERT OR REPLACE INTO wm_meta(key, value) VALUES (?, ?)", (_NOTIF_WATERMARK, str(top)))
+            return 0
+        rows = conn.execute(
+            "SELECT s.id, s.task_id, s.run_id, s.ts, s.from_status, s.to_status, s.detail, t.title AS task_title, t.project_id, "
+            "t.assignee_profile FROM state_transitions s LEFT JOIN tasks t ON t.id = s.task_id WHERE s.id > ? ORDER BY s.id",
+            (int(last["value"]),)).fetchall()
+        made = 0
+        with conn:
+            for r in rows:
+                to = r["to_status"]
+                if to in NOTIFY_NEEDS_YOU:
+                    kind = "needs_you"; title = "Task #%s needs you — %s" % (r["task_id"], to.replace("_", " "))
+                elif to in NOTIFY_INFO:
+                    kind = "done" if to == "done" else "info"; title = "Task #%s %s" % (r["task_id"], "is done" if to == "done" else "sent back for rework")
+                else:
+                    continue
+                body = "%s%s" % (r["task_title"] or "", (" · " + r["detail"][:160]) if r["detail"] else "")
+                cur = conn.execute(
+                    "INSERT OR IGNORE INTO notifications(ts, kind, title, body, href, task_id, run_id, project_id, source_key) VALUES (?,?,?,?,?,?,?,?,?)",
+                    (r["ts"] or time.time(), kind, title, body.strip(" ·"), "/tasks/%s" % r["task_id"], r["task_id"], r["run_id"], r["project_id"], "transition:%s" % r["id"]))
+                made += cur.rowcount
+            conn.execute("INSERT OR REPLACE INTO wm_meta(key, value) VALUES (?, ?)", (_NOTIF_WATERMARK, str(top)))
+        return made
+    finally:
+        conn.close()
+
+
+def list_notifications(limit=50, unread_only=False, db_path=None):
+    conn = _connect(db_path)
+    try:
+        sql = "SELECT * FROM notifications" + (" WHERE read_at IS NULL" if unread_only else "") + " ORDER BY ts DESC, id DESC LIMIT ?"
+        rows = [dict(r) for r in conn.execute(sql, (limit,))]
+        unread = conn.execute("SELECT COUNT(*) FROM notifications WHERE read_at IS NULL").fetchone()[0]
+        return rows, unread
+    finally:
+        conn.close()
+
+
+def mark_notifications_read(ids=None, db_path=None):
+    """ids=None → everything. Returns rows affected."""
+    conn = _connect(db_path)
+    try:
+        with conn:
+            if ids is None:
+                return conn.execute("UPDATE notifications SET read_at=? WHERE read_at IS NULL", (time.time(),)).rowcount
+            ids = [int(i) for i in ids]
+            if not ids:
+                return 0
+            return conn.execute("UPDATE notifications SET read_at=? WHERE read_at IS NULL AND id IN (%s)" % ",".join("?" * len(ids)),
+                                [time.time()] + ids).rowcount
+    finally:
+        conn.close()

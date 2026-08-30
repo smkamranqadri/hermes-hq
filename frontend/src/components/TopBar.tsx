@@ -1,6 +1,7 @@
 import { useEffect, useState } from 'react'
 import { NavLink, useNavigate } from 'react-router-dom'
 import clsx from 'clsx'
+import { Bell } from './Bell'
 import { useQuery } from '@tanstack/react-query'
 import { Menu, MenuItem } from './Menu'
 import { AppearanceMenu } from './AppearanceMenu'
@@ -48,6 +49,7 @@ export function TopBar() {
           {TOOLS.map(([label, to]) => <MenuItem key={to} onClick={() => nav(to)}>{label}</MenuItem>)}
         </Menu>
         <AppearanceMenu />
+        <Bell />
         <span className="flex items-center gap-2 font-mono text-[11px]">
           <span className={clsx('size-2 rounded-full', sys.isError ? 'bg-error text-error' : live ? 'hq-dot-live bg-working text-working' : 'bg-needsyou text-needsyou')} />
           <span className="hidden sm:inline">{sys.isError ? 'OFFLINE' : live ? 'LIVE' : 'PAUSED'}</span>

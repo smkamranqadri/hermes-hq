@@ -2,7 +2,7 @@ import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { Link, useLocation, useNavigate, useParams } from 'react-router-dom'
 import { useQueryClient } from '@tanstack/react-query'
 import clsx from 'clsx'
-import { useAgents, useAgentSessions, useSessionDetail, useProjects, startScopedChat, streamChat, steerTurn, updateSession, useModels, post, get, ago, when, ApiError, type SseEvent, type ChatMessage, type ScopedSession, type SessionDetail, type TurnOptions } from '../api'
+import { useAgents, useAgentSessions, useSessionDetail, useProjects, startScopedChat, streamChat, steerTurn, updateSession, useModels, addNotification, post, get, ago, when, ApiError, type SseEvent, type ChatMessage, type ScopedSession, type SessionDetail, type TurnOptions } from '../api'
 import { GlassCard, PageHeader } from '../components/GlassCard'
 import { Empty, Loading, Select } from '../components/ui'
 import { ActionBtn } from '../components/forms'
@@ -136,6 +136,8 @@ export function Chat() {
   usePageTitle(profile ? `Chat · ${profile}` : 'Chat')
   const [draft, setDraft] = useState('')
   const [live, setLive] = useState<Live | null>(null)
+  const liveRef = useRef<Live | null>(null); liveRef.current = live
+  const turnRef = useRef({ text: '', runId: '' })   // survives unmount (state updates stop once the page is left)
   const [pendingUser, setPendingUser] = useState<string | null>(null)
   const abort = useRef<AbortController | null>(null)
   const box = useRef<HTMLDivElement>(null)
@@ -243,9 +245,12 @@ export function Chat() {
     setPendingUser(msg + (attsNow.length ? `\n${attsNow.map(a => a.kind === 'image' ? '🖼 ' + a.name : '📄 ' + a.name).join('  ')}` : '')); setLive(emptyLive()); setAtBottom(true); setDown(null)
     let failed = false
     abort.current = new AbortController()
+    turnRef.current = { text: '', runId: '' }
     const onEvent = (e: SseEvent) => setLive(l => {
-      if (!l) return l
       const d = e.data as Record<string, string | undefined>
+      if (e.name === 'run.started' && d.run_id) turnRef.current.runId = d.run_id
+      if (e.name === 'assistant.delta') turnRef.current.text += d.delta ?? ''
+      if (!l) return l
       switch (e.name) {
         case 'run.started': return { ...l, runId: (d.run_id as string) ?? l.runId }
         case 'assistant.delta': return { ...l, text: l.text + (d.delta ?? '') }
@@ -268,6 +273,13 @@ export function Chat() {
       }
     }
     finally {
+      const finalText = turnRef.current.text || liveRef.current?.text || ''; const runId = turnRef.current.runId || liveRef.current?.runId || ''
+      const away = document.hidden || !window.location.pathname.endsWith(`/chat/${profile}/${sid}`)
+      const asked = /```hq-options/.test(finalText)
+      if (!failed && (away || asked)) {
+        void addNotification({ kind: asked ? 'question' : 'chat', title: asked ? `${profile} asked you a question` : `${profile} replied`, body: finalText.replace(/```[\s\S]*?```/g, '').trim().slice(0, 200) || undefined, href: `/chat/${profile}/${sid}`, source_key: `chat:${sid}:${runId || Date.now()}` })
+          .then(() => qc.invalidateQueries({ queryKey: ['notifications'] })).catch(() => {})
+      }
       abort.current = null; setLive(null); setPendingUser(null)
       if (failed) { setDraft(msg); saveDraft(profile, sid, msg) } else clearDraft(profile, sid)
       qc.invalidateQueries({ queryKey: ['session', profile, sid] }); qc.invalidateQueries({ queryKey: ['agent-sessions', profile] }); qc.invalidateQueries({ queryKey: ['agents'] })
