@@ -330,7 +330,12 @@ function GraphTab({ profile, setParams }: { profile: string; setParams: (p: Reco
   const [sel, setSel] = useState<string | null>(null)
   const box = useRef<HTMLDivElement>(null)
   const [size, setSize] = useState({ w: 800, h: 520 })
-  useEffect(() => { const el = box.current; if (!el) return; const ro = new ResizeObserver(() => setSize({ w: el.clientWidth, h: el.clientWidth < 640 ? Math.round(el.clientWidth * 1.3) : Math.max(360, Math.min(640, el.clientWidth * 0.62)) })); ro.observe(el); return () => ro.disconnect() }, [])
+  const ready = !g.isLoading && !g.isError
+  useEffect(() => {   // the box only exists once the graph loaded — observe it then, not at mount
+    const el = box.current; if (!el || !ready) return
+    const measure = () => setSize({ w: el.clientWidth, h: el.clientWidth < 640 ? Math.round(el.clientWidth * 1.3) : Math.max(360, Math.min(640, el.clientWidth * 0.62)) })
+    measure(); const ro = new ResizeObserver(measure); ro.observe(el); return () => ro.disconnect()
+  }, [ready])
   const lay = useMemo(() => g.data ? layout(g.data, size.w, size.h) : null, [g.data, size])
   const node = useQuery({ queryKey: ['memory-node', profile, sel], queryFn: () => get<{ kind: string; label: string; content: string }>(`/api/memory/graph/node?${q({ profile, id: sel! })}`), enabled: !!sel })
   const selNode = g.data?.nodes.find(n => n.id === sel)
