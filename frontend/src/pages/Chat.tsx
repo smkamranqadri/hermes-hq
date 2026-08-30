@@ -98,15 +98,22 @@ function ContextLine({ d, opts, onOptions }: { d: SessionDetail; opts: TurnOptio
 
 /** On phones the virtual keyboard shrinks visualViewport but not 100dvh on every browser: publish the difference as
  *  --hq-kb so the chat card shrinks with it and the composer stays visible above the keyboard. */
-function useKeyboardInset() {
+function useKeyboardInset(box: React.RefObject<HTMLDivElement | null>) {
   useEffect(() => {
     const vv = window.visualViewport
-    if (!vv) return
     const root = document.documentElement
-    const apply = () => { const kb = Math.max(0, Math.round(window.innerHeight - vv.height - vv.offsetTop)); root.style.setProperty('--hq-kb', `${kb}px`); if (kb > 0) window.scrollTo({ top: 0 }) }
-    apply(); vv.addEventListener('resize', apply); vv.addEventListener('scroll', apply)
-    return () => { vv.removeEventListener('resize', apply); vv.removeEventListener('scroll', apply); root.style.removeProperty('--hq-kb') }
-  }, [])
+    const apply = () => {
+      const vh = vv ? vv.height : window.innerHeight
+      const kb = Math.max(0, Math.round(window.innerHeight - vh - (vv?.offsetTop ?? 0)))
+      root.style.setProperty('--hq-kb', `${kb}px`); if (kb > 0) window.scrollTo({ top: 0 })
+      // phones: the chat card fills exactly to the bottom of the visible viewport (no fixed rem guess)
+      const card = box.current?.parentElement
+      if (card) { if (window.innerWidth < 640) { const top = card.getBoundingClientRect().top + window.scrollY; card.style.height = `${Math.max(224, Math.round(vh - top - 12))}px` } else card.style.height = '' }
+    }
+    apply(); const t = setTimeout(apply, 150)
+    vv?.addEventListener('resize', apply); vv?.addEventListener('scroll', apply); window.addEventListener('resize', apply)
+    return () => { clearTimeout(t); vv?.removeEventListener('resize', apply); vv?.removeEventListener('scroll', apply); window.removeEventListener('resize', apply); root.style.removeProperty('--hq-kb') }
+  }, [box])
 }
 
 /** Model / reasoning effort / fast for this session; models suggested from models.dev, free text allowed. */
@@ -181,7 +188,7 @@ export function Chat() {
   const [rename, setRename] = useState<{ id: string; title: string } | null>(null)
   const [sheet, setSheet] = useState(false)
   useEffect(() => { setSheet(false) }, [id, profile])
-  useKeyboardInset()
+  useKeyboardInset(box)
   const [atts, setAtts] = useState<Attachment[]>([])
   const [opts, setOpts] = useState<TurnOptions>({})
   const [showOpts, setShowOpts] = useState(false)
@@ -446,7 +453,7 @@ export function Chat() {
                   <div className="flex items-end gap-2">
                     <input ref={fileInput} type="file" multiple accept="image/*,.md,.txt,.json,.csv,.ts,.tsx,.js,.py,.yaml,.yml,.toml,.sh,.html,.css,.sql,.log" className="hidden" onChange={e => { void addFiles(e.target.files); e.target.value = '' }} />
                     <button type="button" aria-label="Attach image or text file" title="Attach image or text file (or paste / drop)" disabled={busy || !agentKnown} onClick={() => fileInput.current?.click()} className="inline-flex h-[29px] w-[29px] shrink-0 items-center justify-center rounded-full border border-line text-muted hover:text-fg disabled:opacity-50"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true"><path d="m21.4 11.05-9.2 9.2a6 6 0 0 1-8.5-8.5l9.2-9.2a4 4 0 0 1 5.66 5.66l-9.2 9.2a2 2 0 0 1-2.83-2.83l8.5-8.5" /></svg></button>
-                    <TextArea rows={1} value={draft} placeholder={!agentKnown ? 'Loading agent…' : busy && live?.runId ? `Steer the running turn… (Enter to send guidance without stopping)` : busy ? 'Waiting for the run to start…' : `Message ${profile}… (Enter to send, Shift+Enter for newline, / for commands)`} disabled={!agentKnown || (busy && !live?.runId)}
+                    <TextArea rows={1} value={draft} placeholder={!agentKnown ? 'Loading agent…' : busy && live?.runId ? `Steer the running turn… (Enter to send guidance without stopping)` : busy ? 'Waiting for the run to start…' : window.innerWidth < 640 ? `Message ${profile}…` : `Message ${profile}… (Enter to send, Shift+Enter for newline, / for commands)`} disabled={!agentKnown || (busy && !live?.runId)}
                       style={{ resize: 'none', maxHeight: '40vh', overflowY: 'auto', paddingTop: 3.5, paddingBottom: 3.5 }}
                       onChange={e => { setDraft(e.target.value); setRestored(null); if (profile) saveDraft(profile, id, e.target.value); e.target.style.height = 'auto'; e.target.style.height = `${e.target.scrollHeight}px` }}
                       onPaste={e => { const files = Array.from(e.clipboardData?.files ?? []); if (files.length) { e.preventDefault(); void addFiles(files) } }}
