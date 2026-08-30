@@ -4,7 +4,7 @@
 **hermes-hq is the live control plane since 2026-08-29 13:40 UTC** (branch `main`). Process: `nohup .venv/bin/hermes-hq serve --host 0.0.0.0 --port 9010 --interval 20 > /opt/data/hermes-hq-serve.log 2>&1 &` with the dispatcher ON; restart by hand after backend changes (`pkill -f 'hermes-hq serve'` in its own command, then that line). Password file `/opt/data/hermes-hq/password` is `test` for the owner's review (generated one kept in `password.prev`). Frontend builds go live without a restart. Legacy WM rollback recipe: `knowledge/technical.md` → Legacy WM. Latest commit at sync: see `git log`.
 
 ## Now
-Task: **Group 4 — direct chat scopes — COMPLETE 2026-08-30** (`intent/Group4Plan.md`). Next: **Group 4b — Chat polish + notifications** (`intent/Group4bPlan.md`, Phase mode, planned 2026-08-30); 4b-1 transcript rendering DONE 2026-08-30; next 4b-2 sessions (rename/delete/pin/auto-title/find/search/export) via `/kis:act`. Group 5 files after 4b.
+Task: **Group 4 — direct chat scopes — COMPLETE 2026-08-30** (`intent/Group4Plan.md`). Next: **Group 4b — Chat polish + notifications** (`intent/Group4bPlan.md`, Phase mode, planned 2026-08-30); 4b-1 and 4b-2 DONE 2026-08-30; next 4b-3 composer + reliability (slash commands, model picker, image/file attachments incl. Ctrl+V, pending-send recovery, gateway-down banner, steer) via `/kis:act` — pre-flight the `attachments` shape and `/v1/runs/{id}/steer` live first. Group 5 files after 4b.
 Groups 1–4 are complete as of 2026-08-30.
 
 ## Next
@@ -26,6 +26,7 @@ None.
 `README.md`. Dev: `.venv/bin/hermes-hq serve --no-dispatcher` + `cd frontend && npm run dev`. Owner drops reference images in `screenshots/` (git-ignored).
 
 ## Proof (latest)
+- 2026-08-30 4b-2 sessions (live :9010, Playwright 1440/390): header-title rename → gateway PATCH → "Renamed by proof"; ⋯ Pin → Pinned section on top; Ctrl+F "completion" in coder run 217 → 1/9 → Enter 2/9 (9 `<mark>`s); export `coder-20260829_191035_08b16d.md` 85 kB with 41 tool blocks; Ctrl+K "completion contract" → 30 hits, Enter opened the hit with the find bar prefilled (3 marks); ⋯ Delete → gateway DELETE, row gone, redirected to `/chat/orchestrator`. Suite 43 passed.
 - 2026-08-30 status line (owner: like the Claude Code statusline): `model ░░░░░░░░░░ 2% 1.1M ≈$0.00 personal-brand ▸`, colours 50/80 %, click → breakdown; 1440/390 clean.
 - 2026-08-30 context meter (owner: percentage of allowed): `/api/session` now carries `context {used, transcript, overhead, limit, pct}`; live orchestrator session ≈17.2k of 1.05M (2%), coder run 217 ≈70.8k (7%); bar turns amber ≥70 %, red ≥90 %. Suite 41 passed.
 - 2026-08-30 chat header de-clutter (owner layout): new-chat chooser in the chat area, scope chip + New chat in the page header, title-only card header, model/tokens line under the composer (click → ↓171 ↑19 ⟳16.9k ≈$0.002); Playwright 1440/390 clean.

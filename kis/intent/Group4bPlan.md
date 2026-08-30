@@ -11,14 +11,14 @@ Gateway facts (from hermes-workspace code, verify live before use): rename `PATC
 4. [x] DONE 2026-08-30 Empty state starter chips (per agent: 3 prompts from its template description) and a "thinking…" indicator before the first token.
 Proof: Playwright 1440/390 on a real coder turn with a code block + tool call; markdown table renders; copy button copies.
 
-## 4b-2 Sessions — NEXT
-1. [ ] Rename (inline title edit in the header → gateway PATCH, hq `chat_sessions.title` kept in sync), Delete with confirm (gateway DELETE; link row removed), Pin (gateway PATCH `pinned` if accepted, else hq-side) — pinned section on top of the list.
-2. [ ] Auto-title: after the first reply of an untitled session, PATCH a title from the first user line (≤60 chars).
-3. [ ] Find in conversation (Ctrl+F bar, next/prev), global session search (Ctrl+K modal; hq-side SQL LIKE over each profile's `messages` RO, gateway search if it answers) with snippets.
-4. [ ] Export transcript as Markdown (server renders `GET /api/session/{p}/{id}/export.md`).
+## 4b-2 Sessions — DONE 2026-08-30
+1. [x] DONE 2026-08-30 Rename (inline title edit in the header → gateway PATCH, hq `chat_sessions.title` kept in sync), Delete with confirm (gateway DELETE; link row removed), Pin (gateway PATCH `pinned` if accepted, else hq-side) — pinned section on top of the list.
+2. [x] DONE 2026-08-30 (already satisfied: hq titles a new session from the first message at creation; gateway PATCH used for rename) Auto-title: after the first reply of an untitled session, PATCH a title from the first user line (≤60 chars).
+3. [x] DONE 2026-08-30 Find in conversation (Ctrl+F bar, next/prev), global session search (Ctrl+K modal; hq-side SQL LIKE over each profile's `messages` RO, gateway search if it answers) with snippets.
+4. [x] DONE 2026-08-30 Export transcript as Markdown (server renders `GET /api/session/{p}/{id}/export.md`).
 Proof: rename/delete round-trip visible in the gateway list; search finds a known phrase from a dispatched run; pytest with the fake gateway for PATCH/DELETE/export.
 
-## 4b-3 Composer + reliability
+## 4b-3 Composer + reliability — NEXT
 1. [ ] Slash-command menu: built-ins that the gateway handles (`/new /title /compress /usage /model /skills /mcp …` — take the list from `GET /v1/commands` when present, else a fixed set), fuzzy filter, sent as plain text.
 2. [ ] Model picker (`GET /v1/models`), per-session choice stored in hq (`chat_sessions.model` for linked, localStorage for global), sent as `model` per turn; reasoning-effort only if the gateway exposes it (else dropped, noted in Knowledge).
 3. [ ] Image + file attachments: Ctrl+V paste, drag-drop, picker; client downscale to 1920px/JPEG ≤1 MB; text files as text parts; thumbnails in the composer and in the transcript. Verify the `attachments` shape live on coder first.

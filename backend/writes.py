@@ -237,6 +237,11 @@ class ChatIn(BaseModel):
     message: str
 
 
+class SessionUpdate(BaseModel):
+    title: str | None = None
+    pinned: bool | None = None
+
+
 class ChatStart(BaseModel):
     profile: str
     project_id: int | None = None
@@ -263,6 +268,16 @@ def chat_new_session(profile: str, body: NewSession | None = None):
 @router.post("/chat/start")
 def chat_start(body: ChatStart):
     return _chat(chat.start_scoped, body.profile, project_id=body.project_id, task_id=body.task_id, title=body.title)
+
+
+@router.post("/chat/{profile}/{session_id}/update")
+def chat_update(profile: str, session_id: str, body: SessionUpdate):
+    return _chat(chat.update_session, profile, session_id, title=body.title, pinned=body.pinned)
+
+
+@router.post("/chat/{profile}/{session_id}/delete")
+def chat_delete(profile: str, session_id: str):
+    return _chat(chat.delete_session, profile, session_id)
 
 
 @router.post("/chat/{profile}/{session_id}/stop/{run_id}")

@@ -780,6 +780,7 @@ SESSION_SUMMARY_KEYS = (
     "cache_read_tokens", "cache_write_tokens", "reasoning_tokens",
     "estimated_cost_usd", "actual_cost_usd", "cost_status", "cwd",
     "git_branch", "title", "title_source", "last_activity_at", "profile_name",
+    "pinned",
 )
 
 
@@ -799,7 +800,7 @@ def agent_sessions(profiles_dir, name, limit=100):
         limit = max(1, min(int(limit or 100), 500))
         rows = _fetchall(con,
             "SELECT * FROM sessions WHERE archived=0 "
-            "ORDER BY COALESCE(last_activity_at, started_at, id) DESC LIMIT ?",
+            "ORDER BY COALESCE(pinned, 0) DESC, COALESCE(last_activity_at, started_at, id) DESC LIMIT ?",
             (limit,))
         out = []
         for r in rows:
@@ -808,6 +809,45 @@ def agent_sessions(profiles_dir, name, limit=100):
         return out
     finally:
         con.close()
+
+
+def search_sessions(profiles_dir, profiles, q, limit=30):
+    """Group 4b-2: case-insensitive substring search over session titles and message content of the
+    given profiles (each state.db RO). Hermes has no search endpoint on this build. Returns rows with a
+    ~160-char snippet around the first hit; newest activity first."""
+    q = (q or "").strip()
+    if len(q) < 2:
+        return []
+    like = "%" + q.replace("%", "\\%").replace("_", "\\_") + "%"
+    out = []
+    for name in profiles:
+        try:
+            db = _safe_profile(profiles_dir, name)
+            con = connect_ro(db)
+        except (ValueError, FileNotFoundError, OSError):
+            continue
+        try:
+            rows = _fetchall(con,
+                "SELECT s.id, s.title, s.model, s.last_activity_at, s.started_at, "
+                "  (SELECT m.content FROM messages m WHERE m.session_id=s.id AND m.role IN ('user','assistant') "
+                "     AND m.content LIKE ? ESCAPE '\\' ORDER BY m.id LIMIT 1) AS hit, "
+                "  (SELECT COUNT(*) FROM messages m WHERE m.session_id=s.id AND m.role IN ('user','assistant') "
+                "     AND m.content LIKE ? ESCAPE '\\') AS hits "
+                "FROM sessions s WHERE s.archived=0 AND (s.title LIKE ? ESCAPE '\\' OR EXISTS ("
+                "  SELECT 1 FROM messages m WHERE m.session_id=s.id AND m.role IN ('user','assistant') AND m.content LIKE ? ESCAPE '\\')) "
+                "ORDER BY COALESCE(s.last_activity_at, s.started_at) DESC LIMIT ?", (like, like, like, like, limit))
+        except sqlite3.Error:
+            rows = []
+        finally:
+            con.close()
+        for r in rows:
+            hit = r.get("hit") or ""
+            i = hit.lower().find(q.lower())
+            snippet = (("…" if i > 60 else "") + hit[max(0, i - 60): i + 100] + ("…" if i + 100 < len(hit) else "")) if i >= 0 else ""
+            out.append({"profile": name, "id": r["id"], "title": r.get("title"), "model": r.get("model"),
+                        "last_activity_at": r.get("last_activity_at") or r.get("started_at"), "hits": r.get("hits") or 0, "snippet": snippet.replace("\n", " ")})
+    out.sort(key=lambda r: r["last_activity_at"] or 0, reverse=True)
+    return out[:limit]
 
 
 def _tool_calls(raw):

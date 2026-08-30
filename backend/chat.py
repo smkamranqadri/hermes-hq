@@ -10,6 +10,7 @@ created by dispatched runs (same SessionDB).
 import http.client
 import json
 import logging
+import os
 import re
 import socket
 import time
@@ -174,6 +175,82 @@ def start_scoped(profile, project_id=None, task_id=None, title=None, db_path=Non
                        detail="session %s" % sess["id"], db_path=db_path)
     return {"id": sess["id"], "profile": profile, "title": title, "brief": brief,
             "scope": _scope(store.chat_session_scopes(profile, db_path=db_path or store.DEFAULT_DB_PATH).get(sess["id"]))}
+
+
+def update_session(profile, session_id, title=None, pinned=None, db_path=None):
+    """Rename and/or pin through the gateway (`PATCH /api/sessions/{id}`); the hq link row follows the title."""
+    _check_profile(profile); _check_session(session_id)
+    body = {}
+    if title is not None:
+        title = title.strip()
+        if not title:
+            raise ValueError("title must not be empty")
+        body["title"] = title[:120]
+    if pinned is not None:
+        body["pinned"] = bool(pinned)
+    if not body:
+        raise ValueError("nothing to update")
+    port, key = gateways.ensure_running(profile, db_path)
+    data = _gateway_json(port, key, "PATCH", "/api/sessions/%s" % session_id, body, retry_for=8.0)
+    sess = data.get("session") if isinstance(data.get("session"), dict) else data
+    if "title" in body:
+        store.retitle_chat_session(profile, session_id, body["title"], db_path=db_path)
+    store.log_activity(action="chat_session_update", agent_profile=profile, detail="session %s: %s" % (session_id, json.dumps(body)), db_path=db_path)
+    return {"id": session_id, "title": sess.get("title"), "pinned": bool(sess.get("pinned"))}
+
+
+def delete_session(profile, session_id, db_path=None):
+    _check_profile(profile); _check_session(session_id)
+    port, key = gateways.ensure_running(profile, db_path)
+    _gateway_json(port, key, "DELETE", "/api/sessions/%s" % session_id, None, retry_for=8.0)
+    store.unlink_chat_session(profile, session_id, db_path=db_path)
+    store.log_activity(action="chat_session_delete", agent_profile=profile, detail="session %s" % session_id, db_path=db_path)
+    return {"id": session_id, "deleted": True}
+
+
+def export_markdown(profile, session_id, db_path=None):
+    """Transcript as Markdown (from state.db; works with the gateway off)."""
+    d = transcript(profile, session_id, limit=2000, db_path=db_path)
+    if d is None:
+        return None
+    lines = ["# %s" % (d.get("title") or session_id), "",
+             "- agent: `%s`  " % profile, "- session: `%s`  " % session_id,
+             "- model: `%s`  " % (d.get("model") or "-"),
+             "- started: %s  " % time.strftime("%Y-%m-%d %H:%M", time.localtime(d["started_at"])) if d.get("started_at") else "- started: -  ", ""]
+    for m in d["transcript"]:
+        role = m.get("role")
+        if role == "system":
+            continue
+        ts = time.strftime("%H:%M:%S", time.localtime(m["timestamp"])) if m.get("timestamp") else ""
+        if m.get("reasoning"):
+            lines += ["<details><summary>thinking</summary>", "", m["reasoning"].strip(), "", "</details>", ""]
+        for c in m.get("tool_calls") or []:
+            lines += ["**tool → %s**" % c["name"], "", "```json", c.get("arguments") or "", "```", ""]
+        if role == "tool" or (m.get("tool_name") and role != "assistant"):
+            lines += ["<details><summary>result ← %s</summary>" % (m.get("tool_name") or "tool"), "", "```", (m.get("content") or "").strip(), "```", "", "</details>", ""]
+            continue
+        if m.get("content") and m["content"].strip():
+            lines += ["## %s%s" % ("You" if role == "user" else profile, (" · %s" % ts) if ts else ""), "", m["content"].strip(), ""]
+    return "\n".join(lines)
+
+
+def search(q, limit=30, db_path=None):
+    profiles = [a["name"] for a in _installed_profiles()]
+    return readers.search_sessions(store.resolve_profiles_dir(), profiles, q, limit=limit)
+
+
+def _installed_profiles():
+    """Profiles worth searching: the default profile plus every profile dir that has a state.db."""
+    out = [{"name": store.ORCHESTRATOR_AGENT}]
+    pdir = store.resolve_profiles_dir()
+    try:
+        names = sorted(os.listdir(pdir))
+    except OSError:
+        names = []
+    for n in names:
+        if n != store.ORCHESTRATOR_AGENT and os.path.exists(os.path.join(pdir, n, "state.db")):
+            out.append({"name": n})
+    return out
 
 
 def stop_turn(profile, run_id, db_path=None):
