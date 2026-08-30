@@ -24,7 +24,10 @@ def test_project_start_links_and_seeds(env):
     assert "PROJECT CHAT — Demo" in d["brief"] and "#1 Ship v1 [draft]" in d["brief"] and "#%d Write docs" % tid in d["brief"]
     assert "NOT a dispatched task" in d["brief"]
     assert [p for p, _ in FakeGateway.calls] == ["/api/sessions"]
-    assert FakeGateway.calls[0][1]["title"] == "Project: Demo"
+    assert FakeGateway.calls[0][1]["title"].startswith("Project: Demo · ")
+    # second start must not reuse the title (gateway rejects duplicates per profile)
+    r2 = c.post("/api/chat/start", json={"profile": "orchestrator", "project_id": 1}, headers=h)
+    assert r2.status_code == 200 and FakeGateway.calls[1][1]["title"].startswith("Project: Demo · ")
     # listed under the project and flagged on the profile's session list/detail
     assert c.get("/api/project/demo/chat-sessions").json()["sessions"][0]["session_id"] == "api_1_abc"
     assert c.get("/api/task/%d/chat-sessions" % tid).json()["sessions"] == []

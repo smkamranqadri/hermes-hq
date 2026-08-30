@@ -160,11 +160,13 @@ def start_scoped(profile, project_id=None, task_id=None, title=None, db_path=Non
         title = title or "Project: %s" % project["name"]
     else:
         raise ValueError("project_id or task_id is required")
-    sess = create_session(profile, title=title[:80], db_path=db_path)
-    store.link_chat_session(profile, sess["id"], project_id=project_id, task_id=task_id, title=title[:80], db_path=db_path)
+    # The gateway enforces unique titles per profile: suffix the start time.
+    title = "%s · %s" % (title[:60], time.strftime("%b %d %H:%M:%S"))
+    sess = create_session(profile, title=title, db_path=db_path)
+    store.link_chat_session(profile, sess["id"], project_id=project_id, task_id=task_id, title=title, db_path=db_path)
     store.log_activity(action="chat_scoped", project_id=project_id, task_id=task_id, agent_profile=profile,
                        detail="session %s" % sess["id"], db_path=db_path)
-    return {"id": sess["id"], "profile": profile, "title": title[:80], "brief": brief,
+    return {"id": sess["id"], "profile": profile, "title": title, "brief": brief,
             "scope": _scope(store.chat_session_scopes(profile, db_path=db_path or store.DEFAULT_DB_PATH).get(sess["id"]))}
 
 
