@@ -25,7 +25,7 @@ None.
 - Task detail is long on phones (all blocks stacked); Activity has no "load more".
 
 ## How to run
-`README.md`. Dev: `.venv/bin/hermes-hq serve --no-dispatcher` + `cd frontend && npm run dev`. Owner drops reference images in `screenshots/` (git-ignored). Playwright walks: scratchpad scripts (see memory `hermes-hq-ops`), mobile = 390×844 with `isMobile`.
+`README.md`. Dev: `.venv/bin/hermes-hq serve --no-dispatcher` + `cd frontend && npm run dev`. Owner drops reference images in `screenshots/` (git-ignored). Playwright: settings in memory `hermes-hq-ops` (browser path, 390×844 + `isMobile` for phones); scripts are per-session.
 
 ## Proof (latest, one line per shipped area — details are in git history)
 - Suite: `tests/backend` **51 passed** (2026-08-30).
