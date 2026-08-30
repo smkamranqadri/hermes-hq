@@ -65,12 +65,15 @@ function ContextLine({ d }: { d: SessionDetail }) {
   const [open, setOpen] = useState(false)
   const cost = d.actual_cost_usd || d.estimated_cost_usd
   const est = d.cost_estimate
-  const ctx = (d.input_tokens ?? 0) + (d.output_tokens ?? 0)
+  const c = d.context
+  const pct = c?.pct ?? null
+  const tone = pct == null ? '' : pct >= 90 ? 'text-needsyou' : pct >= 70 ? 'text-queued' : ''
   return (
     <div className="mt-1.5 flex flex-wrap items-center gap-x-3 font-mono text-[10px] text-muted">
-      <button type="button" onClick={() => setOpen(o => !o)} className="inline-flex items-center gap-1.5 hover:text-fg" title="Model and token use of this session — click for the breakdown (context meter comes with 4b-3)">
+      <button type="button" onClick={() => setOpen(o => !o)} className="inline-flex items-center gap-1.5 hover:text-fg" title={c ? `≈ ${c.used.toLocaleString()} of ${c.limit ? c.limit.toLocaleString() : '?'} tokens — transcript ${c.transcript.toLocaleString()} + system overhead ${c.overhead.toLocaleString()} (${c.source}); click for the breakdown` : 'click for the breakdown'}>
         {d.model && <span>{d.model}</span>}
-        {ctx > 0 && <span>· tokens {fmtTokens(ctx)}</span>}
+        {c && c.used > 0 && <span className={tone}>· context ≈{pct != null ? ` ${pct < 1 ? '<1' : pct.toFixed(0)}%` : ''} ({fmtTokens(c.used)}{c.limit ? ` of ${fmtTokens(c.limit)}` : ''})</span>}
+        {c && c.limit && <span className="inline-block h-1 w-16 overflow-hidden rounded-full bg-inset align-middle"><span className={clsx('block h-full', pct != null && pct >= 90 ? 'bg-needsyou' : pct != null && pct >= 70 ? 'bg-queued' : 'bg-working')} style={{ width: `${Math.min(100, Math.max(1, pct ?? 0))}%` }} /></span>}
         <span>{open ? '▾' : '▸'}</span>
       </button>
       {open && <>

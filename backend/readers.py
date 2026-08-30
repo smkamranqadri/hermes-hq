@@ -846,6 +846,12 @@ def session_detail(profiles_dir, profile, session_id, transcript=True, limit=400
             "estimated_cost_usd, actual_cost_usd, cost_status "
             "FROM session_model_usage WHERE session_id=? "
             "ORDER BY COALESCE(last_seen, first_seen) DESC", (session_id,))
+        # Group 4b: transcript size for the context estimate (chars/4 over active rows, incl. tool calls + reasoning)
+        est = _fetchone(con, "SELECT COALESCE(SUM(LENGTH(COALESCE(content,'')) + LENGTH(COALESCE(tool_calls,'')) "
+                             "+ LENGTH(COALESCE(reasoning_content, reasoning, ''))), 0) AS chars, COUNT(*) AS n "
+                             "FROM messages WHERE session_id=? AND (active IS NULL OR active=1)", (session_id,))
+        detail["transcript_chars"] = int(est["chars"] or 0) if est else 0
+        detail["api_call_count"] = s.get("api_call_count")
         detail["transcript"] = []
         if transcript:
             cols = ["id", "role", "content", "timestamp", "tool_name",

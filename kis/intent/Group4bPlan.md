@@ -23,7 +23,7 @@ Proof: rename/delete round-trip visible in the gateway list; search finds a know
 2. [ ] Model picker (`GET /v1/models`), per-session choice stored in hq (`chat_sessions.model` for linked, localStorage for global), sent as `model` per turn; reasoning-effort only if the gateway exposes it (else dropped, noted in Knowledge).
 3. [ ] Image + file attachments: Ctrl+V paste, drag-drop, picker; client downscale to 1920px/JPEG ≤1 MB; text files as text parts; thumbnails in the composer and in the transcript. Verify the `attachments` shape live on coder first.
 4. [ ] Pending send survives reload (localStorage, 5-min TTL, re-sent with confirmation), gateway-down banner with Retry, failed sends keep the draft.
-5. [ ] Steer: "Send while running" → `POST /v1/runs/{id}/steer {message}`; if the gateway rejects, fall back to queueing the message for after the turn. Context meter from `/runtime` with a near-limit warning at 80 %.
+5. [ ] Steer: "Send while running" → `POST /v1/runs/{id}/steer {message}`; if the gateway rejects, fall back to queueing the message for after the turn. Context meter: DONE 2026-08-30 as an estimate (no `/runtime` on this Hermes; see Knowledge); only revisit if a runtime endpoint appears.
 Proof: real image turn (agent describes the image), a slash command result, model switch reflected in `session_model_usage`, reload mid-send.
 
 ## 4b-4 Agent questions with options
