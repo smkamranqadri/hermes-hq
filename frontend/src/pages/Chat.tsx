@@ -262,13 +262,13 @@ export function Chat() {
                 return <>{pinned.length > 0 && <li className="px-2 pt-1 font-mono text-[10px] uppercase tracking-wider text-muted">Pinned</li>}{pinned.map(row)}{pinned.length > 0 && rest.length > 0 && <li className="px-2 pt-2 font-mono text-[10px] uppercase tracking-wider text-muted">Recent</li>}{rest.map(row)}</>
               })()}
             </ul>
-            <button type="button" onClick={() => setSearch(true)} className="mt-2 flex items-center justify-between rounded-lg border border-line px-2 py-1 text-[11px] text-muted hover:bg-raised hover:text-fg"><span>Search all chats</span><kbd className="font-mono text-[10px]">Ctrl K</kbd></button>
+            <button type="button" onClick={() => setSearch(true)} className="mt-2 flex items-center justify-between rounded-lg border border-line px-2 py-1 text-[11px] text-muted hover:bg-raised hover:text-fg"><span className="inline-flex items-center gap-1.5"><svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.2" strokeLinecap="round" aria-hidden="true"><circle cx="11" cy="11" r="7" /><path d="m20 20-3.6-3.6" /></svg>Search all chats</span><kbd className="font-mono text-[10px]">Ctrl K</kbd></button>
           </GlassCard>
           <GlassCard className="relative flex h-[calc(100dvh-15.5rem)] min-h-[22rem] min-w-0 flex-col overflow-hidden sm:h-[calc(100dvh-12.5rem)]">
             {id && <div className="mb-2 flex min-w-0 items-center gap-2 text-xs">
               <button type="button" onClick={() => setRename({ id, title: detail.data?.title || '' })} className="min-w-0 truncate rounded px-1 font-medium hover:bg-raised" title="Rename session">{detail.data?.title || id}</button>
               <span className="shrink-0 font-mono text-[10px] text-muted">· {profile}</span>
-              <button type="button" onClick={() => setFind(f => f ?? '')} className="ml-auto shrink-0 rounded px-1.5 font-mono text-[10px] uppercase tracking-wider text-muted hover:bg-raised hover:text-fg" title="Find in conversation (Ctrl F)">find</button>
+              <button type="button" onClick={() => setFind(f => f ?? '')} className="ml-auto inline-flex shrink-0 items-center gap-1 rounded px-1.5 font-mono text-[10px] uppercase tracking-wider text-muted hover:bg-raised hover:text-fg" title="Find in conversation (Ctrl F)"><svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.2" strokeLinecap="round" aria-hidden="true"><circle cx="11" cy="11" r="7" /><path d="m20 20-3.6-3.6" /></svg>find</button>
             </div>}
             {find !== null && id && <FindBar container={box} initial={find} onClose={() => setFind(null)} />}
             <div ref={box} data-transcript className="flex min-h-0 flex-1 flex-col gap-2 overflow-y-auto pr-1">
