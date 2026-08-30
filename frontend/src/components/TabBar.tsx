@@ -11,7 +11,7 @@ const I = {
   more: <><circle cx="5" cy="12" r="1.6" /><circle cx="12" cy="12" r="1.6" /><circle cx="19" cy="12" r="1.6" /></>,
 }
 export const TAB_ITEMS = [
-  ['Overview', '/', 'overview'], ['Projects', '/projects', 'projects'], ['Tasks', '/tasks', 'tasks'], ['Chat', '/chat', 'chat'], ['Inbox', '/inbox', 'inbox'], ['More', '/more', 'more'],
+  ['Overview', '/', 'overview'], ['Tasks', '/tasks', 'tasks'], ['Chat', '/chat', 'chat'], ['Inbox', '/inbox', 'inbox'], ['More', '/more', 'more'],
 ] as const
 
 /** Phone tab bar in the top nav's pill style: floating, rounded, glass. Inbox carries the unread badge. Hidden from `sm`. */
@@ -21,7 +21,7 @@ export function TabBar() {
   return (
     <nav data-tabbar aria-label="Primary" className="hq-menu fixed inset-x-3 bottom-[calc(env(safe-area-inset-bottom,0px)+0.5rem)] z-30 flex rounded-full border border-line p-1 shadow-[0_12px_32px_rgba(0,0,0,0.45)] sm:hidden">
       {TAB_ITEMS.map(([label, to, icon]) => (
-        <NavLink key={to} to={to} end={to === '/'} className={({ isActive }) => clsx('relative flex h-12 flex-1 flex-col items-center justify-center gap-0.5 rounded-full text-[9px] font-medium transition-colors', isActive ? 'bg-fg text-bg' : 'text-muted')}>
+        <NavLink key={to} to={to} end={to === '/'} className={({ isActive }) => clsx('relative flex h-12 flex-1 flex-col items-center justify-center gap-0.5 rounded-full text-[10px] font-medium transition-colors', isActive ? 'bg-fg text-bg' : 'text-muted')}>
           <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.9" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">{I[icon]}</svg>
           {label}
           {icon === 'inbox' && unread > 0 && <span data-tab-badge className="absolute right-[calc(50%-1.35rem)] top-1 min-w-4 rounded-full bg-needsyou px-1 text-center font-mono text-[9px] font-semibold leading-4 text-bg">{unread > 99 ? '99+' : unread}</span>}
