@@ -55,7 +55,7 @@ export function Bell() {
         {unread > 0 && <span className="absolute -right-1 -top-1 min-w-4 rounded-full bg-needsyou px-1 text-center font-mono text-[9px] font-semibold leading-4 text-bg" data-bell-count>{unread > 99 ? '99+' : unread}</span>}
       </button>
       {open && (
-        <div className="absolute right-0 top-full z-40 mt-2 w-96 rounded-xl border border-line bg-glass-strong p-2 text-xs shadow-lg max-sm:fixed max-sm:inset-x-2 max-sm:mt-0 max-sm:w-auto" style={window.innerWidth < 640 && top != null ? { top } : undefined} data-bell-menu>
+        <div className="absolute right-0 top-full z-40 mt-2 w-96 rounded-xl border border-line hq-menu p-2 text-xs shadow-lg max-sm:fixed max-sm:inset-x-2 max-sm:mt-0 max-sm:w-auto" style={window.innerWidth < 640 && top != null ? { top } : undefined} data-bell-menu>
           <div className="mb-1 flex items-center justify-between px-1"><span className="font-mono text-[10px] uppercase tracking-wider text-muted">Notifications{unread ? ` · ${unread} unread` : ''}</span>{unread > 0 && <button type="button" onClick={() => void readAll()} className="font-mono text-[10px] uppercase tracking-wider text-muted hover:text-fg">Mark all read</button>}</div>
           <ul className="max-h-[60vh] overflow-y-auto">
             {rows.length === 0 && <li className="px-2 py-3 text-muted">Nothing yet — you'll see tasks that need you, finished work and chat replies here.</li>}

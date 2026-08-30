@@ -26,7 +26,7 @@ export function SessionMenu({ profile, s, current, onRename }: { profile: string
     <div ref={ref} className="relative shrink-0">
       <button type="button" aria-label="Session menu" onClick={e => { e.preventDefault(); e.stopPropagation(); setOpen(o => !o) }} className={clsx('rounded px-1 font-mono text-[12px] leading-none text-muted hover:bg-inset hover:text-fg', open ? 'opacity-100' : 'opacity-0 group-hover/sess:opacity-100 focus:opacity-100')}>⋯</button>
       {open && (
-        <div className="absolute right-0 top-5 z-20 w-40 rounded-lg border border-line bg-glass-strong p-1 text-xs shadow-lg" onClick={e => e.stopPropagation()}>
+        <div className="absolute right-0 top-5 z-20 w-40 rounded-lg border border-line hq-menu p-1 text-xs shadow-lg" onClick={e => e.stopPropagation()}>
           <button type="button" disabled={busy} onClick={() => void run(() => updateSession(profile, s.id, { pinned: !pinned }))} className="block w-full rounded px-2 py-1 text-left hover:bg-raised">{pinned ? 'Unpin' : 'Pin'}</button>
           <button type="button" disabled={busy} onClick={() => { setOpen(false); onRename() }} className="block w-full rounded px-2 py-1 text-left hover:bg-raised">Rename</button>
           <a href={`/api/session/${profile}/${s.id}/export.md`} download className="block w-full rounded px-2 py-1 text-left hover:bg-raised" onClick={() => setOpen(false)}>Export Markdown</a>

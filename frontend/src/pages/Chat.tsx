@@ -387,7 +387,7 @@ export function Chat() {
           {sheet && (
             <div className="fixed inset-0 z-40 lg:hidden" role="dialog" aria-label="Sessions" data-sheet>
               <div className="absolute inset-0 bg-bg/60" onClick={() => setSheet(false)} />
-              <div className="absolute inset-x-0 bottom-0 flex max-h-[75dvh] flex-col rounded-t-2xl border border-line bg-glass-strong p-3 pb-[max(0.75rem,env(safe-area-inset-bottom))] shadow-2xl" style={{ backdropFilter: 'blur(18px)', WebkitBackdropFilter: 'blur(18px)' }}>
+              <div className="absolute inset-x-0 bottom-0 flex max-h-[75dvh] flex-col rounded-t-2xl border border-line hq-menu p-3 pb-[max(0.75rem,env(safe-area-inset-bottom))] shadow-2xl" style={{ backdropFilter: 'blur(18px)', WebkitBackdropFilter: 'blur(18px)' }}>
                 <div className="mx-auto mb-2 h-1 w-10 shrink-0 rounded-full bg-line" />
                 {sessionNav}
               </div>
@@ -441,7 +441,7 @@ export function Chat() {
                   {down && <div className="mb-2 flex flex-wrap items-center justify-between gap-2 rounded-lg border border-needsyou/50 bg-needsyou/10 px-3 py-1.5 text-xs text-needsyou"><span>Gateway unreachable — {down.msg}</span><span className="flex gap-2"><Btn kind="warn" onClick={down.retry}>Retry</Btn><button type="button" onClick={() => setDown(null)} className="px-1 hover:text-fg">✕</button></span></div>}
                   {restored && <p className="mb-1 text-[11px] text-muted">{restored === 'pending' ? 'This message was being sent when the page reloaded — it was not delivered. Send it again?' : 'Unsent draft restored.'}</p>}
                   {slash && slash.length > 0 && !busy && (
-                    <div className="mb-1 overflow-hidden rounded-lg border border-line bg-glass-strong text-xs shadow-lg">
+                    <div className="mb-1 overflow-hidden rounded-lg border border-line hq-menu text-xs shadow-lg">
                       {slash.map((c, i) => <button key={c.cmd} type="button" onMouseEnter={() => setSlashSel(i)} onClick={() => { setDraft(c.cmd + (c.args ? ' ' : '')); if (!c.args) void send(c.cmd) }} className={clsx('flex w-full items-baseline gap-2 px-3 py-1 text-left hover:bg-raised', i === slashSel && 'bg-raised')}><span className="font-mono text-accent-2">{c.cmd}</span>{c.args && <span className="font-mono text-[10px] text-muted">{c.args}</span>}<span className="min-w-0 flex-1 truncate text-muted">{c.desc}</span></button>)}
                     </div>
                   )}
