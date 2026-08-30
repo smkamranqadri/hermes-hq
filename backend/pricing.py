@@ -21,10 +21,16 @@ def _cache_path():
     return os.path.join(store.hq_home(), "models_dev.json")
 
 
+_providers = {}
+
+
 def _build_index(data):
-    """{model_id_lower: {"cost": {...}, "context": int|None}} across providers; bare ids win over provider/-prefixed duplicates."""
+    """{model_id_lower: {"cost": {...}, "context": int|None}} across providers; bare ids win over provider/-prefixed duplicates.
+    Also fills the provider catalogue used by the picker."""
     idx = {}
-    for prov in (data or {}).values():
+    _providers.clear()
+    for pid, prov in (data or {}).items():
+        _providers[pid] = {"id": pid, "name": prov.get("name") or pid, "models": sorted((prov.get("models") or {}).keys())}
         for mid, m in (prov.get("models") or {}).items():
             cost = m.get("cost") if isinstance(m, dict) else None
             if not isinstance(cost, dict) or "input" not in cost:
@@ -121,11 +127,20 @@ def estimate(model, input_tokens=0, output_tokens=0, cache_read=0, cache_write=0
     return {"usd": round(usd, 4), "model": matched, "source": "models.dev"}
 
 
-def model_ids(prefix=None, limit=200):
-    """Known model ids from models.dev (bare ids, no provider prefix); optional case-insensitive substring filter."""
+def model_ids(prefix=None, limit=200, provider=None):
+    """Known model ids from models.dev; optional provider (models.dev provider id) and substring filter."""
     idx = _load() or {}
-    ids = sorted(k for k in idx if "/" not in k)
+    if provider and provider in _providers:
+        ids = list(_providers[provider]["models"])
+    else:
+        ids = sorted(k for k in idx if "/" not in k)
     if prefix:
         p = prefix.lower()
-        ids = [k for k in ids if p in k]
+        ids = [k for k in ids if p in k.lower()]
     return ids[:limit]
+
+
+def providers():
+    """[{id, name, models: n}] from models.dev, sorted by name."""
+    _load()
+    return sorted(({"id": p["id"], "name": p["name"], "models": len(p["models"])} for p in _providers.values()), key=lambda p: p["name"].lower())

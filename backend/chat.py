@@ -304,11 +304,13 @@ def normalize_message(message):
     return parts, preview.strip()
 
 
-def model_options(model=None, effort=None, fast=None):
-    """Per-turn routing fields for the gateway: `model` (+ provider-prefixed ids), `model_options.reasoning_effort|fast`."""
+def model_options(model=None, effort=None, fast=None, provider=None):
+    """Per-turn routing fields for the gateway: `model`, `provider`, `model_options.reasoning_effort|fast`."""
     body = {}
     if isinstance(model, str) and model.strip():
         body["model"] = model.strip()[:120]
+    if isinstance(provider, str) and provider.strip():
+        body["provider"] = provider.strip()[:80]
     opts = {}
     if isinstance(effort, str) and effort.strip():
         e = effort.strip().lower()
@@ -335,7 +337,7 @@ def steer_turn(profile, run_id, message, db_path=None):
     return out
 
 
-def stream_turn(profile, session_id, message, db_path=None, model=None, effort=None, fast=None):
+def stream_turn(profile, session_id, message, db_path=None, model=None, effort=None, fast=None, provider=None):
     """Generator of SSE bytes from the gateway's /chat/stream, pass-through.
 
     Raises ValueError (chat disabled / bad input) or GatewayError BEFORE the
@@ -345,7 +347,7 @@ def stream_turn(profile, session_id, message, db_path=None, model=None, effort=N
     _check_profile(profile); _check_session(session_id)
     payload, preview = normalize_message(message)
     body = {"message": payload}
-    body.update(model_options(model, effort, fast))
+    body.update(model_options(model, effort, fast, provider))
     port, key = gateways.ensure_running(profile, db_path)
     c = http.client.HTTPConnection("127.0.0.1", port, timeout=CONNECT_TIMEOUT)
     try:
