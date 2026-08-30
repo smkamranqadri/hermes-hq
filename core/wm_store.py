@@ -3012,6 +3012,24 @@ def link_chat_session(profile, session_id, project_id=None, task_id=None, title=
         conn.close()
 
 
+def unlink_chat_session(profile, session_id, db_path=None):
+    conn = _connect(db_path)
+    try:
+        with conn:
+            conn.execute("DELETE FROM chat_sessions WHERE profile=? AND session_id=?", (profile, session_id))
+    finally:
+        conn.close()
+
+
+def retitle_chat_session(profile, session_id, title, db_path=None):
+    conn = _connect(db_path)
+    try:
+        with conn:
+            conn.execute("UPDATE chat_sessions SET title=? WHERE profile=? AND session_id=?", (title, profile, session_id))
+    finally:
+        conn.close()
+
+
 _CHAT_SCOPE_SQL = ("SELECT c.*, p.slug AS project_slug, p.name AS project_name, t.title AS task_title "
                    "FROM chat_sessions c LEFT JOIN projects p ON p.id=c.project_id LEFT JOIN tasks t ON t.id=c.task_id ")
 

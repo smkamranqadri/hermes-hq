@@ -1,5 +1,5 @@
 """Read API for Group 1a. Every handler is read-only over hq.db."""
-from fastapi import APIRouter, HTTPException, Query
+from fastapi import APIRouter, HTTPException, Query, Response
 
 from backend import agents as ag, chat, overview as ov, readers, sysinfo, tasks as tq
 from core import wm_store
@@ -108,6 +108,23 @@ def task_chat_sessions(task_id: int):
     if wm_store.get_task(task_id, db_path=_db()) is None:
         raise HTTPException(404, "no such task")
     return {"sessions": wm_store.chat_sessions_for_task(task_id, db_path=_db())}
+
+
+@router.get("/chat/search")
+def chat_search(q: str = Query("", max_length=200), limit: int = Query(30, ge=1, le=100)):
+    return {"q": q, "results": chat.search(q, limit=limit, db_path=_db())}
+
+
+@router.get("/session/{profile}/{session_id}/export.md")
+def session_export(profile: str, session_id: str):
+    try:
+        md = chat.export_markdown(profile, session_id, db_path=_db())
+    except ValueError as e:
+        raise HTTPException(404, str(e))
+    if md is None:
+        raise HTTPException(404, "no such session")
+    fname = "%s-%s.md" % (profile, session_id)
+    return Response(md, media_type="text/markdown; charset=utf-8", headers={"Content-Disposition": 'attachment; filename="%s"' % fname})
 
 
 @router.get("/session/{profile}/{session_id}")

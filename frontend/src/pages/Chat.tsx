@@ -12,6 +12,7 @@ import { usePageTitle } from '../usePageTitle'
 import { GatewayDot } from './Agents'
 import { Markdown } from '../components/chat/Markdown'
 import { ToolCard, Thinking, fmtTokens, type ToolView } from '../components/chat/Blocks'
+import { SessionMenu, RenameDialog, SearchModal, FindBar } from '../components/chat/SessionTools'
 
 type Live = { text: string; tools: ToolView[]; thinking: string; runId: string | null; error: string | null; startedAt: number }
 const emptyLive = (): Live => ({ text: '', tools: [], thinking: '', runId: null, error: null, startedAt: Date.now() })
@@ -137,6 +138,20 @@ export function Chat() {
   }, [rowCount, live?.text, live?.tools.length, live?.thinking, pendingUser, id, atBottom])
   const installed = useMemo(() => (agents.data?.agents ?? []).filter(a => a.installed), [agents.data])
   const busy = live !== null
+  const [rename, setRename] = useState<{ id: string; title: string } | null>(null)
+  const [search, setSearch] = useState(false)
+  const findSeed = (loc.state as { find?: string } | null)?.find
+  const [find, setFind] = useState<string | null>(null)
+  useEffect(() => { if (findSeed && id) { setFind(findSeed); nav(loc.pathname, { replace: true, state: null }) } // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [findSeed, id])
+  useEffect(() => {
+    const h = (e: KeyboardEvent) => {
+      if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === 'k') { e.preventDefault(); setSearch(true) }
+      else if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === 'f' && id) { e.preventDefault(); setFind(f => f ?? '') }
+      else if (e.key === 'Escape') { setFind(null); setSearch(false) }
+    }
+    window.addEventListener('keydown', h); return () => window.removeEventListener('keydown', h)
+  }, [id])
 
   async function send(text?: string) {
     const msg = (text ?? draft).trim()
@@ -222,6 +237,8 @@ export function Chat() {
           {(sessions.data?.sessions ?? []).map(s => <option key={s.id} value={s.id}>{s.scope ? (s.scope.task_id ? `[#${s.scope.task_id}] ` : `[${s.scope.project_slug}] `) : ''}{s.title || s.id}</option>)}
         </Select>}
       </div>} />
+      {rename && profile && <RenameDialog profile={profile} id={rename.id} initial={rename.title} onClose={() => setRename(null)} />}
+      {search && <SearchModal onClose={() => setSearch(false)} />}
       {!profile && <Empty title="Pick an agent to chat with" note="Each agent talks through its own Hermes gateway; chat must be enabled on the Agents page for specialists." />}
       {profile && (
         <div className="grid min-w-0 gap-4 lg:grid-cols-[16rem_1fr]">
@@ -235,16 +252,24 @@ export function Chat() {
             <Link to={`/chat/${profile}`} className={clsx('mt-2 block rounded-lg px-2 py-1.5 text-xs hover:bg-raised', !id && 'bg-raised')}>+ New session</Link>
             {sessions.isLoading && <Loading rows={4} />}
             <ul className="mt-1 flex min-h-0 flex-1 flex-col gap-0.5 overflow-y-auto">
-              {(sessions.data?.sessions ?? []).map(s => (
-                <li key={s.id}><Link to={`/chat/${profile}/${s.id}`} className={clsx('block truncate rounded-lg px-2 py-1.5 text-xs hover:bg-raised', s.id === id && 'bg-raised')} title={s.id}>{s.scope && <span className="mr-1 font-mono text-[10px] text-accent-2">{s.scope.task_id ? `#${s.scope.task_id}` : s.scope.project_slug}</span>}{s.title || s.id}<span className="ml-1 text-[10px] text-muted">{ago(s.last_activity_at ?? s.started_at)}</span></Link></li>
-              ))}
+              {(() => { const all = sessions.data?.sessions ?? []; const pinned = all.filter(s => s.pinned); const rest = all.filter(s => !s.pinned)
+                const row = (s: typeof all[number]) => (
+                  <li key={s.id} className="group/sess flex min-w-0 items-center gap-1">
+                    <Link to={`/chat/${profile}/${s.id}`} className={clsx('block min-w-0 flex-1 truncate rounded-lg px-2 py-1.5 text-xs hover:bg-raised', s.id === id && 'bg-raised')} title={s.id}>{s.pinned ? <span className="mr-1 text-[10px] text-muted">📌</span> : null}{s.scope && <span className="mr-1 font-mono text-[10px] text-accent-2">{s.scope.task_id ? `#${s.scope.task_id}` : s.scope.project_slug}</span>}{s.title || s.id}<span className="ml-1 text-[10px] text-muted">{ago(s.last_activity_at ?? s.started_at)}</span></Link>
+                    <SessionMenu profile={profile} s={s} current={s.id === id} onRename={() => setRename({ id: s.id, title: s.title || '' })} />
+                  </li>)
+                return <>{pinned.length > 0 && <li className="px-2 pt-1 font-mono text-[10px] uppercase tracking-wider text-muted">Pinned</li>}{pinned.map(row)}{pinned.length > 0 && rest.length > 0 && <li className="px-2 pt-2 font-mono text-[10px] uppercase tracking-wider text-muted">Recent</li>}{rest.map(row)}</>
+              })()}
             </ul>
+            <button type="button" onClick={() => setSearch(true)} className="mt-2 flex items-center justify-between rounded-lg border border-line px-2 py-1 text-[11px] text-muted hover:bg-raised hover:text-fg"><span>Search all chats</span><kbd className="font-mono text-[10px]">Ctrl K</kbd></button>
           </GlassCard>
           <GlassCard className="relative flex h-[calc(100dvh-15.5rem)] min-h-[22rem] min-w-0 flex-col overflow-hidden sm:h-[calc(100dvh-12.5rem)]">
             {id && <div className="mb-2 flex min-w-0 items-center gap-2 text-xs">
-              <span className="min-w-0 truncate font-medium" title={detail.data?.title ?? id}>{detail.data?.title || id}</span>
+              <button type="button" onClick={() => setRename({ id, title: detail.data?.title || '' })} className="min-w-0 truncate rounded px-1 font-medium hover:bg-raised" title="Rename session">{detail.data?.title || id}</button>
               <span className="shrink-0 font-mono text-[10px] text-muted">· {profile}</span>
+              <button type="button" onClick={() => setFind(f => f ?? '')} className="ml-auto shrink-0 rounded px-1.5 font-mono text-[10px] uppercase tracking-wider text-muted hover:bg-raised hover:text-fg" title="Find in conversation (Ctrl F)">find</button>
             </div>}
+            {find !== null && id && <FindBar container={box} initial={find} onClose={() => setFind(null)} />}
             <div ref={box} data-transcript className="flex min-h-0 flex-1 flex-col gap-2 overflow-y-auto pr-1">
               {id && detail.isLoading && <Loading rows={3} />}
               {id && detail.isError && <Empty error title="Could not load this session" note={String(detail.error)} />}

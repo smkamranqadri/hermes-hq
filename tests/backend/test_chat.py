@@ -51,6 +51,18 @@ class FakeGateway(BaseHTTPRequestHandler):
             return
         self._json(404, {"error": {"message": "nope"}})
 
+    def do_PATCH(self):
+        if not self._auth(): return
+        body = json.loads(self.rfile.read(int(self.headers.get("Content-Length") or 0)) or b"{}")
+        FakeGateway.calls.append(("PATCH " + self.path, body))
+        sid = self.path.split("/")[3]
+        return self._json(200, {"object": "hermes.session", "session": {"id": sid, "title": body.get("title", "old"), "pinned": body.get("pinned", False)}})
+
+    def do_DELETE(self):
+        if not self._auth(): return
+        FakeGateway.calls.append(("DELETE " + self.path, None))
+        return self._json(200, {"object": "hermes.session.deleted", "id": self.path.split("/")[3], "deleted": True})
+
     def log_message(self, *a): pass
 
 

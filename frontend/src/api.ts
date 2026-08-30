@@ -108,7 +108,7 @@ export type AgentSummary = {
 export type AgentTemplate = { name: string; description: string; overlay: boolean; skills: string[]; installed: boolean }
 export type AgentRun = { id: number; task_id: number | null; status: string; started_at: number; finished_at: number | null; error: string | null; session_id: string | null; task_title: string | null }
 export type ChatScope = { project_id: number | null; project_slug: string | null; project_name: string | null; task_id: number | null; task_title: string | null }
-export type AgentSession = { id: string; title: string | null; model: string | null; started_at: number | null; last_activity_at: number | null; message_count: number | null; estimated_cost_usd: number | null; source: string | null; scope?: ChatScope | null }
+export type AgentSession = { id: string; title: string | null; model: string | null; started_at: number | null; last_activity_at: number | null; message_count: number | null; estimated_cost_usd: number | null; source: string | null; scope?: ChatScope | null; pinned?: number | boolean | null }
 export type AgentRunBrief = { id: number; task_id: number | null; task_title: string | null; status: string; started_at: number; finished_at: number | null; error: string | null; review_id: number | null }
 export type AgentHistoryItem = { session: AgentSession | null; run: AgentRunBrief | null; ts: number; kind: 'run' | 'chat' | 'cli' }
 export type AgentDetail = AgentSummary & { history: AgentHistoryItem[] }
@@ -128,6 +128,11 @@ export const useScopedSessions = (kind: 'project' | 'task', key: string | number
   useQuery({ queryKey: ['chat-scoped', kind, key], queryFn: () => get<{ sessions: ScopedSession[] }>(`/api/${kind}/${key}/chat-sessions`), enabled: key !== undefined && key !== '' })
 /** Create a project/task-linked session; the caller streams `brief` as the first visible turn. */
 export const startScopedChat = (body: { profile: string; project_id?: number; task_id?: number }) => post<{ id: string; profile: string; title: string; brief: string; scope: ChatScope }>('/api/chat/start', body)
+
+export const updateSession = (profile: string, id: string, body: { title?: string; pinned?: boolean }) => post<{ id: string; title: string | null; pinned: boolean }>(`/api/chat/${profile}/${id}/update`, body)
+export const deleteSession = (profile: string, id: string) => post<{ id: string; deleted: boolean }>(`/api/chat/${profile}/${id}/delete`)
+export type SearchHit = { profile: string; id: string; title: string | null; model: string | null; last_activity_at: number | null; hits: number; snippet: string }
+export const useChatSearch = (q: string) => useQuery({ queryKey: ['chat-search', q], queryFn: () => get<{ results: SearchHit[] }>(`/api/chat/search?q=${encodeURIComponent(q)}`), enabled: q.trim().length >= 2, staleTime: 10000 })
 
 /** POST a chat message and stream the gateway's SSE events back. Resolves when the stream ends. */
 export async function streamChat(profile: string, sessionId: string, message: string, onEvent: (e: SseEvent) => void, signal?: AbortSignal): Promise<void> {
