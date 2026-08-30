@@ -7,6 +7,8 @@ writes, readiness gate) is Hermes' own — nothing is re-implemented here.
 
     hermes_bridge.py <op>   with a JSON object on stdin; one JSON object on stdout.
 ops: providers | config | activate | setup | graph | node | limits
+     skills_list | skills_content | skills_create | skills_update | skills_toggle
+     hub_sources | hub_search | hub_preview | hub_scan
 """
 import json
 import sys
@@ -116,6 +118,97 @@ def op_limits(body):
 
 OPS = {"providers": op_providers, "config": op_config, "activate": op_activate, "setup": op_setup,
        "graph": op_graph, "node": op_node, "limits": op_limits}
+
+
+# -- skills (Hermes dashboard router handlers, called in-process under this HERMES_HOME) ------------
+def _run_async(coro):
+    import asyncio
+    return asyncio.run(coro)
+
+
+def _router_call(fn, *a, **kw):
+    """Call a Hermes router handler; its HTTPException becomes {"ok": False, "status", "error"}."""
+    _ws()                                  # binds the late state the routers resolve against
+    from fastapi import HTTPException
+    try:
+        res = _run_async(fn(*a, **kw))
+    except HTTPException as e:
+        return {"ok": False, "status": e.status_code, "error": str(e.detail)}
+    return res
+
+
+def op_skills_list(body):
+    from hermes_cli.web_routers.skills import get_skills
+    from tools.skill_manager_tool import _find_skill
+    from tools.skills_tool import _parse_frontmatter
+    import os
+    rows = _router_call(get_skills, None)
+    if isinstance(rows, dict) and rows.get("ok") is False:
+        return rows
+    for s in rows:
+        found = _find_skill(s["name"])
+        s["path"] = str(found["path"]) if found else ""
+        s.setdefault("tags", []); s.setdefault("version", ""); s.setdefault("author", ""); s.setdefault("homepage", ""); s["mtime"] = None
+        md = os.path.join(s["path"], "SKILL.md") if s["path"] else ""
+        if md and os.path.isfile(md):
+            try:
+                fm, _ = _parse_frontmatter(open(md, encoding="utf-8", errors="replace").read())
+                hermes = (fm.get("metadata") or {}).get("hermes") or {} if isinstance(fm.get("metadata"), dict) else {}
+                s["tags"] = [str(t) for t in (hermes.get("tags") or fm.get("tags") or [])][:12]
+                s["version"] = str(fm.get("version") or ""); s["author"] = str(fm.get("author") or "")
+                s["homepage"] = str(hermes.get("homepage") or fm.get("homepage") or "")
+                s["mtime"] = os.stat(md).st_mtime
+            except Exception:
+                pass
+    return {"ok": True, "skills": rows}
+
+
+def op_skills_content(body):
+    from hermes_cli.web_routers.skills import get_skill_content
+    return _router_call(get_skill_content, str(body.get("name") or ""), None)
+
+
+def op_skills_create(body):
+    from hermes_cli.web_routers.skills import create_skill
+    from hermes_cli.web_models import SkillCreate
+    return _router_call(create_skill, SkillCreate(name=str(body.get("name") or ""), content=str(body.get("content") or ""), category=body.get("category") or None))
+
+
+def op_skills_update(body):
+    from hermes_cli.web_routers.skills import update_skill_content
+    from hermes_cli.web_models import SkillContentUpdate
+    return _router_call(update_skill_content, SkillContentUpdate(name=str(body.get("name") or ""), content=str(body.get("content") or "")))
+
+
+def op_skills_toggle(body):
+    from hermes_cli.web_routers.skills import toggle_skill
+    from hermes_cli.web_models import SkillToggle
+    return _router_call(toggle_skill, SkillToggle(name=str(body.get("name") or ""), enabled=bool(body.get("enabled"))), None)
+
+
+def op_hub_sources(body):
+    from hermes_cli.web_routers.skills import list_skills_hub_sources
+    return _router_call(list_skills_hub_sources, None)
+
+
+def op_hub_search(body):
+    from hermes_cli.web_routers.skills import search_skills_hub
+    return _router_call(search_skills_hub, q=str(body.get("q") or ""), source=str(body.get("source") or "all"), limit=int(body.get("limit") or 20), profile=None)
+
+
+def op_hub_preview(body):
+    from hermes_cli.web_routers.skills import preview_skill_hub
+    return _router_call(preview_skill_hub, identifier=str(body.get("identifier") or ""), profile=None)
+
+
+def op_hub_scan(body):
+    from hermes_cli.web_routers.skills import scan_skill_hub
+    return _router_call(scan_skill_hub, identifier=str(body.get("identifier") or ""), profile=None)
+
+
+OPS.update({"skills_list": op_skills_list, "skills_content": op_skills_content, "skills_create": op_skills_create,
+            "skills_update": op_skills_update, "skills_toggle": op_skills_toggle, "hub_sources": op_hub_sources,
+            "hub_search": op_hub_search, "hub_preview": op_hub_preview, "hub_scan": op_hub_scan})
 
 if __name__ == "__main__":
     main()
