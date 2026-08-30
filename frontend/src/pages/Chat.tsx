@@ -72,6 +72,7 @@ function ContextLine({ d }: { d: SessionDetail }) {
   const filled = pct == null ? 0 : Math.min(10, Math.round(pct / 10))
   const bar = '█'.repeat(filled) + '░'.repeat(10 - filled)
   const scope = d.scope?.task_id ? `#${d.scope.task_id}` : d.scope?.project_slug
+  if (!d.model && !(c && c.used > 0)) return null
   return (
     <div className="mt-1.5 flex flex-wrap items-center gap-x-3 font-mono text-[10px] text-muted">
       <button type="button" onClick={() => setOpen(o => !o)} className="inline-flex flex-wrap items-center gap-x-3 hover:text-fg" title={c ? `context ≈ ${c.used.toLocaleString()} of ${c.limit ? c.limit.toLocaleString() : '?'} tokens — transcript ${c.transcript.toLocaleString()} + system overhead ${c.overhead.toLocaleString()} (${c.source}); click for the breakdown` : 'click for the breakdown'}>
