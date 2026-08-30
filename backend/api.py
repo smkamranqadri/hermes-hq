@@ -90,9 +90,24 @@ def agent(name: str):
 @router.get("/agent/{name}/sessions")
 def agent_sessions(name: str, limit: int = Query(100, ge=1, le=500)):
     try:
-        return {"sessions": chat.sessions(name, limit)}
+        return {"sessions": chat.sessions(name, limit, db_path=_db())}
     except ValueError:
         raise HTTPException(404, "no such agent")
+
+
+@router.get("/project/{slug}/chat-sessions")
+def project_chat_sessions(slug: str):
+    p = wm_store.get_project(slug=slug, db_path=_db())
+    if p is None:
+        raise HTTPException(404, "no such project")
+    return {"sessions": wm_store.chat_sessions_for_project(p["id"], db_path=_db())}
+
+
+@router.get("/task/{task_id}/chat-sessions")
+def task_chat_sessions(task_id: int):
+    if wm_store.get_task(task_id, db_path=_db()) is None:
+        raise HTTPException(404, "no such task")
+    return {"sessions": wm_store.chat_sessions_for_task(task_id, db_path=_db())}
 
 
 @router.get("/session/{profile}/{session_id}")

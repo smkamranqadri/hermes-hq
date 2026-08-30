@@ -8,6 +8,7 @@ import { Empty, Loading, Chip, Crumbs, Label, Agent } from '../components/ui'
 import { usePageTitle } from '../usePageTitle'
 import { NewTaskModal, NewGoalModal, ActionBtn } from '../components/forms'
 import { Btn } from '../components/Modal'
+import { ScopedChat } from '../components/ScopedChat'
 
 const TABS = ['tasks', 'goals', 'runs', 'activity'] as const
 const GOAL_TONE: Record<string, string> = { draft: 'text-muted', planning: 'text-needsyou', planned: 'text-queued', released: 'text-working' }
@@ -45,6 +46,7 @@ export function ProjectDetail() {
         </div>
       </div>
       <div className="mb-5 h-1 overflow-hidden rounded-full bg-inset"><div className="h-full bg-working" style={{ width: `${pct}%` }} /></div>
+      <div className="mb-5"><ScopedChat kind="project" id={p.id} slug={slug} /></div>
       {stuck.length > 0 && (
         <div className="mb-5">
           <Label>Needs you · {stuck.length}</Label>

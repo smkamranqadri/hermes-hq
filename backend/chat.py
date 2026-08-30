@@ -80,12 +80,24 @@ def _gateway_json_once(port, key, method, path, body=None):
 
 
 # ---- history (state.db, read-only) ----------------------------------------
-def sessions(profile, limit=100):
+def sessions(profile, limit=100, db_path=None):
     _check_profile(profile)
     try:
-        return readers.agent_sessions(store.resolve_profiles_dir(), profile, limit=limit)
+        rows = readers.agent_sessions(store.resolve_profiles_dir(), profile, limit=limit)
     except (ValueError, FileNotFoundError):
         return []
+    scopes = store.chat_session_scopes(profile, db_path=db_path or store.DEFAULT_DB_PATH)
+    for r in rows:
+        r["scope"] = _scope(scopes.get(r.get("id")))
+    return rows
+
+
+def _scope(row):
+    """Public shape of a chat_sessions link (None when the session is global)."""
+    if not row:
+        return None
+    return {"project_id": row["project_id"], "project_slug": row["project_slug"], "project_name": row["project_name"],
+            "task_id": row["task_id"], "task_title": row["task_title"]}
 
 
 def transcript(profile, session_id, limit=400, db_path=None):
@@ -96,6 +108,7 @@ def transcript(profile, session_id, limit=400, db_path=None):
         return None
     if d is not None:
         d["live_run"] = live_run_for_session(profile, session_id, d.get("title"), db_path)
+        d["scope"] = _scope(store.chat_session_scopes(profile, db_path=db_path or store.DEFAULT_DB_PATH).get(session_id))
     return d
 
 
@@ -125,6 +138,34 @@ def create_session(profile, title=None, db_path=None):
         raise GatewayError("gateway did not return a session id: %s" % json.dumps(data)[:300])
     store.log_activity(action="chat_session", agent_profile=profile, detail="session %s" % sid, db_path=db_path)
     return {"id": sid, "profile": profile, "title": sess.get("title") or title}
+
+
+def start_scoped(profile, project_id=None, task_id=None, title=None, db_path=None):
+    """Create a session linked to a project or task and return the brief the UI
+    sends as the first (visible) user turn. No link row is written when the
+    gateway refuses (ValueError/GatewayError propagate before the insert)."""
+    _check_profile(profile)
+    if task_id is not None:
+        task = store.get_task(int(task_id), db_path=db_path)
+        if task is None:
+            raise ValueError("no task %s" % task_id)
+        project_id = task["project_id"]
+        brief = store.render_task_brief(task["id"], db_path=db_path)
+        title = title or "Task #%s: %s" % (task["id"], task["title"] or "")
+    elif project_id is not None:
+        project = store.get_project(int(project_id), db_path=db_path)
+        if project is None:
+            raise ValueError("no project %s" % project_id)
+        brief = store.render_project_brief(project["id"], db_path=db_path)
+        title = title or "Project: %s" % project["name"]
+    else:
+        raise ValueError("project_id or task_id is required")
+    sess = create_session(profile, title=title[:80], db_path=db_path)
+    store.link_chat_session(profile, sess["id"], project_id=project_id, task_id=task_id, title=title[:80], db_path=db_path)
+    store.log_activity(action="chat_scoped", project_id=project_id, task_id=task_id, agent_profile=profile,
+                       detail="session %s" % sess["id"], db_path=db_path)
+    return {"id": sess["id"], "profile": profile, "title": title[:80], "brief": brief,
+            "scope": _scope(store.chat_session_scopes(profile, db_path=db_path or store.DEFAULT_DB_PATH).get(sess["id"]))}
 
 
 def stop_turn(profile, run_id, db_path=None):

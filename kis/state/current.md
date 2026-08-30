@@ -4,11 +4,11 @@
 **hermes-hq is the live control plane since 2026-08-29 13:40 UTC** (branch `main`). Process: `nohup .venv/bin/hermes-hq serve --host 0.0.0.0 --port 9010 --interval 20 > /opt/data/hermes-hq-serve.log 2>&1 &` with the dispatcher ON; restart by hand after backend changes (`pkill -f 'hermes-hq serve'` in its own command, then that line). Password file `/opt/data/hermes-hq/password` is `test` for the owner's review (generated one kept in `password.prev`). Frontend builds go live without a restart. Legacy WM rollback recipe: `knowledge/technical.md` → Legacy WM. Latest commit at sync: see `git log`.
 
 ## Now
-Task: **Group 4 — direct chat scopes** — not planned yet; start the next session with `/kis:plan`. Inputs: `PRD.md` Group 4, the deferred "Chat about this project" (Project detail → new orchestrator session seeded with a project brief), and the Chat proxy/session API already in place (`backend/chat.py`).
-Groups 1–3 (incl. 3c live-run highlighting) are complete as of 2026-08-29.
+Task: **Group 4 — direct chat scopes — COMPLETE 2026-08-30** (`intent/Group4Plan.md`). Next task: **Group 5 — Project files** (browse/edit, project-scoped or global) — not planned yet; start with `/kis:plan`.
+Groups 1–4 are complete as of 2026-08-30.
 
 ## Next
-Group 4 direct chat scopes (project-scoped chat with the orchestrator, seeded brief), then Group 5 per PRD.
+Group 5 project files, then Group 6 browsers per PRD.
 
 ## Blocker
 None.
@@ -26,6 +26,7 @@ None.
 `README.md`. Dev: `.venv/bin/hermes-hq serve --no-dispatcher` + `cd frontend && npm run dev`. Owner drops reference images in `screenshots/` (git-ignored).
 
 ## Proof (latest)
+- 2026-08-30 Group 4 scoped chat, live on :9010 (Playwright 1440/390): Project detail "Chat about this project" → New chat (orchestrator) created `api_1788066311_659c1ad3`, the project brief streamed as the first visible user turn, reply "Personal Brand project context loaded. I'm standing by…", follow-up "How many open tasks did I list?" → "5" (correct); session listed on the project page (Resume) and on Chat with the PROJECT PERSONAL BRAND chip and `[personal-brand]` prefixes. Task #84 → New chat with coder disabled → 409 toast, no link row; coder enabled → task chat `api_1788066417_a05231e9` ("TASK CHAT — #84…", reply "Acknowledged. I'll wait for your instructions."), task status stayed `blocked`, listed on task + project pages, TASK #84 chip; coder gateway re-disabled. `/chat` → `/chat/orchestrator`. 390px: scrollWidth 390 on project, task, chat. pytest **41 passed** (`tests/backend/test_chat_scopes.py`).
 - 2026-08-29 owner review round (all live, Playwright 1440/390): sticky top bar with real glass (`backdrop-filter` restored — the minifier kept only `-webkit-`, which Chrome ignores; unprefixed declaration must come last), chat transcript scrolls inside a viewport-height card and auto-scrolls to the bottom, Agent detail unified History (title = session → Chat, `Task #n` pill, `wm-run-<id>` marker fallback; coder 82 rows / 0 unmatched), Overview feed capped at 10, task page patches its cache from write responses and polls 3 s while in motion.
 - Engine bug fixed 2026-08-29 (found via task #84): `latest_owner_feedback` only returned the comment while status was `rework`, but the dispatcher claims (→ `running`) before `render_brief`, so owner feedback never reached a rework brief (1 of 216 briefs had an OWNER FEEDBACK section vs 45 with review comments). Now also accepted when the last two transitions are `running` after `rework`. Regression test `tests/backend/test_owner_feedback_brief.py`; suite **38 passed**. Verified live: run 217's brief for #84 contains the feedback + repo URL.
 - Group 3c live-run highlighting 2026-08-29: `/api/system` running/cap, overview `slots_used`, agents `live[]`, session `live_run`; scratch instance (cap 1, fake live run, real `state.db` schema) proved the top-bar pill, Working tile, "waiting for a free slot", pulsing badges, Agent "Running now" + Watch log, Chat live banner with composer hidden, at 1440/390.

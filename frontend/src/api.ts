@@ -107,7 +107,8 @@ export type AgentSummary = {
 }
 export type AgentTemplate = { name: string; description: string; overlay: boolean; skills: string[]; installed: boolean }
 export type AgentRun = { id: number; task_id: number | null; status: string; started_at: number; finished_at: number | null; error: string | null; session_id: string | null; task_title: string | null }
-export type AgentSession = { id: string; title: string | null; model: string | null; started_at: number | null; last_activity_at: number | null; message_count: number | null; estimated_cost_usd: number | null; source: string | null }
+export type ChatScope = { project_id: number | null; project_slug: string | null; project_name: string | null; task_id: number | null; task_title: string | null }
+export type AgentSession = { id: string; title: string | null; model: string | null; started_at: number | null; last_activity_at: number | null; message_count: number | null; estimated_cost_usd: number | null; source: string | null; scope?: ChatScope | null }
 export type AgentRunBrief = { id: number; task_id: number | null; task_title: string | null; status: string; started_at: number; finished_at: number | null; error: string | null; review_id: number | null }
 export type AgentHistoryItem = { session: AgentSession | null; run: AgentRunBrief | null; ts: number; kind: 'run' | 'chat' | 'cli' }
 export type AgentDetail = AgentSummary & { history: AgentHistoryItem[] }
@@ -116,11 +117,17 @@ export const useAgent = (name: string) => useQuery({ queryKey: ['agent', name], 
 
 // ---- chat ---------------------------------------------------------------
 export type ChatMessage = { id: number; role: string; content: string | null; timestamp: number | null; tool_name: string | null; token_count: number | null; display_kind: string | null; active: number | null }
-export type SessionDetail = AgentSession & { live_run: { run_id: number; task_id: number | null; task_title: string | null; started_at: number } | null; usage: { model: string; input_tokens: number; output_tokens: number; estimated_cost_usd: number | null }[]; transcript: ChatMessage[] }
+export type SessionDetail = AgentSession & { scope: ChatScope | null; live_run: { run_id: number; task_id: number | null; task_title: string | null; started_at: number } | null; usage: { model: string; input_tokens: number; output_tokens: number; estimated_cost_usd: number | null }[]; transcript: ChatMessage[] }
 export const useAgentSessions = (name: string | undefined) => useQuery({ queryKey: ['agent-sessions', name], queryFn: () => get<{ sessions: AgentSession[] }>(`/api/agent/${name}/sessions?limit=100`), enabled: !!name, refetchInterval: 20000 })
 export const useSessionDetail = (profile: string | undefined, id: string | undefined) => useQuery({ queryKey: ['session', profile, id], queryFn: () => get<SessionDetail>(`/api/session/${profile}/${id}`), enabled: !!profile && !!id, retry: false })
 
 export type SseEvent = { name: string; data: Record<string, unknown> }
+export type ScopedSession = { id: number; profile: string; session_id: string; project_id: number | null; task_id: number | null; title: string | null; created_at: number; project_slug: string | null; project_name: string | null; task_title: string | null }
+export const useScopedSessions = (kind: 'project' | 'task', key: string | number | undefined) =>
+  useQuery({ queryKey: ['chat-scoped', kind, key], queryFn: () => get<{ sessions: ScopedSession[] }>(`/api/${kind}/${key}/chat-sessions`), enabled: key !== undefined && key !== '' })
+/** Create a project/task-linked session; the caller streams `brief` as the first visible turn. */
+export const startScopedChat = (body: { profile: string; project_id?: number; task_id?: number }) => post<{ id: string; profile: string; title: string; brief: string; scope: ChatScope }>('/api/chat/start', body)
+
 /** POST a chat message and stream the gateway's SSE events back. Resolves when the stream ends. */
 export async function streamChat(profile: string, sessionId: string, message: string, onEvent: (e: SseEvent) => void, signal?: AbortSignal): Promise<void> {
   const r = await fetch(`/api/chat/${profile}/${sessionId}`, { method: 'POST', headers: { 'content-type': 'application/json', 'x-csrf': csrf }, body: JSON.stringify({ message }), signal })
