@@ -3219,11 +3219,13 @@ def list_notifications(limit=50, unread_only=False, db_path=None):
         conn.close()
 
 
-def mark_notifications_read(ids=None, db_path=None):
-    """ids=None → everything. Returns rows affected."""
+def mark_notifications_read(ids=None, db_path=None, source_key=None):
+    """ids=None → everything (unless source_key is given). Returns rows affected."""
     conn = _connect(db_path)
     try:
         with conn:
+            if source_key is not None:
+                return conn.execute("UPDATE notifications SET read_at=? WHERE read_at IS NULL AND source_key=?", (time.time(), source_key)).rowcount
             if ids is None:
                 return conn.execute("UPDATE notifications SET read_at=? WHERE read_at IS NULL", (time.time(),)).rowcount
             ids = [int(i) for i in ids]

@@ -51,3 +51,16 @@ def test_client_events_are_idempotent_by_source_key(env):
     assert c.post("/api/notifications", json={"kind": "nope", "title": "x"}, headers=h).status_code == 409
     d = c.get("/api/notifications").json()
     assert d["unread"] == 1 and d["notifications"][0]["kind"] == "chat"
+
+
+def test_finished_chat_turn_notifies_server_side(env):
+    c, store, gw, root = env
+    h = login(c)
+    r = c.post("/api/chat/orchestrator/api_1_abc", json={"message": "ping"}, headers=h)
+    assert r.status_code == 200
+    d = c.get("/api/notifications").json()
+    assert d["unread"] == 1 and d["notifications"][0]["title"] == "orchestrator replied" and d["notifications"][0]["body"] == "Hello gnip"
+    assert d["notifications"][0]["source_key"] == "chat:api_1_abc:run_9" and d["notifications"][0]["href"] == "/chat/orchestrator/api_1_abc"
+    # the watching device marks it read by source_key; a second identical turn id is a no-op insert
+    assert c.post("/api/notifications/read", json={"source_key": "chat:api_1_abc:run_9"}, headers=h).json()["marked"] == 1
+    assert c.get("/api/notifications").json()["unread"] == 0

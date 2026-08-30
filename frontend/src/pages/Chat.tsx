@@ -2,7 +2,7 @@ import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { Link, useLocation, useNavigate, useParams } from 'react-router-dom'
 import { useQueryClient } from '@tanstack/react-query'
 import clsx from 'clsx'
-import { useAgents, useAgentSessions, useSessionDetail, useProjects, startScopedChat, streamChat, steerTurn, updateSession, useModels, addNotification, post, get, ago, when, ApiError, type SseEvent, type ChatMessage, type ScopedSession, type SessionDetail, type TurnOptions } from '../api'
+import { useAgents, useAgentSessions, useSessionDetail, useProjects, startScopedChat, streamChat, steerTurn, updateSession, useModels, markNotificationsRead, post, get, ago, when, ApiError, type SseEvent, type ChatMessage, type ScopedSession, type SessionDetail, type TurnOptions } from '../api'
 import { GlassCard, PageHeader } from '../components/GlassCard'
 import { Empty, Loading, Select } from '../components/ui'
 import { ActionBtn } from '../components/forms'
@@ -301,10 +301,10 @@ export function Chat() {
       const away = document.hidden || !window.location.pathname.endsWith(`/chat/${profile}/${sid}`)
       const asked = /```hq-options/.test(finalText)
       if (!failed && !away && loadPrefs().sound) chime(asked ? 'attention' : 'info')
-      if (!failed && (away || asked)) {
-        void addNotification({ kind: asked ? 'question' : 'chat', title: asked ? `${profile} asked you a question` : `${profile} replied`, body: finalText.replace(/```[\s\S]*?```/g, '').trim().slice(0, 200) || undefined, href: `/chat/${profile}/${sid}`, source_key: `chat:${sid}:${runId || Date.now()}` })
-          .then(() => qc.invalidateQueries({ queryKey: ['notifications'] })).catch(() => {})
-      }
+      // the server records every finished turn as a notification; the device that watched it marks it read at once,
+      // any other device (phone) sees it unread and alerts
+      if (!failed && !away && runId) markNotificationsRead(undefined, `chat:${sid}:${runId}`).catch(() => {}).finally(() => qc.invalidateQueries({ queryKey: ['notifications'] }))
+      else if (!failed) setTimeout(() => qc.invalidateQueries({ queryKey: ['notifications'] }), 500)
       abort.current = null; setLive(null); setPendingUser(null)
       if (failed) { setDraft(msg); saveDraft(profile, sid, msg) } else clearDraft(profile, sid)
       qc.invalidateQueries({ queryKey: ['session', profile, sid] }); qc.invalidateQueries({ queryKey: ['agent-sessions', profile] }); qc.invalidateQueries({ queryKey: ['agents'] })

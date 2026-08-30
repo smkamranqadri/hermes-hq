@@ -308,6 +308,7 @@ def chat_send(profile: str, session_id: str, body: ChatIn):
 # ---- notifications -----------------------------------------------------
 class NotifRead(BaseModel):
     ids: list[int] | None = None      # None = all
+    source_key: str | None = None     # e.g. chat:<session>:<run> — the device that watched the reply
 
 
 class NotifIn(BaseModel):
@@ -320,7 +321,7 @@ class NotifIn(BaseModel):
 
 @router.post("/notifications/read")
 def notifications_read(body: NotifRead):
-    return {"marked": store.mark_notifications_read(body.ids, db_path=_db())}
+    return {"marked": store.mark_notifications_read(body.ids, db_path=_db(), source_key=body.source_key)}
 
 
 @router.post("/notifications")
