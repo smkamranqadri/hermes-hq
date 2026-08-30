@@ -12,9 +12,9 @@ Facts that shape it: this box is s6 (`PID1 s6-svscan`, no systemd/cron); `/run/s
 Proof: pytest; on this box `hermes-hq service install` → `s6-svstat /run/service/hermes-hq` up.
 Review: correctness lens (detection, updater detachment + health path, auto-update skip matrix).
 
-## 8-2 install.sh
-1. [ ] Idempotent `install.sh` at the repo root (bash, `set -euo pipefail`, hermes-workspace's tone): checks `hermes` on PATH (refuse with pointer otherwise), Python ≥3.11 + `uv`, Node ≥22; `uv venv` + `uv pip install -e .`; `cd frontend && npm install && npm run build`; password bootstrap note (`<hq home>/password`); `hermes-hq service install` (flags passthrough, `--no-service` to skip); ends with the URL, service status and "add agents from templates on the Agents page".
-2. [ ] README: replace the dev-run section with install.sh + service commands (dev mode stays documented).
+## 8-2 install.sh — DONE 2026-08-30
+1. [x] Idempotent `install.sh` at the repo root (bash, `set -euo pipefail`, hermes-workspace's tone): checks `hermes` on PATH (refuse with pointer otherwise), Python ≥3.11 + `uv`, Node ≥22; `uv venv` + `uv pip install -e .`; `cd frontend && npm install && npm run build`; password bootstrap note (`<hq home>/password`); `hermes-hq service install` (flags passthrough, `--no-service` to skip); ends with the URL, service status and "add agents from templates on the Agents page".
+2. [x] README: replace the dev-run section with install.sh + service commands (dev mode stays documented).
 Proof: run `bash install.sh --no-service`... twice in a scratch clone of this checkout → second run all-skips; shellcheck clean.
 
 ## 8-3 Cutover of this box + sync
