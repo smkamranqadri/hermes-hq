@@ -98,7 +98,8 @@ def main():
     remote = sh("git", "rev-parse", "@{u}").stdout.strip()
     if not remote:
         return out(ok=False, error="no upstream configured")
-    if local == remote:
+    behind = sh("git", "rev-list", "--count", "HEAD..@{u}").stdout.strip()
+    if behind in ("", "0"):          # nothing to pull — being AHEAD of origin is still a noop
         print("\n" + json.dumps({"ok": True, "noop": True, "sha": local}), flush=True)
         return 0
     changed = sh("git", "diff", "--name-only", "HEAD", remote).stdout.splitlines()
