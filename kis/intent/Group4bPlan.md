@@ -4,14 +4,14 @@ Owner asked for the full "high" + "medium" list from the hermes-workspace compar
 
 Gateway facts (from hermes-workspace code, verify live before use): rename `PATCH /api/sessions/{id} {title}`, `DELETE /api/sessions/{id}`; models `GET /v1/models`, per-turn `model` field on `chat/stream`; custom commands `GET /v1/commands`, a slash command is sent as plain text; attachments = `attachments: [{name, mimeType, data(base64)}]` on `chat/stream` (≤1 MB encoded, images downscaled client-side); context `GET /api/sessions/{id}/runtime` (`context_tokens/context_length/context_percent`); search `GET /api/sessions/search?q=`; `/v1/runs/{id}/steer` exists in the Hermes API listing but nobody has exercised it. Hermes `messages` rows already carry `tool_calls`, `reasoning_content`, `display_metadata`; `sessions` carry `pinned/archived/title/*_tokens`.
 
-## 4b-1 Transcript rendering — NEXT
-1. [ ] Markdown + GFM in assistant bubbles (react-markdown + remark-gfm; code blocks with a Copy button; no heavy highlighter — a small CSS-only mono block), user bubbles stay plain.
-2. [ ] Tool-call cards: collapsed row → expand shows args (`tool_calls` from state.db / SSE `args`), result text, elapsed while live; reasoning stream shown as a collapsible "thinking" block (SSE `tool.progress` live, `reasoning_content` from DB).
-3. [ ] Scroll-to-bottom pill with unread count when scrolled up during a stream; message timestamps on hover; per-message `token_count` badge; session usage strip (tokens, cache, est. cost from `sessions`).
-4. [ ] Empty state starter chips (per agent: 3 prompts from its template description) and a "thinking…" indicator before the first token.
+## 4b-1 Transcript rendering — DONE 2026-08-30
+1. [x] DONE 2026-08-30 Markdown + GFM in assistant bubbles (react-markdown + remark-gfm; code blocks with a Copy button; no heavy highlighter — a small CSS-only mono block), user bubbles stay plain.
+2. [x] DONE 2026-08-30 Tool-call cards: collapsed row → expand shows args (`tool_calls` from state.db / SSE `args`), result text, elapsed while live; reasoning stream shown as a collapsible "thinking" block (SSE `tool.progress` live, `reasoning_content` from DB).
+3. [x] DONE 2026-08-30 Scroll-to-bottom pill with unread count when scrolled up during a stream; message timestamps on hover; per-message `token_count` badge; session usage strip (tokens, cache, Hermes cost or ≈ models.dev estimate — owner choice 2026-08-30, `backend/pricing.py`).
+4. [x] DONE 2026-08-30 Empty state starter chips (per agent: 3 prompts from its template description) and a "thinking…" indicator before the first token.
 Proof: Playwright 1440/390 on a real coder turn with a code block + tool call; markdown table renders; copy button copies.
 
-## 4b-2 Sessions
+## 4b-2 Sessions — NEXT
 1. [ ] Rename (inline title edit in the header → gateway PATCH, hq `chat_sessions.title` kept in sync), Delete with confirm (gateway DELETE; link row removed), Pin (gateway PATCH `pinned` if accepted, else hq-side) — pinned section on top of the list.
 2. [ ] Auto-title: after the first reply of an untitled session, PATCH a title from the first user line (≤60 chars).
 3. [ ] Find in conversation (Ctrl+F bar, next/prev), global session search (Ctrl+K modal; hq-side SQL LIKE over each profile's `messages` RO, gateway search if it answers) with snippets.

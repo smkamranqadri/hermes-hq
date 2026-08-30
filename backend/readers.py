@@ -810,6 +810,27 @@ def agent_sessions(profiles_dir, name, limit=100):
         con.close()
 
 
+def _tool_calls(raw):
+    """Hermes stores assistant tool calls as an OpenAI-style JSON list; keep name + arguments (clipped)."""
+    if not raw:
+        return None
+    try:
+        calls = json.loads(raw) if isinstance(raw, str) else raw
+    except ValueError:
+        return None
+    out = []
+    for c in calls if isinstance(calls, list) else []:
+        fn = c.get("function") if isinstance(c, dict) else None
+        if not isinstance(fn, dict):
+            continue
+        args = fn.get("arguments")
+        if not isinstance(args, str):
+            args = json.dumps(args) if args is not None else ""
+        out.append({"id": c.get("call_id") or c.get("id"), "name": fn.get("name") or "tool",
+                    "arguments": args[:2000] + ("…" if len(args) > 2000 else "")})
+    return out or None
+
+
 def session_detail(profiles_dir, profile, session_id, transcript=True, limit=400):
     """One session + per-model usage + (optionally) transcript from state.db."""
     db = _safe_profile(profiles_dir, profile)
@@ -837,6 +858,9 @@ def session_detail(profiles_dir, profile, session_id, transcript=True, limit=400
                 c = m.get("content")
                 if isinstance(c, str) and len(c) > 4000:
                     cleaned["content"] = c[:4000] + "…[truncated]"
+                cleaned["tool_calls"] = _tool_calls(m.get("tool_calls"))
+                r = m.get("reasoning_content") or m.get("reasoning")
+                cleaned["reasoning"] = (r[:2000] + "…") if isinstance(r, str) and len(r) > 2000 else (r or None)
                 detail["transcript"].append(cleaned)
         return detail
     finally:

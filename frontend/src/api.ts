@@ -116,8 +116,9 @@ export const useAgents = () => useQuery({ queryKey: ['agents'], queryFn: () => g
 export const useAgent = (name: string) => useQuery({ queryKey: ['agent', name], queryFn: () => get<AgentDetail>(`/api/agent/${name}`), refetchInterval: 15000 })
 
 // ---- chat ---------------------------------------------------------------
-export type ChatMessage = { id: number; role: string; content: string | null; timestamp: number | null; tool_name: string | null; token_count: number | null; display_kind: string | null; active: number | null }
-export type SessionDetail = AgentSession & { scope: ChatScope | null; live_run: { run_id: number; task_id: number | null; task_title: string | null; started_at: number } | null; usage: { model: string; input_tokens: number; output_tokens: number; estimated_cost_usd: number | null }[]; transcript: ChatMessage[] }
+export type ToolCall = { id: string | null; name: string; arguments: string }
+export type ChatMessage = { id: number; role: string; content: string | null; timestamp: number | null; tool_name: string | null; token_count: number | null; display_kind: string | null; active: number | null; tool_calls: ToolCall[] | null; reasoning: string | null }
+export type SessionDetail = AgentSession & { scope: ChatScope | null; cost_estimate: { usd: number; model: string; source: string } | null; input_tokens: number | null; output_tokens: number | null; cache_read_tokens: number | null; cache_write_tokens: number | null; actual_cost_usd: number | null; message_count: number | null; live_run: { run_id: number; task_id: number | null; task_title: string | null; started_at: number } | null; usage: { model: string; input_tokens: number; output_tokens: number; estimated_cost_usd: number | null }[]; transcript: ChatMessage[] }
 export const useAgentSessions = (name: string | undefined) => useQuery({ queryKey: ['agent-sessions', name], queryFn: () => get<{ sessions: AgentSession[] }>(`/api/agent/${name}/sessions?limit=100`), enabled: !!name, refetchInterval: 20000 })
 export const useSessionDetail = (profile: string | undefined, id: string | undefined) => useQuery({ queryKey: ['session', profile, id], queryFn: () => get<SessionDetail>(`/api/session/${profile}/${id}`), enabled: !!profile && !!id, retry: false })
 
