@@ -87,7 +87,9 @@ export function Files() {
   const refresh = useCallback((d: string) => { qc.invalidateQueries({ queryKey: ['files-list', root, d] }) }, [qc, root])
 
   // ---- mutations (small enough to live here) ----
-  const [modal, setModal] = useState<null | { kind: 'newfile' | 'newdir'; dir: string } | { kind: 'rename'; path: string } | { kind: 'delete'; path: string; is_dir: boolean }>(null)
+  type ModalState = null | { kind: 'newfile' | 'newdir'; dir: string } | { kind: 'rename'; path: string } | { kind: 'delete'; path: string; is_dir: boolean }
+  const [modal, setModalRaw] = useState<ModalState>(null)
+  const setModal = useCallback((m: ModalState) => { setModalRaw(m); if (m) setSheet(false) }, [])   // the phone sheet and modals share a layer: never stack them
   const [busy, setBusy] = useState(false)
   const act = async (fn: () => Promise<unknown>, ok?: string) => {
     setBusy(true)
