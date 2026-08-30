@@ -69,7 +69,7 @@ export function TerminalHost() {
   const rename = (t: TermTab) => { const n = window.prompt('Tab name', t.title); if (n?.trim()) termStore.update(t.id, { title: n.trim() }) }
 
   const strip = (
-    <div className="flex min-w-0 items-center gap-1 border-b border-line px-1 py-1">
+    <div className="relative z-20 flex min-w-0 items-center gap-1 border-b border-line px-1 py-1">
       <div className="flex min-w-0 flex-1 items-center gap-1 overflow-x-auto [scrollbar-width:none]">
         {st.tabs.map(t => (
           <div key={t.id} role="tab" aria-selected={t.id === st.active} onClick={() => termStore.setActive(t.id)} onDoubleClick={() => rename(t)}
@@ -110,7 +110,10 @@ export function TerminalHost() {
   if (mode === 'page') {
     return (
       <section className="mx-auto max-w-7xl p-4 sm:p-6">
-        <PageHeader crumb="terminal" title="Terminal" right={<span className="hidden font-mono text-[10px] text-muted sm:inline">shell runs as <b>{user || '…'}</b> · Ctrl/Cmd+` docks a panel</span>} />
+        <PageHeader crumb="terminal" title="Terminal" right={<div className="hidden items-center gap-2 font-mono text-[10px] text-muted sm:flex">
+          <span className="rounded-full border border-line px-2 py-0.5" title="The Unix user the shell runs as (never root)">user <b className="text-fg">{user || '…'}</b></span>
+          <span className="rounded-full border border-line px-2 py-0.5" title="On any other page, press Ctrl+` (Cmd+` on Mac) to open this terminal as a bottom panel">Ctrl+` <span className="text-fg">bottom panel</span></span>
+        </div>} />
         <GlassCard className="flex h-[calc(100dvh-15.5rem)] min-h-[12rem] min-w-0 flex-col overflow-hidden !p-0 sm:h-[calc(100dvh-12.5rem)]">
           <div ref={cardRef} className="flex min-h-0 flex-1 flex-col">{strip}{terms}{keyRow}</div>
         </GlassCard>
