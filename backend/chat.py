@@ -337,6 +337,17 @@ def steer_turn(profile, run_id, message, db_path=None):
     return out
 
 
+# Appended by the gateway to the agent's own system prompt for every hq chat turn (ephemeral: never stored in the
+# transcript). Lets any agent ask the owner a question with clickable options without touching SOUL/templates.
+HQ_OPTIONS_HINT = (
+    "hermes-hq chat: when you need the owner to decide between a few choices, put the question in a fenced block "
+    "tagged hq-options containing JSON {\"question\": str, \"mode\": \"single\"|\"multi\", "
+    "\"options\": [{\"label\": str, \"detail\": str}]} (2-6 options, labels short, detail optional). "
+    "The owner sees buttons and their click arrives as a normal message containing the chosen label(s). "
+    "Use it only for real decisions, at most one block per reply, and keep any other text outside the block."
+)
+
+
 def stream_turn(profile, session_id, message, db_path=None, model=None, effort=None, fast=None, provider=None):
     """Generator of SSE bytes from the gateway's /chat/stream, pass-through.
 
@@ -346,7 +357,7 @@ def stream_turn(profile, session_id, message, db_path=None, model=None, effort=N
     """
     _check_profile(profile); _check_session(session_id)
     payload, preview = normalize_message(message)
-    body = {"message": payload}
+    body = {"message": payload, "system_message": HQ_OPTIONS_HINT}
     body.update(model_options(model, effort, fast, provider))
     port, key = gateways.ensure_running(profile, db_path)
     c = http.client.HTTPConnection("127.0.0.1", port, timeout=CONNECT_TIMEOUT)

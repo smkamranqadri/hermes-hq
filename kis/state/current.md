@@ -4,7 +4,7 @@
 **hermes-hq is the live control plane since 2026-08-29 13:40 UTC** (branch `main`). Process: `nohup .venv/bin/hermes-hq serve --host 0.0.0.0 --port 9010 --interval 20 > /opt/data/hermes-hq-serve.log 2>&1 &` with the dispatcher ON; restart by hand after backend changes (`pkill -f 'hermes-hq serve'` in its own command, then that line). Password file `/opt/data/hermes-hq/password` is `test` for the owner's review (generated one kept in `password.prev`). Frontend builds go live without a restart. Legacy WM rollback recipe: `knowledge/technical.md` → Legacy WM. Latest commit at sync: see `git log`.
 
 ## Now
-Task: **Group 4 — direct chat scopes — COMPLETE 2026-08-30** (`intent/Group4Plan.md`). Next: **Group 4b — Chat polish + notifications** (`intent/Group4bPlan.md`, Phase mode, planned 2026-08-30); 4b-1, 4b-2, 4b-3 DONE 2026-08-30; next 4b-4 agent questions with options (needs the owner's A/B on touching `agents/` templates) via `/kis:act`. Group 5 files after 4b.
+Task: **Group 4 — direct chat scopes — COMPLETE 2026-08-30** (`intent/Group4Plan.md`). Next: **Group 4b — Chat polish + notifications** (`intent/Group4bPlan.md`, Phase mode, planned 2026-08-30); 4b-1 … 4b-4 DONE 2026-08-30; next 4b-5 notifications (hq table + bell, browser Notification API, Web Push last — needs HTTPS, owner to confirm Tailscale) via `/kis:act`. Group 5 files after 4b.
 Groups 1–4 are complete as of 2026-08-30.
 
 ## Next
@@ -26,6 +26,7 @@ None.
 `README.md`. Dev: `.venv/bin/hermes-hq serve --no-dispatcher` + `cd frontend && npm run dev`. Owner drops reference images in `screenshots/` (git-ignored).
 
 ## Proof (latest)
+- 2026-08-30 4b-4 option cards (live :9010, Playwright 1440/390): asked the orchestrator to make me choose a focus project → it emitted a ```hq-options block (hint delivered via per-turn `system_message`) → card with Personal Brand / Riyadh job search / Social media content + details → click sent "Riyadh job search" as a user message → reply "Riyadh job search selected as this week's focus."; answered card disabled (3/3); 390 clean. Suite 46 passed.
 - 2026-08-30 model list now = Hermes' own picker sources (owner: "model is also not linked"): openai-codex → 10 (`gpt-5.6-sol-900k`…), nous → 34, copilot → 17, coder/opencode-go → 34; suite 46 passed.
 - 2026-08-30 provider select (owner: "provider = what is configured in Hermes"): list = Hermes auth.json/config.yaml per agent — orchestrator shows `default (OpenAI Codex) · Nous Portal · OpenAI Codex · OpenCode Go · GitHub Copilot`; Copilot → 33 model suggestions (first `claude-fable-5`); `provider` sent per turn. Suite 46 passed.
 - 2026-08-30 4b-3 composer (live :9010, Playwright 1440/390): `/re` → slash menu → Tab → `/reasoning high` stored; pasted green PNG → thumbnail → wire body `parts [text, image_url(246b)]` + `effort: high` → orchestrator answered "Green" (Hermes row shows `[screenshot]`); status line `gpt-5.6-luna-900k · high`; options panel reset works; reload mid-send → text restored with a notice; composer stays open while running with placeholder "Steer the running turn…", Steer → `POST …/steer/run_…` 200 `accepted:true` (the model kept counting — steer is advisory); simulated 502 → "Gateway unreachable" banner with Retry, draft kept; 390 clean. Suite 46 passed.

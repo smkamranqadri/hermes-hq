@@ -15,12 +15,51 @@ function textOf(n: ReactNode): string {
   return ''
 }
 
-/** GFM markdown for assistant bubbles: code blocks get a Copy button, tables scroll inside their own box. */
-export function Markdown({ text }: { text: string }) {
+/** Agent-asked question with clickable options: a ```hq-options fenced block carrying JSON. */
+export type OptionBlock = { question?: string; mode?: 'single' | 'multi'; options: { label: string; detail?: string }[] }
+export function parseOptions(raw: string): OptionBlock | null {
+  try {
+    const o = JSON.parse(raw) as OptionBlock
+    if (!o || !Array.isArray(o.options) || o.options.length < 1) return null
+    o.options = o.options.filter(x => x && typeof x.label === 'string' && x.label.trim()).slice(0, 8)
+    return o.options.length ? o : null
+  } catch { return null }
+}
+
+export function OptionCard({ block, onChoose, disabled }: { block: OptionBlock; onChoose?: (text: string) => void; disabled?: boolean }) {
+  const [picked, setPicked] = useState<string[]>([])
+  const multi = block.mode === 'multi'
+  return (
+    <div className="my-2 rounded-xl border border-accent/40 bg-accent/5 p-3" data-options>
+      {block.question && <p className="mb-2 text-sm font-medium">{block.question}</p>}
+      <div className="flex flex-col gap-1.5">
+        {block.options.map(o => {
+          const on = picked.includes(o.label)
+          return (
+            <button key={o.label} type="button" disabled={disabled || !onChoose} onClick={() => multi ? setPicked(p => on ? p.filter(x => x !== o.label) : [...p, o.label]) : onChoose?.(o.label)}
+              className={`flex w-full items-start gap-2 rounded-lg border px-3 py-1.5 text-left text-sm transition hover:bg-raised disabled:cursor-default disabled:opacity-70 ${on ? 'border-accent bg-accent/20' : 'border-line bg-glass'}`}>
+              {multi && <span className={`mt-0.5 inline-block size-3.5 shrink-0 rounded border ${on ? 'border-accent bg-accent' : 'border-line'}`} />}
+              <span className="min-w-0"><span className="font-medium">{o.label}</span>{o.detail && <span className="block text-xs text-muted">{o.detail}</span>}</span>
+            </button>)
+        })}
+      </div>
+      {multi && <div className="mt-2 flex justify-end"><button type="button" disabled={disabled || !onChoose || picked.length === 0} onClick={() => onChoose?.(picked.join(', '))} className="rounded-full bg-accent px-3 py-1 font-mono text-[11px] uppercase tracking-wider text-white disabled:opacity-50">Send choice{picked.length > 1 ? 's' : ''}</button></div>}
+    </div>
+  )
+}
+
+/** GFM markdown for assistant bubbles: code blocks get a Copy button, tables scroll inside their own box,
+ *  ```hq-options blocks become option cards (only once the fence has closed — mid-stream they stay as code). */
+export function Markdown({ text, onChoose, optionsDisabled }: { text: string; onChoose?: (t: string) => void; optionsDisabled?: boolean }) {
   return (
     <div className="md min-w-0 break-words text-sm leading-relaxed">
       <ReactMarkdown remarkPlugins={[remarkGfm]} components={{
-        pre: ({ children }) => <div className="group/code relative my-2"><pre className="overflow-x-auto rounded-lg border border-line bg-inset p-3 font-mono text-[12px] leading-snug">{children}</pre><CopyBtn text={textOf(children)} /></div>,
+        pre: ({ children }) => {
+          const child = Array.isArray(children) ? children[0] : children
+          const cls = (child && typeof child === 'object' && 'props' in child ? (child as { props: { className?: string } }).props.className : '') ?? ''
+          if (/language-hq-options/.test(cls)) { const block = parseOptions(textOf(children)); if (block) return <OptionCard block={block} onChoose={onChoose} disabled={optionsDisabled} /> }
+          return <div className="group/code relative my-2"><pre className="overflow-x-auto rounded-lg border border-line bg-inset p-3 font-mono text-[12px] leading-snug">{children}</pre><CopyBtn text={textOf(children)} /></div>
+        },
         code: ({ className, children, ...p }) => className || String(children).includes('\n')
           ? <code className={className} {...p}>{children}</code>
           : <code className="rounded bg-inset px-1 py-0.5 font-mono text-[12px]" {...p}>{children}</code>,
