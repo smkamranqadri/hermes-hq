@@ -292,6 +292,10 @@ def auto_update_pass(now=None, db_path=None):
     if detect() == "none":               # a pull without a restart just skews code vs process
         store._set_meta(NEXT_KEY, advance, db_path=db_path)
         return {"skipped": "no supervisor to restart under"}
+    code, _up = _run(["git", "-C", repo_root(), "rev-parse", "--abbrev-ref", "@{u}"], timeout=20)
+    if code != 0:              # no remote/upstream: nothing to pull from — skip quietly, not nightly failures
+        store._set_meta(NEXT_KEY, advance, db_path=db_path)
+        return {"skipped": "no git upstream configured"}
     code, out = _run(["git", "-C", repo_root(), "status", "--porcelain"], timeout=20)
     if code != 0 or out.strip():
         store._set_meta(NEXT_KEY, advance, db_path=db_path)

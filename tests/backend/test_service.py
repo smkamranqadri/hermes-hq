@@ -133,7 +133,7 @@ def test_auto_update_pass_matrix(env, monkeypatch):
     class J:
         id = "u1"; kind = "hq-update"; status = "running"
     monkeypatch.setattr(service, "start_update_job", lambda reason: started.append(reason) or J())
-    monkeypatch.setattr(service, "_run", lambda cmd, timeout=30: (0, ""))          # clean tree
+    monkeypatch.setattr(service, "_run", lambda cmd, timeout=30: (0, ""))          # upstream ok + clean tree
     monkeypatch.setenv("HERMES_HQ_SUPERVISOR", "s6")
     monkeypatch.setattr(store, "running_run_count", lambda db_path=None: 0)
     service._last_check = 0.0
@@ -142,8 +142,12 @@ def test_auto_update_pass_matrix(env, monkeypatch):
     due = float(store.get_meta(service.NEXT_KEY, db_path=db)) + 1
     assert service.auto_update_pass(now=due, db_path=db) == {"job": "u1"} and started == ["scheduled"]
     assert float(store.get_meta(service.NEXT_KEY, db_path=db)) > due                # advanced
+    # no upstream → clean skip and advance
+    monkeypatch.setattr(service, "_run", lambda cmd, timeout=30: (1, "fatal: no upstream") if "@{u}" in " ".join(cmd) else (0, ""))
+    dueU = float(store.get_meta(service.NEXT_KEY, db_path=db)) + 61
+    assert service.auto_update_pass(now=dueU, db_path=db) == {"skipped": "no git upstream configured"}
     # dirty tree → skip and advance
-    monkeypatch.setattr(service, "_run", lambda cmd, timeout=30: (0, " M x.py"))
+    monkeypatch.setattr(service, "_run", lambda cmd, timeout=30: (0, " M x.py") if "status" in cmd else (0, ""))
     due2 = float(store.get_meta(service.NEXT_KEY, db_path=db)) + 1
     assert service.auto_update_pass(now=due2, db_path=db) == {"skipped": "dirty tree"}
     # runs running → skip WITHOUT advancing (retries)
