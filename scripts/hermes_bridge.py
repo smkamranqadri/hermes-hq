@@ -10,6 +10,7 @@ ops: providers | config | activate | setup | graph | node | limits
      skills_list | skills_content | skills_create | skills_update | skills_toggle
      hub_sources | hub_search | hub_preview | hub_scan
      mcp_list | mcp_add | mcp_remove | mcp_test | mcp_enabled | mcp_catalog | mcp_catalog_install
+     cron_list | cron_get | cron_runs | cron_create | cron_update | cron_pause | cron_resume | cron_trigger | cron_delete | cron_targets
 """
 import json
 import sys
@@ -287,6 +288,55 @@ def op_mcp_catalog_install(body):
 
 OPS.update({"mcp_list": op_mcp_list, "mcp_add": op_mcp_add, "mcp_remove": op_mcp_remove, "mcp_test": op_mcp_test,
             "mcp_enabled": op_mcp_enabled, "mcp_catalog": op_mcp_catalog, "mcp_catalog_install": op_mcp_catalog_install})
+
+
+# -- Hermes cron (dashboard router handlers; run under the ROOT home — these resolve the
+#    profile by NAME themselves, `all` spans every profile) ---------------------------------------
+def op_cron_list(body):
+    from hermes_cli.web_routers.cron import list_cron_jobs
+    return {"jobs": _router_call(list_cron_jobs, str(body.get("profile") or "all"))}
+
+
+def op_cron_get(body):
+    from hermes_cli.web_routers.cron import get_cron_job
+    return _router_call(get_cron_job, str(body.get("id") or ""), body.get("profile") or None)
+
+
+def op_cron_runs(body):
+    from hermes_cli.web_routers.cron import list_cron_job_runs
+    return _router_call(list_cron_job_runs, str(body.get("id") or ""), body.get("profile") or None, int(body.get("limit") or 20))
+
+
+def op_cron_create(body):
+    from hermes_cli.web_routers.cron import create_cron_job
+    from hermes_cli.web_models import CronJobCreate
+    fields = {k: body.get(k) for k in ("prompt", "schedule", "name", "deliver", "skills", "model",
+                                       "provider", "workdir", "enabled_toolsets") if body.get(k) is not None}
+    return _router_call(create_cron_job, CronJobCreate(**fields), body.get("profile") or None)
+
+
+def op_cron_update(body):
+    from hermes_cli.web_routers.cron import update_cron_job
+    from hermes_cli.web_models import CronJobUpdate
+    return _router_call(update_cron_job, str(body.get("id") or ""), CronJobUpdate(updates=body.get("updates") or {}), body.get("profile") or None)
+
+
+def _cron_simple(handler_name):
+    def op(body):
+        import hermes_cli.web_routers.cron as cr
+        return _router_call(getattr(cr, handler_name), str(body.get("id") or ""), body.get("profile") or None)
+    return op
+
+
+def op_cron_targets(body):
+    from hermes_cli.web_routers.cron import get_cron_delivery_targets
+    return _router_call(get_cron_delivery_targets)
+
+
+OPS.update({"cron_list": op_cron_list, "cron_get": op_cron_get, "cron_runs": op_cron_runs,
+            "cron_create": op_cron_create, "cron_update": op_cron_update, "cron_targets": op_cron_targets,
+            "cron_pause": _cron_simple("pause_cron_job"), "cron_resume": _cron_simple("resume_cron_job"),
+            "cron_trigger": _cron_simple("trigger_cron_job"), "cron_delete": _cron_simple("delete_cron_job")})
 
 if __name__ == "__main__":
     main()
