@@ -40,6 +40,7 @@ def create_app(dispatcher_enabled: bool = True, interval: float = 30.0, password
         except Exception:  # never block shutdown
             pass
         terminal.REGISTRY.close_all()
+        jobs.stop_all()
 
     app = FastAPI(title="hermes-hq", version=__version__, lifespan=lifespan)
     app.add_middleware(A.AuthMiddleware, sessions=sessions)

@@ -88,7 +88,7 @@ def test_cli_jobs_are_argv(env, monkeypatch):
     assert started[-1][1] == ["/usr/bin/hermes", "--profile", "coder", "skills", "install", "skills-sh/a/b/c", "--yes", "--category", "devops"]
     assert started[-1][2]["env"]["HERMES_HOME"].endswith("profiles/coder")
     c.post("/api/skills/hub/install", json={"identifier": "skills-sh/a/b/c"})
-    assert started[-1][1] == ["/usr/bin/hermes", "skills", "install", "skills-sh/a/b/c", "--yes"]      # orchestrator: no --profile
+    assert started[-1][1] == ["/usr/bin/hermes", "--profile", "default", "skills", "install", "skills-sh/a/b/c", "--yes"]      # orchestrator = Hermes' `default`
     c.post("/api/skills/hub/uninstall", json={"profile": "coder", "name": "c"}); assert started[-1][1][-3:] == ["uninstall", "c", "--yes"]
     c.post("/api/skills/hub/update", json={}); assert started[-1][1][-2:] == ["skills", "update"]
     c.post("/api/skills/hub/update", json={"name": "c"}); assert started[-1][1][-2:] == ["update", "c"]
@@ -97,3 +97,18 @@ def test_cli_jobs_are_argv(env, monkeypatch):
     assert c.post("/api/skills/hub/install", json={"identifier": "--force"}).status_code == 400
     assert c.post("/api/skills/hub/uninstall", json={"name": "a b"}).status_code == 400
     assert all("--force" not in a[1] for a in started)
+    assert c.post("/api/skills/hub/uninstall", json={"name": "c\n"}).status_code == 400          # fullmatch: no trailing newline
+    env = started[-1][2]["env"]
+    assert "HERMES_HQ_PASSWORD" not in env and "HERMES_HOME" in env and "PATH" in env         # allow-listed child env
+
+
+def test_error_envelope_not_cached(env, monkeypatch):
+    c, calls, skills, jobs, store = env
+    from backend import memory
+    n = {"i": 0}
+    def flaky(home, op, body=None, timeout=60):
+        n["i"] += 1
+        return {"ok": False, "status": 502, "error": "hub down"} if n["i"] == 1 else {"sources": [], "index_available": False, "featured": [], "installed": {}}
+    monkeypatch.setattr(memory, "bridge", flaky)
+    assert c.get("/api/skills/hub/sources").status_code == 502
+    assert c.get("/api/skills/hub/sources").status_code == 200        # second call re-asked Hermes instead of serving the cached error

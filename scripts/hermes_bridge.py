@@ -21,7 +21,9 @@ def main():
     op = sys.argv[1] if len(sys.argv) > 1 else ""
     body = json.loads(sys.stdin.read() or "{}")
     out = OPS[op](body)
-    _real_stdout.write(json.dumps(out, default=str))
+    # Own line, both sides: Hermes child processes (pip during a provider setup) share fd 1 with us and
+    # may leave the cursor mid-line; the job runner parses the last line that is JSON.
+    _real_stdout.write("\n" + json.dumps(out, default=str) + "\n")
     _real_stdout.flush()
 
 
@@ -50,6 +52,18 @@ def op_providers(body):
     return {"active": _active(w), "providers": rows}
 
 
+def _guard(fn):
+    """Hermes raises HTTPException for bad names/state; report it instead of a traceback."""
+    def inner(body):
+        from fastapi import HTTPException
+        try:
+            return fn(body)
+        except HTTPException as e:
+            return {"ok": False, "status": e.status_code, "error": str(e.detail)}
+    return inner
+
+
+@_guard
 def op_config(body):
     w = _ws()
     name = str(body.get("name") or "")
@@ -84,6 +98,7 @@ def op_activate(body):
     return {"ok": True, "active": name}
 
 
+@_guard
 def op_setup(body):
     w = _ws()
     name = str(body.get("name") or "")

@@ -26,8 +26,8 @@ from core import wm_store as store
 
 router = APIRouter(prefix="/api/memory")
 
-NAME_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9_.-]{0,63}\.md$")
-PROVIDER_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9_-]{0,63}$")
+NAME_RE = re.compile(r"[A-Za-z0-9][A-Za-z0-9_.-]{0,63}\.md")
+PROVIDER_RE = re.compile(r"[A-Za-z0-9][A-Za-z0-9_-]{0,63}")
 SEARCH_CAP = 200
 MAX_BYTES = 1_000_000
 ORCH = store.ORCHESTRATOR_AGENT
@@ -41,7 +41,7 @@ def profiles():
     pdir = store.resolve_profiles_dir()
     if pdir and os.path.isdir(pdir):
         for n in sorted(os.listdir(pdir)):
-            if PROVIDER_RE.match(n) and os.path.isdir(os.path.join(pdir, n)) and n != ORCH:
+            if PROVIDER_RE.fullmatch(n) and os.path.isdir(os.path.join(pdir, n)) and n != ORCH:
                 out.append((n, store.profile_hermes_home(pdir, n)))
     return out
 
@@ -61,7 +61,7 @@ def mem_dir(home: str) -> str:
 
 
 def file_path(home: str, name: str) -> str:
-    if not NAME_RE.match(name or "") or "/" in name:
+    if not NAME_RE.fullmatch(name or "") or "/" in name:
         raise HTTPException(400, "bad memory file name")
     return os.path.join(mem_dir(home), name)
 
@@ -112,7 +112,7 @@ def list_files(profile: str | None = None):
     lim = limits(home)
     out = []
     if os.path.isdir(d):
-        names = [n for n in os.listdir(d) if NAME_RE.match(n) and os.path.isfile(os.path.join(d, n))]
+        names = [n for n in os.listdir(d) if NAME_RE.fullmatch(n) and os.path.isfile(os.path.join(d, n))]
         order = {"MEMORY.md": 0, "USER.md": 1}
         for n in sorted(names, key=lambda n: (order.get(n, 2), n)):
             out.append(_entry(n, os.path.join(d, n), lim))
@@ -213,7 +213,7 @@ def search(q: str = Query(..., min_length=1)):
             continue
         for n in sorted(os.listdir(d)):
             p = os.path.join(d, n)
-            if not NAME_RE.match(n) or not os.path.isfile(p) or os.path.getsize(p) > MAX_BYTES:
+            if not NAME_RE.fullmatch(n) or not os.path.isfile(p) or os.path.getsize(p) > MAX_BYTES:
                 continue
             with open(p, encoding="utf-8", errors="replace") as f:
                 for i, line in enumerate(f, 1):
@@ -226,7 +226,15 @@ def search(q: str = Query(..., min_length=1)):
 
 # -- Hermes bridge (providers, graph) ---------------------------------------------------
 def hermes_root() -> str:
-    return os.environ.get("HERMES_HQ_HERMES_ROOT") or os.path.dirname(os.path.dirname(os.path.realpath(store.HERMES)))
+    """The Hermes checkout: explicit override, else derived from the resolved `hermes` binary
+    (<root>/bin/hermes), else /opt/hermes when that is a checkout."""
+    if os.environ.get("HERMES_HQ_HERMES_ROOT"):
+        return os.environ["HERMES_HQ_HERMES_ROOT"]
+    cand = os.path.dirname(os.path.dirname(os.path.realpath(store.resolve_hermes())))
+    for c in (cand, "/opt/hermes"):
+        if os.path.isfile(os.path.join(c, "hermes_cli", "web_server.py")):
+            return c
+    return cand
 
 
 def hermes_python() -> str:
@@ -241,7 +249,7 @@ def bridge_argv(op: str):
 
 
 def bridge_env(home: str):
-    return dict(os.environ, HERMES_HOME=home, PYTHONUNBUFFERED="1")
+    return jobs.child_env(HERMES_HOME=home, PYTHONUNBUFFERED="1")
 
 
 def bridge(home: str, op: str, body: dict | None = None, timeout: float = 60):
@@ -270,7 +278,8 @@ def _cached(key: tuple, ttl: float, fn):
     if hit and now - hit[0] < ttl:
         return hit[1]
     val = fn()
-    _cache[key] = (now, val)
+    if not (isinstance(val, dict) and val.get("ok") is False):     # never cache an error envelope
+        _cache[key] = (now, val)
     return val
 
 
@@ -296,7 +305,7 @@ class ProviderConfigBody(BaseModel):
 
 @router.post("/providers/{name}/config")
 def provider_config(name: str, b: ProviderConfigBody):
-    if not PROVIDER_RE.match(name):
+    if not PROVIDER_RE.fullmatch(name):
         raise HTTPException(404, "unknown provider")
     _, home = home_of(b.profile)
     res = bridge(home, "config", {"name": name, "values": b.values, "activate": b.activate})
@@ -313,12 +322,13 @@ class ProviderSetupBody(BaseModel):
 
 @router.post("/providers/{name}/setup")
 def provider_setup(name: str, b: ProviderSetupBody):
-    if not PROVIDER_RE.match(name):
+    if not PROVIDER_RE.fullmatch(name):
         raise HTTPException(404, "unknown provider")
     prof, home = home_of(b.profile)
     invalidate(home)
     job = jobs.start("memory-provider-setup", f"Install {name} for {prof}", bridge_argv("setup"),
-                     env=bridge_env(home), cwd=hermes_root(), stdin=json.dumps({"name": name, "values": b.values}))
+                     env=bridge_env(home), cwd=hermes_root(), stdin=json.dumps({"name": name, "values": b.values}),
+                     on_done=lambda j: invalidate(home))
     return {"job": job.info(tail_bytes=0)}
 
 
@@ -329,7 +339,7 @@ class ProviderSelectBody(BaseModel):
 
 @router.post("/provider")
 def select_provider(b: ProviderSelectBody):
-    if b.name and not PROVIDER_RE.match(b.name):
+    if b.name and not PROVIDER_RE.fullmatch(b.name):
         raise HTTPException(404, "unknown provider")
     _, home = home_of(b.profile)
     res = bridge(home, "activate", {"name": b.name})

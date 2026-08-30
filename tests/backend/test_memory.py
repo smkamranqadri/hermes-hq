@@ -130,3 +130,44 @@ def test_setup_job_polls_real_subprocess(env, monkeypatch):
     assert info["status"] == "done" and info["result"] == {"ok": True, "provider": "mem0"} and "installing mem0" in info["log"]
     assert c.get("/api/jobs/nope").status_code == 404
     assert c.get("/api/jobs").json()["jobs"][0]["id"] == j["id"]
+
+
+def test_job_timeout_stop_and_result_after_noise(env, monkeypatch):
+    c, memory, hermes = env
+    from backend import jobs
+    monkeypatch.setattr(memory, "hermes_root", lambda: str(hermes))
+    # result JSON followed by a stderr warning on the same fd is still found
+    monkeypatch.setattr(memory, "bridge_argv", lambda op: [sys.executable, "-c", "import sys; print('{\"ok\": true, \"n\": 1}'); sys.stderr.write('warning after result')"])
+    j = c.post("/api/memory/providers/mem0/setup", json={"profile": "coder"}).json()["job"]
+    for _ in range(100):
+        info = c.get(f"/api/jobs/{j['id']}").json()
+        if info["status"] != "running": break
+        time.sleep(0.05)
+    assert info["status"] == "done" and info["result"] == {"ok": True, "n": 1}
+    # timeout kills a hung job
+    monkeypatch.setattr(memory, "bridge_argv", lambda op: [sys.executable, "-c", "import time; time.sleep(30)"])
+    monkeypatch.setattr(jobs, "DEFAULT_TIMEOUT", 0.3)
+    j = c.post("/api/memory/providers/mem0/setup", json={"profile": "coder"}).json()["job"]
+    for _ in range(100):
+        info = c.get(f"/api/jobs/{j['id']}").json()
+        if info["status"] != "running": break
+        time.sleep(0.05)
+    assert info["status"] == "failed" and info["timed_out"] is True
+    # stop route
+    monkeypatch.setattr(jobs, "DEFAULT_TIMEOUT", 60)
+    j = c.post("/api/memory/providers/mem0/setup", json={"profile": "coder"}).json()["job"]
+    assert c.post(f"/api/jobs/{j['id']}/stop").json()["stopping"] is True
+    for _ in range(100):
+        info = c.get(f"/api/jobs/{j['id']}").json()
+        if info["status"] != "running": break
+        time.sleep(0.05)
+    assert info["status"] == "failed" and info["stopped"] is True
+    # missing binary → 503, not a traceback
+    monkeypatch.setattr(memory, "bridge_argv", lambda op: ["/nonexistent/python", "x"])
+    assert c.post("/api/memory/providers/mem0/setup", json={"profile": "coder"}).status_code == 503
+    # cap
+    monkeypatch.setattr(memory, "bridge_argv", lambda op: [sys.executable, "-c", "import time; time.sleep(5)"])
+    monkeypatch.setattr(jobs, "MAX_RUNNING", 1)
+    j = c.post("/api/memory/providers/mem0/setup", json={"profile": "coder"}).json()["job"]
+    assert c.post("/api/memory/providers/mem0/setup", json={"profile": "coder"}).status_code == 429
+    c.post(f"/api/jobs/{j['id']}/stop")
