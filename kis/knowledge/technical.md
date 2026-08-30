@@ -101,6 +101,9 @@ Hermes v0.20.5 at `/opt/hermes`, `HERMES_HOME=/opt/data`, profiles under `/opt/d
 - `tests/backend/mcp_echo_server.py`: dependency-free MCP stdio server (initialize, tools/list with `echo`/`add`, prompts/resources) used by the tests and the live proof.
 - Frontend `pages/Mcp.tsx` (19 KB lazy) `?profile=&tab=servers|catalog|toolsets`; Servers cards (status/transport/auth pills, enable switch, Test detail, placeholder hint after a failed test, copyable login command, two-step delete), Add modal (http: url + none/bearer/oauth; stdio: command/args/env lines), Catalog cards (details: endpoint or command, installs-from, bootstrap, needed env, notes; env prompt modal → `.env`), Toolsets read-only.
 
+## Hermes cron (facts, 2026-08-30)
+- Hermes cron jobs fire from the **gateway's ticker** (`hermes cron status` → "Gateway is running — cron jobs will fire automatically"); a profile whose gateway is off never fires its jobs. `hermes [--profile p] cron tick` runs due jobs once and exits (how hq covers idle-stopped specialists). Jobs = agent prompt or script (`no_agent`) on a cron/interval schedule with delivery targets and a durable run history; dashboard router `hermes_cli/web_routers/cron.py`. Live: one active root job (04:00 UTC news brief) + the three paused legacy WM crons. Server clock is UTC; hq shows schedules in Asia/Karachi.
+
 ## Known limits (accepted for now)
 - The server is restarted by hand after backend changes (`pkill -f 'hermes-hq serve'`, then the serve line in State); no systemd/s6 unit yet — belongs to the install work.
 - `IdleSweeper` (gateway idle-stop) runs only when the dispatcher is enabled; `--no-dispatcher` dev mode never idle-stops gateways.

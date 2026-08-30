@@ -4,11 +4,11 @@
 **hermes-hq is the live control plane since 2026-08-29 13:40 UTC** (branch `main`). Process: `nohup .venv/bin/hermes-hq serve --host 0.0.0.0 --port 9010 --interval 20 > /opt/data/hermes-hq-serve.log 2>&1 &` with the dispatcher ON; restart by hand after backend changes (`pkill -f 'hermes-hq serve'` in its own command, then that line). Password file `/opt/data/hermes-hq/password` is `test` for the owner's review (generated one kept in `password.prev`). Frontend builds go live without a restart. HTTPS for the phone: `tailscale serve` on the owner's Mac fronts this VM's `:9010` (Knowledge → Web Push). Legacy WM rollback recipe: `knowledge/technical.md` → Legacy WM.
 
 ## Now
-Task: **Group 7 — Schedules** (recurring tasks, PRD item 7) — not planned yet; start the next session with `/kis:plan`. Inputs: `PRD.md` item 7, Hermes `cron` (`hermes cron list|status`, dashboard `/cron` in `hermes_cli/web_routers/cron.py` — list/create/edit/pause/resume/trigger/delete, run history), the dispatcher's own scheduling, the `/schedules` placeholder in the Tools menu.
-**Group 6 (Browsers) is complete as of 2026-08-30**: `/terminal`, `/memory`, `/skills`, `/mcp` are live (`intent/Group6Plan.md`).
+Task: **Group 7 — Schedules**, sub-phase **7-1 Task schedules** (`intent/Group7Plan.md`, approved 2026-08-30, Phase mode). Next command: `/kis:act`.
+Group 6 (Browsers) is complete as of 2026-08-30.
 
 ## Next
-Group 7 schedules (plan first), then the install/supervisor work in Known limits.
+7-2 Agent jobs → 7-3 page/phone, then the install/supervisor work in Known limits.
 
 ## Blocker
 None.
