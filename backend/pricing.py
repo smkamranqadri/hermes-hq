@@ -22,7 +22,7 @@ def _cache_path():
 
 
 def _build_index(data):
-    """{model_id_lower: cost dict} across providers; bare ids win over provider/-prefixed duplicates."""
+    """{model_id_lower: {"cost": {...}, "context": int|None}} across providers; bare ids win over provider/-prefixed duplicates."""
     idx = {}
     for prov in (data or {}).values():
         for mid, m in (prov.get("models") or {}).items():
@@ -31,7 +31,7 @@ def _build_index(data):
                 continue
             key = mid.lower()
             if key not in idx or "/" in key:
-                idx[key] = cost
+                idx[key] = {"cost": cost, "context": ((m.get("limit") or {}).get("context") if isinstance(m.get("limit"), dict) else None)}
     return idx
 
 
@@ -82,12 +82,33 @@ def lookup(model):
     m = model.lower()
     for cand in (m, m.split("/", 1)[-1]):
         if cand in idx:
-            return cand, idx[cand]
+            return cand, idx[cand]["cost"]
     best = None
     for key in idx:
         if m.startswith(key) and (best is None or len(key) > len(best)):
             best = key
-    return (best, idx[best]) if best else (None, None)
+    return (best, idx[best]["cost"]) if best else (None, None)
+
+
+def context_limit(model):
+    """Context window (tokens) from models.dev for the matched model, else None."""
+    matched, _ = lookup(model)
+    return (_load() or {}).get(matched, {}).get("context") if matched else None
+
+
+def context_estimate(model, transcript_chars, input_tokens, cache_read, cache_write, api_calls):
+    """≈ tokens the next call will carry: transcript (chars/4) + system-prompt overhead inferred from Hermes'
+    per-call prompt totals (prompt grows ~linearly, so avg prompt ≈ overhead + transcript/2). Honest label: estimate."""
+    transcript = int((transcript_chars or 0) / 4)
+    calls = api_calls or 0
+    overhead = 0
+    if calls > 0:
+        avg_prompt = ((input_tokens or 0) + (cache_read or 0) + (cache_write or 0)) / calls
+        overhead = max(0, int(avg_prompt - transcript / 2))
+    used = transcript + overhead
+    limit = context_limit(model)
+    return {"used": used, "transcript": transcript, "overhead": overhead, "limit": limit,
+            "pct": (round(100.0 * used / limit, 1) if limit else None), "source": "estimate; window from models.dev" if limit else "estimate"}
 
 
 def estimate(model, input_tokens=0, output_tokens=0, cache_read=0, cache_write=0):
