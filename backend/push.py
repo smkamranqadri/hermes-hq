@@ -7,7 +7,9 @@
   subscription; other failures are counted and the subscription is dropped after 8 in a row.
 - `sync_and_push()` runs on each dispatcher tick and after client-side inserts, so pushes go out even when no
   browser is polling (the phone app is frozen in the background — the whole point of push).
-Contact for the VAPID `sub` claim: `HERMES_HQ_PUSH_CONTACT` (mailto:/https:), default `mailto:admin@localhost`.
+Contact for the VAPID `sub` claim: `HERMES_HQ_PUSH_CONTACT` (a mailto: address), default
+`mailto:hermes-hq@example.com`. Apple's push service rejects non-routable domains such as `@localhost` with
+403 BadJwtToken (verified 2026-08-30), so the default must be a real-looking domain.
 """
 import json, logging, os, threading, time
 
@@ -44,9 +46,16 @@ def vapid():
         return _vapid["pem"], _vapid["public"]
 
 
+DEFAULT_CONTACT = "mailto:hermes-hq@example.com"
+
+
 def contact():
-    c = os.environ.get("HERMES_HQ_PUSH_CONTACT", "").strip() or "mailto:admin@localhost"
-    return c if c.startswith(("mailto:", "https://")) else "mailto:" + c
+    c = os.environ.get("HERMES_HQ_PUSH_CONTACT", "").strip() or DEFAULT_CONTACT
+    if not c.startswith("mailto:"):
+        c = "mailto:" + c
+    if c.endswith(("@localhost", ".local", ".localdomain")):   # push services reject these
+        return DEFAULT_CONTACT
+    return c
 
 
 def send(sub, payload, db_path=None):
