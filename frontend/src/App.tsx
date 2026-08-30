@@ -14,7 +14,7 @@ import { Loading } from './components/ui'
 import { post, setCsrf, useSession } from './api'
 import { usePageTitle } from './usePageTitle'
 import { termStore, useTermStore } from './components/terminal/store'
-import { useLocation } from 'react-router-dom'
+import { useLocation, useNavigate } from 'react-router-dom'
 import { Overview } from './pages/Overview'
 import { Activity } from './pages/Activity'
 import { Projects } from './pages/Projects'
@@ -125,11 +125,17 @@ export default function App() {
     window.addEventListener('hq:unauthenticated', h); return () => window.removeEventListener('hq:unauthenticated', h)
   }, [qc])
   const term = useTermStore()
-  const loc = useLocation()
+  const loc = useLocation(); const nav = useNavigate()
   useEffect(() => {
-    const h = (e: KeyboardEvent) => { if ((e.ctrlKey || e.metaKey) && e.key === '`' && window.innerWidth >= 640) { e.preventDefault(); termStore.togglePanel() } }
+    // Ctrl/Cmd+`: toggle the bottom terminal panel; on /terminal itself it docks the page as the panel and goes back.
+    const h = (e: KeyboardEvent) => {
+      if (!(e.ctrlKey || e.metaKey) || e.key !== '`' || window.innerWidth < 640) return
+      e.preventDefault()
+      if (window.location.pathname === '/terminal') { termStore.setPanel(true); if (window.history.length > 1) nav(-1); else nav('/') }
+      else termStore.togglePanel()
+    }
     window.addEventListener('keydown', h); return () => window.removeEventListener('keydown', h)
-  }, [])
+  }, [nav])
   const termMounted = authed === true && (term.opened || loc.pathname === '/terminal')
   if (authed === null) return null
   if (!authed) return <LoginScreen onDone={() => { setAuthed(true); qc.invalidateQueries() }} />
