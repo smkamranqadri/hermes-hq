@@ -4,11 +4,11 @@
 **hermes-hq is the live control plane since 2026-08-29 13:40 UTC** (branch `main`). Process: `nohup .venv/bin/hermes-hq serve --host 0.0.0.0 --port 9010 --interval 20 > /opt/data/hermes-hq-serve.log 2>&1 &` with the dispatcher ON; restart by hand after backend changes (`pkill -f 'hermes-hq serve'` in its own command, then that line). Password file `/opt/data/hermes-hq/password` is `test` for the owner's review (generated one kept in `password.prev`). Frontend builds go live without a restart. Legacy WM rollback recipe: `knowledge/technical.md` → Legacy WM. Latest commit at sync: see `git log`.
 
 ## Now
-Task: **Group 4 — direct chat scopes — COMPLETE 2026-08-30** (`intent/Group4Plan.md`). Next: **Group 4b — Chat polish + notifications** (`intent/Group4bPlan.md`, Phase mode, planned 2026-08-30); 4b-1 … 4b-4, 4b-5.1 and 4b-5.2 DONE 2026-08-30; 4b-5.3 Web Push is **deferred**: `tailscale` is not installed on this box and nothing serves HTTPS (checked 2026-08-30), and browsers refuse service workers/push over plain http on a LAN address — owner decides (install Tailscale + `tailscale serve`, or a reverse proxy with a cert); next actionable phase is 4b-6 mobile via `/kis:act`. Group 5 files after 4b.
+Task: **Group 4 — direct chat scopes — COMPLETE 2026-08-30** (`intent/Group4Plan.md`). Next: **Group 4b — Chat polish + notifications** (`intent/Group4bPlan.md`, Phase mode, planned 2026-08-30); 4b-1 … 4b-4, 4b-5.1 and 4b-5.2 DONE 2026-08-30; 4b-5.3 Web Push is **deferred**: `tailscale` is not installed on this box and nothing serves HTTPS (checked 2026-08-30), and browsers refuse service workers/push over plain http on a LAN address — owner decides (install Tailscale + `tailscale serve`, or a reverse proxy with a cert); 4b-6 mobile DONE 2026-08-30 — **Group 4b complete except the deferred Web Push**. Next: **Group 5 — Project files** (browse/edit, project-scoped or global) — not planned yet; start with `/kis:plan`. Group 5 files after 4b.
 Groups 1–4 are complete as of 2026-08-30.
 
 ## Next
-Group 4b (6 phases: transcript, sessions, composer, option cards, notifications, mobile), then Group 5 project files.
+Group 5 project files (plan first), then Group 6 browsers; Web Push (4b-5.3) whenever HTTPS exists.
 
 ## Blocker
 None.
@@ -26,6 +26,7 @@ None.
 `README.md`. Dev: `.venv/bin/hermes-hq serve --no-dispatcher` + `cd frontend && npm run dev`. Owner drops reference images in `screenshots/` (git-ignored).
 
 ## Proof (latest)
+- 2026-08-30 4b-6 mobile (Playwright 390, isMobile): no header selects, Sessions button → bottom sheet listing 30 sessions (list box y306 h491), tapping one navigated and closed the sheet; simulated keyboard (visualViewport −300 px) → `--hq-kb: 300px`, chat card 596 → 296 px, composer bottom inside the visual viewport; scrollWidth 390.
 - 2026-08-30 4b-5.2 browser alerts + chime (live :9010, Playwright with `notifications` permission and stubbed `Notification`/`AudioContext`): enabling "Browser alerts" → test OS notification + `hq-notify {browser:true}`; enabling Sound → AudioContext created; server-side `question` while `hasFocus()=false` → OS notification `{title: 'coder asked you a question', body: 'Which branch?', tag: 'hq-3'}` within one poll; a second event while focused → bell 2, no extra OS notification. (Chime count beyond the first cannot be observed through the stub — the AudioContext is reused.)
 - 2026-08-30 4b-5.1 bell (live :9010, Playwright 1440/390): bell 0 at start (watermark, no backfill); throwaway project `hq-proof` (archived after) → task #101 → Take over → bell 1 "Task #101 needs you — manual · Notification proof task · acknowledged out of queue" → click opened `/tasks/101`, count 0; sent "pong" to the orchestrator and left for Overview → "orchestrator replied" appeared; Mark all read → 0; 390 menu is a full-width sheet (x 9, w 372), no overflow. Suite 48 passed.
 - 2026-08-30 4b-4 option cards (live :9010, Playwright 1440/390): asked the orchestrator to make me choose a focus project → it emitted a ```hq-options block (hint delivered via per-turn `system_message`) → card with Personal Brand / Riyadh job search / Social media content + details → click sent "Riyadh job search" as a user message → reply "Riyadh job search selected as this week's focus."; answered card disabled (3/3); 390 clean. Suite 46 passed.

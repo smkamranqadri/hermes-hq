@@ -96,6 +96,19 @@ function ContextLine({ d, opts, onOptions }: { d: SessionDetail; opts: TurnOptio
   )
 }
 
+/** On phones the virtual keyboard shrinks visualViewport but not 100dvh on every browser: publish the difference as
+ *  --hq-kb so the chat card shrinks with it and the composer stays visible above the keyboard. */
+function useKeyboardInset() {
+  useEffect(() => {
+    const vv = window.visualViewport
+    if (!vv) return
+    const root = document.documentElement
+    const apply = () => { const kb = Math.max(0, Math.round(window.innerHeight - vv.height - vv.offsetTop)); root.style.setProperty('--hq-kb', `${kb}px`); if (kb > 0) window.scrollTo({ top: 0 }) }
+    apply(); vv.addEventListener('resize', apply); vv.addEventListener('scroll', apply)
+    return () => { vv.removeEventListener('resize', apply); vv.removeEventListener('scroll', apply); root.style.removeProperty('--hq-kb') }
+  }, [])
+}
+
 /** Model / reasoning effort / fast for this session; models suggested from models.dev, free text allowed. */
 function OptionsPanel({ opts, current, profile, onChange, onClose }: { opts: TurnOptions; current: string | null; profile: string; onChange: (o: TurnOptions) => void; onClose: () => void }) {
   const [q, setQ] = useState(opts.model ?? '')
@@ -166,6 +179,9 @@ export function Chat() {
   const installed = useMemo(() => (agents.data?.agents ?? []).filter(a => a.installed), [agents.data])
   const busy = live !== null
   const [rename, setRename] = useState<{ id: string; title: string } | null>(null)
+  const [sheet, setSheet] = useState(false)
+  useEffect(() => { setSheet(false) }, [id, profile])
+  useKeyboardInset()
   const [atts, setAtts] = useState<Attachment[]>([])
   const [opts, setOpts] = useState<TurnOptions>({})
   const [showOpts, setShowOpts] = useState(false)
@@ -324,44 +340,53 @@ export function Chat() {
   const liveRun = detail.data?.live_run ?? null
   const starters = (profile && STARTERS[profile]) || DEFAULT_STARTERS
   const waitingFirstToken = live && !live.text && live.tools.length === 0 && !live.thinking
+  /** Agent select + New session + pinned/recent list + search — the sidebar on desktop, the bottom sheet on phones. */
+  const sessionNav = profile && (
+    <>
+      <div className="flex items-center justify-between gap-2">
+        <Select value={profile} onChange={e => nav(e.target.value ? `/chat/${e.target.value}` : '/chat')} className="min-w-0 max-w-[9rem]" aria-label="Agent">
+          {installed.map(a => <option key={a.name} value={a.name}>{a.name}</option>)}
+        </Select>
+        {agent && <GatewayDot g={agent.gateway} />}
+      </div>
+      <Link to={`/chat/${profile}`} className={clsx('mt-2 block rounded-lg px-2 py-1.5 text-xs hover:bg-raised', !id && 'bg-raised')}>+ New session</Link>
+      {sessions.isLoading && <Loading rows={4} />}
+      <ul className="mt-1 flex min-h-0 flex-1 flex-col gap-0.5 overflow-y-auto" data-session-list>
+        {(() => { const all = sessions.data?.sessions ?? []; const pinned = all.filter(s => s.pinned); const rest = all.filter(s => !s.pinned)
+          const row = (s: typeof all[number]) => (
+            <li key={s.id} className="group/sess flex min-w-0 items-center gap-1">
+              <Link to={`/chat/${profile}/${s.id}`} className={clsx('block min-w-0 flex-1 truncate rounded-lg px-2 py-1.5 text-xs hover:bg-raised', s.id === id && 'bg-raised')} title={s.id}>{s.pinned ? <span className="mr-1 text-[10px] text-muted">📌</span> : null}{s.scope && <span className="mr-1 font-mono text-[10px] text-accent-2">{s.scope.task_id ? `#${s.scope.task_id}` : s.scope.project_slug}</span>}{s.title || s.id}<span className="ml-1 text-[10px] text-muted">{ago(s.last_activity_at ?? s.started_at)}</span></Link>
+              <SessionMenu profile={profile} s={s} current={s.id === id} onRename={() => setRename({ id: s.id, title: s.title || '' })} />
+            </li>)
+          return <>{pinned.length > 0 && <li className="px-2 pt-1 font-mono text-[10px] uppercase tracking-wider text-muted">Pinned</li>}{pinned.map(row)}{pinned.length > 0 && rest.length > 0 && <li className="px-2 pt-2 font-mono text-[10px] uppercase tracking-wider text-muted">Recent</li>}{rest.map(row)}</>
+        })()}
+      </ul>
+      <button type="button" onClick={() => { setSheet(false); setSearch(true) }} className="mt-2 flex items-center justify-between rounded-lg border border-line px-2 py-1 text-[11px] text-muted hover:bg-raised hover:text-fg"><span className="inline-flex items-center gap-1.5"><svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.2" strokeLinecap="round" aria-hidden="true"><circle cx="11" cy="11" r="7" /><path d="m20 20-3.6-3.6" /></svg>Search all chats</span><kbd className="font-mono text-[10px]">Ctrl K</kbd></button>
+    </>
+  )
   return (
     <section className="mx-auto flex max-w-6xl flex-col p-4 sm:p-6">
       <PageHeader crumb="chat" title="Chat" right={<div className="flex flex-wrap items-center gap-2">
         {id && <ScopeChip scope={detail.data?.scope} />}
         {id && <Btn kind="ghost" busy={starting} onClick={() => { const sc = detail.data?.scope; if (sc?.project_slug && !sc.task_id) void openProject(sc.project_slug, true); else nav(`/chat/${profile}`) }}>+ New chat</Btn>}
-        {profile && <Select value={id ?? ''} onChange={e => nav(e.target.value ? `/chat/${profile}/${e.target.value}` : `/chat/${profile}`)} className="max-w-[46vw] sm:max-w-xs lg:hidden">
-          <option value="">New session</option>
-          {id && !(sessions.data?.sessions ?? []).some(s => s.id === id) && <option value={id}>{id}</option>}
-          {(sessions.data?.sessions ?? []).map(s => <option key={s.id} value={s.id}>{s.scope ? (s.scope.task_id ? `[#${s.scope.task_id}] ` : `[${s.scope.project_slug}] `) : ''}{s.title || s.id}</option>)}
-        </Select>}
+        {profile && <Btn kind="ghost" className="lg:hidden" onClick={() => setSheet(true)} aria-label="Sessions"><svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.2" strokeLinecap="round" aria-hidden="true"><path d="M4 6h16M4 12h16M4 18h10" /></svg>Sessions</Btn>}
       </div>} />
       {rename && profile && <RenameDialog profile={profile} id={rename.id} initial={rename.title} onClose={() => setRename(null)} />}
       {search && <SearchModal onClose={() => setSearch(false)} />}
       {!profile && <Empty title="Pick an agent to chat with" note="Each agent talks through its own Hermes gateway; chat must be enabled on the Agents page for specialists." />}
       {profile && (
         <div className="grid min-w-0 gap-4 lg:grid-cols-[16rem_1fr]">
-          <GlassCard className="hidden min-w-0 lg:flex lg:h-[calc(100dvh-12.5rem)] lg:flex-col">
-            <div className="flex items-center justify-between gap-2">
-              <Select value={profile ?? ''} onChange={e => nav(e.target.value ? `/chat/${e.target.value}` : '/chat')} className="min-w-0 max-w-[9rem]" aria-label="Agent">
-                {installed.map(a => <option key={a.name} value={a.name}>{a.name}</option>)}
-              </Select>
-              {agent && <GatewayDot g={agent.gateway} />}
+          <GlassCard className="hidden min-w-0 lg:flex lg:h-[calc(100dvh-12.5rem)] lg:flex-col">{sessionNav}</GlassCard>
+          {sheet && (
+            <div className="fixed inset-0 z-40 lg:hidden" role="dialog" aria-label="Sessions" data-sheet>
+              <div className="absolute inset-0 bg-bg/60" onClick={() => setSheet(false)} />
+              <div className="absolute inset-x-0 bottom-0 flex max-h-[75dvh] flex-col rounded-t-2xl border border-line bg-glass-strong p-3 pb-[max(0.75rem,env(safe-area-inset-bottom))] shadow-2xl" style={{ backdropFilter: 'blur(18px)', WebkitBackdropFilter: 'blur(18px)' }}>
+                <div className="mx-auto mb-2 h-1 w-10 shrink-0 rounded-full bg-line" />
+                {sessionNav}
+              </div>
             </div>
-            <Link to={`/chat/${profile}`} className={clsx('mt-2 block rounded-lg px-2 py-1.5 text-xs hover:bg-raised', !id && 'bg-raised')}>+ New session</Link>
-            {sessions.isLoading && <Loading rows={4} />}
-            <ul className="mt-1 flex min-h-0 flex-1 flex-col gap-0.5 overflow-y-auto">
-              {(() => { const all = sessions.data?.sessions ?? []; const pinned = all.filter(s => s.pinned); const rest = all.filter(s => !s.pinned)
-                const row = (s: typeof all[number]) => (
-                  <li key={s.id} className="group/sess flex min-w-0 items-center gap-1">
-                    <Link to={`/chat/${profile}/${s.id}`} className={clsx('block min-w-0 flex-1 truncate rounded-lg px-2 py-1.5 text-xs hover:bg-raised', s.id === id && 'bg-raised')} title={s.id}>{s.pinned ? <span className="mr-1 text-[10px] text-muted">📌</span> : null}{s.scope && <span className="mr-1 font-mono text-[10px] text-accent-2">{s.scope.task_id ? `#${s.scope.task_id}` : s.scope.project_slug}</span>}{s.title || s.id}<span className="ml-1 text-[10px] text-muted">{ago(s.last_activity_at ?? s.started_at)}</span></Link>
-                    <SessionMenu profile={profile} s={s} current={s.id === id} onRename={() => setRename({ id: s.id, title: s.title || '' })} />
-                  </li>)
-                return <>{pinned.length > 0 && <li className="px-2 pt-1 font-mono text-[10px] uppercase tracking-wider text-muted">Pinned</li>}{pinned.map(row)}{pinned.length > 0 && rest.length > 0 && <li className="px-2 pt-2 font-mono text-[10px] uppercase tracking-wider text-muted">Recent</li>}{rest.map(row)}</>
-              })()}
-            </ul>
-            <button type="button" onClick={() => setSearch(true)} className="mt-2 flex items-center justify-between rounded-lg border border-line px-2 py-1 text-[11px] text-muted hover:bg-raised hover:text-fg"><span className="inline-flex items-center gap-1.5"><svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.2" strokeLinecap="round" aria-hidden="true"><circle cx="11" cy="11" r="7" /><path d="m20 20-3.6-3.6" /></svg>Search all chats</span><kbd className="font-mono text-[10px]">Ctrl K</kbd></button>
-          </GlassCard>
-          <GlassCard className="relative flex h-[calc(100dvh-15.5rem)] min-h-[22rem] min-w-0 flex-col overflow-hidden sm:h-[calc(100dvh-12.5rem)]">
+          )}
+          <GlassCard className="relative flex h-[calc(100dvh-15.5rem-var(--hq-kb,0px))] min-h-[14rem] min-w-0 flex-col overflow-hidden sm:h-[calc(100dvh-12.5rem-var(--hq-kb,0px))]" data-chat-card>
             {id && <div className="mb-2 flex min-w-0 items-center gap-2 text-xs">
               <button type="button" onClick={() => setRename({ id, title: detail.data?.title || '' })} className="min-w-0 truncate rounded px-1 font-medium hover:bg-raised" title="Rename session">{detail.data?.title || id}</button>
               <span className="shrink-0 font-mono text-[10px] text-muted">· {profile}</span>
