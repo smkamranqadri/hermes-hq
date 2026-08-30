@@ -108,7 +108,7 @@ function useKeyboardInset(box: React.RefObject<HTMLDivElement | null>) {
       root.style.setProperty('--hq-kb', `${kb}px`); if (kb > 0) window.scrollTo({ top: 0 })
       // phones: the chat card fills exactly to the bottom of the visible viewport (no fixed rem guess)
       const card = box.current?.parentElement
-      if (card) { if (window.innerWidth < 640) { const top = card.getBoundingClientRect().top + window.scrollY; const bar = kb > 0 ? 0 : (document.querySelector('[data-tabbar]')?.getBoundingClientRect().height ?? 0); card.style.height = `${Math.max(224, Math.round(vh - top - 12 - bar))}px` } else card.style.height = '' }
+      if (card) { if (window.innerWidth < 640) { const top = card.getBoundingClientRect().top + window.scrollY; const barEl = document.querySelector('[data-tabbar]'); const bar = kb > 0 || !barEl ? 0 : Math.max(0, vh - barEl.getBoundingClientRect().top) + 8; card.style.height = `${Math.max(224, Math.round(vh - top - 12 - bar))}px` } else card.style.height = '' }
     }
     apply(); const t = setTimeout(apply, 150)
     vv?.addEventListener('resize', apply); vv?.addEventListener('scroll', apply); window.addEventListener('resize', apply)

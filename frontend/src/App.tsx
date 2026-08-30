@@ -4,6 +4,7 @@ import { useQuery, useQueryClient } from '@tanstack/react-query'
 import { TopBar, TABS, TOOLS } from './components/TopBar'
 import { TabBar } from './components/TabBar'
 import { More } from './pages/More'
+import { Inbox } from './pages/Inbox'
 import { GlassCard, PageHeader } from './components/GlassCard'
 import { ToastProvider } from './components/Toast'
 import { LoginScreen } from './components/LoginScreen'
@@ -143,6 +144,7 @@ export default function App() {
             <Route path="/chat/:profile/:id" element={<Chat />} />
             <Route path="/system" element={<System />} />
             <Route path="/more" element={<More />} />
+            <Route path="/inbox" element={<Inbox />} />
           </Routes>
         </main>
       </div>
