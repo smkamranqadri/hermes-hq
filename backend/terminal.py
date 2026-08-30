@@ -32,7 +32,7 @@ import termios
 import time
 from urllib.parse import urlsplit
 
-from fastapi import APIRouter, HTTPException, Request, WebSocket, WebSocketDisconnect
+from fastapi import APIRouter, HTTPException, WebSocket, WebSocketDisconnect
 from pydantic import BaseModel
 
 from backend import auth as A
@@ -49,6 +49,17 @@ CLOSE_NO_AUTH = 4401
 CLOSE_BAD_ORIGIN = 4403
 CLOSE_NOT_FOUND = 4404
 CLOSE_LIMIT = 4429
+INPUT_MAX_PENDING = 1 << 16    # unread keyboard input we hold for a busy tty
+QUEUE_MAX = 512                # output chunks per attached client; oldest dropped when it cannot keep up
+
+
+def _offer(q: asyncio.Queue, item):
+    if q.full():
+        try:
+            q.get_nowait()
+        except asyncio.QueueEmpty:
+            pass
+    q.put_nowait(item)
 
 
 def _terminal_home() -> str:
@@ -83,6 +94,8 @@ class Session:
         self.listeners: set[asyncio.Queue] = set()
         self.exit_code: int | None = None
         self.reader_installed = False
+        self.pending = bytearray()      # input not yet accepted by the (non-blocking) master fd
+        self.writer_installed = False
 
     @property
     def attached(self):
@@ -93,14 +106,17 @@ class Session:
         if len(self.ring) > RING_BYTES:
             del self.ring[: len(self.ring) - RING_BYTES]
         for q in list(self.listeners):
-            q.put_nowait(data)
+            _offer(q, data)
 
     def notify(self, msg: dict):
         for q in list(self.listeners):
-            q.put_nowait(msg)
+            _offer(q, msg)
 
     def resize(self, cols: int, rows: int):
-        cols = max(20, min(500, int(cols))); rows = max(5, min(300, int(rows)))
+        try:
+            cols = max(20, min(500, int(cols))); rows = max(5, min(300, int(rows)))
+        except (TypeError, ValueError):
+            return
         self.cols, self.rows = cols, rows
         if self.exit_code is not None:
             return
@@ -111,13 +127,29 @@ class Session:
             pass
 
     def write(self, data: bytes):
+        """Never blocks the loop: what the tty will not take now waits in `pending` for add_writer."""
         if self.exit_code is not None:
             return
         self.last_io = time.time()
-        try:
-            os.write(self.fd, data)
-        except OSError:
-            pass
+        self.pending += data
+        if len(self.pending) > INPUT_MAX_PENDING:
+            del self.pending[: len(self.pending) - INPUT_MAX_PENDING]
+        self._flush()
+
+    def _flush(self):
+        loop = asyncio.get_running_loop()
+        while self.pending:
+            try:
+                n = os.write(self.fd, bytes(self.pending[:4096]))
+            except BlockingIOError:
+                if not self.writer_installed:
+                    loop.add_writer(self.fd, self._flush); self.writer_installed = True
+                return
+            except OSError:
+                self.pending.clear(); break
+            del self.pending[:n]
+        if self.writer_installed:
+            loop.remove_writer(self.fd); self.writer_installed = False
 
     def info(self):
         return {"id": self.id, "pid": self.pid, "created": self.created, "last_io": self.last_io,
@@ -154,13 +186,19 @@ class Registry:
                        "HERMES_HOME": store.hermes_root_home()}
                 try:
                     os.chdir(home)
-                except OSError:
-                    os.chdir("/")
+                except OSError:          # HOME exists but is not usable by the dropped uid
+                    home = tu_home = (pwd.getpwuid(os.getuid()).pw_dir if tu else "/")
+                    env["HOME"] = tu_home
+                    try:
+                        os.chdir(home)
+                    except OSError:
+                        os.chdir("/")
                 os.execve("/bin/bash", ["bash", "-i"], env)
             except BaseException as e:  # noqa: BLE001 - must never return into the parent's code
                 os.write(1, f"\r\nhermes-hq: cannot start shell: {e}\r\n".encode())
             finally:
                 os._exit(127)
+        os.set_blocking(fd, False)
         s = Session(sid, pid, fd, cols, rows)
         s.resize(cols, rows)
         self.sessions[sid] = s
@@ -174,6 +212,8 @@ class Registry:
         def on_readable():
             try:
                 data = os.read(s.fd, READ_CHUNK)
+            except BlockingIOError:
+                return
             except OSError:
                 data = b""
             if data:
@@ -186,66 +226,83 @@ class Registry:
         loop.add_reader(s.fd, on_readable)
         s.reader_installed = True
 
-    def _finish(self, s: Session):
+    def _finish(self, s: Session, attempt: int = 0):
+        """PTY EOF: reap without blocking. A shell that closed its tty but lingers gets SIGHUP, then SIGKILL."""
         if s.exit_code is not None:
             return
-        code = -1
         try:
-            _, status = os.waitpid(s.pid, 0)
-            code = os.waitstatus_to_exitcode(status)
+            pid, status = os.waitpid(s.pid, os.WNOHANG)
         except ChildProcessError:
-            pass
+            pid, status = s.pid, 0
+        if pid == 0:
+            try:
+                os.kill(s.pid, signal.SIGHUP if attempt < 4 else signal.SIGKILL)
+            except ProcessLookupError:
+                pass
+            asyncio.get_running_loop().call_later(0.5, self._finish, s, attempt + 1)
+            return
+        self._mark_exited(s, os.waitstatus_to_exitcode(status) if status else 0)
+
+    def _mark_exited(self, s: Session, code: int):
+        if s.exit_code is not None:
+            return
         s.exit_code = code
+        try:
+            loop = asyncio.get_running_loop()
+            if s.reader_installed:
+                loop.remove_reader(s.fd); s.reader_installed = False
+            if s.writer_installed:
+                loop.remove_writer(s.fd); s.writer_installed = False
+        except RuntimeError:
+            pass
         try:
             os.close(s.fd)
         except OSError:
             pass
         s.notify({"t": "exit", "code": code})
 
-    def close(self, sid: str, wait=2.0):
+    async def close(self, sid: str, wait=2.0):
+        """SIGHUP (what a closed terminal sends), SIGKILL after `wait`; polls with await, never blocks the loop."""
         s = self.sessions.pop(sid, None)
         if s is None:
             raise HTTPException(404, "no such terminal session")
         if s.exit_code is None:
-            try:
-                os.kill(s.pid, signal.SIGTERM)
-            except ProcessLookupError:
-                pass
-            deadline = time.time() + wait
-            while time.time() < deadline:
-                try:
-                    pid, status = os.waitpid(s.pid, os.WNOHANG)
-                except ChildProcessError:
-                    pid = s.pid
-                if pid:
-                    break
-                time.sleep(0.05)
-            else:
-                try:
-                    os.kill(s.pid, signal.SIGKILL)
-                    os.waitpid(s.pid, 0)
-                except (ProcessLookupError, ChildProcessError):
-                    pass
-            s.exit_code = s.exit_code if s.exit_code is not None else -15
-            try:
-                loop = asyncio.get_running_loop()
-                if s.reader_installed:
-                    loop.remove_reader(s.fd)
-            except RuntimeError:
-                pass
-            try:
-                os.close(s.fd)
-            except OSError:
-                pass
-            s.notify({"t": "exit", "code": s.exit_code})
+            self._mark_exited(s, -1)
+            await self._reap(s, wait)
         return s
 
-    def close_all(self):
-        for sid in list(self.sessions):
+    async def _reap(self, s: Session, wait: float):
+        try:
+            os.kill(s.pid, signal.SIGHUP)
+        except ProcessLookupError:
+            return
+        deadline = time.time() + wait
+        while time.time() < deadline:
             try:
-                self.close(sid, wait=0.5)
-            except Exception:
-                pass
+                if os.waitpid(s.pid, os.WNOHANG)[0]:
+                    return
+            except ChildProcessError:
+                return
+            await asyncio.sleep(0.05)
+        try:
+            os.kill(s.pid, signal.SIGKILL)
+            os.waitpid(s.pid, 0)      # immediate after SIGKILL
+        except (ProcessLookupError, ChildProcessError):
+            pass
+
+    def close_all(self):
+        """Server shutdown: SIGKILL everything still alive, synchronously."""
+        for sid, s in list(self.sessions.items()):
+            self.sessions.pop(sid, None)
+            if s.exit_code is None:
+                try:
+                    os.kill(s.pid, signal.SIGKILL); os.waitpid(s.pid, 0)
+                except (ProcessLookupError, ChildProcessError):
+                    pass
+                try:
+                    os.close(s.fd)
+                except OSError:
+                    pass
 
     def _ensure_reaper(self):
         if self._reaper is None or self._reaper.done():
@@ -260,13 +317,13 @@ class Registry:
                 stale = s.detached_at is not None and not s.attached and now - s.detached_at > DETACH_TTL
                 if dead or stale:
                     try:
-                        self.close(sid, wait=0.5)
+                        await self.close(sid, wait=0.5)
                     except Exception:
                         pass
 
     # -- attach --------------------------------------------------------------
     def attach(self, s: Session) -> asyncio.Queue:
-        q: asyncio.Queue = asyncio.Queue()
+        q: asyncio.Queue = asyncio.Queue(maxsize=QUEUE_MAX)
         s.listeners.add(q)
         s.detached_at = None
         return q
@@ -304,7 +361,7 @@ async def spawn(body: SpawnBody | None = None):
 
 @router.post("/{sid}/close")
 async def close(sid: str):
-    s = REGISTRY.close(sid)
+    s = await REGISTRY.close(sid)
     return {"id": s.id, "exit_code": s.exit_code}
 
 
@@ -325,7 +382,10 @@ async def terminal_ws(ws: WebSocket):
     if not _same_origin(ws):
         await ws.close(code=CLOSE_BAD_ORIGIN); return
     sid = ws.query_params.get("session") or ""
-    cols = int(ws.query_params.get("cols") or 80); rows = int(ws.query_params.get("rows") or 24)
+    try:
+        cols = int(ws.query_params.get("cols") or 80); rows = int(ws.query_params.get("rows") or 24)
+    except ValueError:
+        cols, rows = 80, 24
     s = REGISTRY.sessions.get(sid)
     reattach = s is not None
     # Auth/origin failures above are refused at the handshake (HTTP 403; browsers see 1006). Everything
@@ -379,6 +439,8 @@ async def terminal_ws(ws: WebSocket):
                 continue
             t = msg.get("t")
             if t == "i":
+                if sessions.get(ws.cookies.get(A.COOKIE)) is None:      # logged out meanwhile: stop executing input
+                    await ws.close(code=CLOSE_NO_AUTH); break
                 s.write(str(msg.get("d", "")).encode())
             elif t == "r":
                 s.resize(msg.get("cols", s.cols), msg.get("rows", s.rows))

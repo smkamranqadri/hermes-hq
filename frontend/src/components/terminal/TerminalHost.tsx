@@ -26,6 +26,8 @@ export function TerminalHost() {
   const [find, setFind] = useState<string | null>(null)
   const [drag, setDrag] = useState(false)
   const cardRef = useRef<HTMLDivElement>(null)
+  const [user, setUser] = useState<string>('')
+  useEffect(() => { fetch('/api/terminal/sessions').then(r => r.json()).then(j => setUser(j.user ?? '')).catch(() => undefined) }, [])
 
   useEffect(() => { if (mode !== 'hidden' && st.tabs.length === 0) termStore.newTab() }, [mode, st.tabs.length])
   useEffect(() => { if (onPage) document.title = 'Terminal · Hermes HQ' }, [onPage])
@@ -108,7 +110,7 @@ export function TerminalHost() {
   if (mode === 'page') {
     return (
       <section className="mx-auto max-w-7xl p-4 sm:p-6">
-        <PageHeader crumb="terminal" title="Terminal" right={<span className="hidden font-mono text-[10px] text-muted sm:inline">shell runs as <b>hermes</b> · Ctrl/Cmd+` docks a panel</span>} />
+        <PageHeader crumb="terminal" title="Terminal" right={<span className="hidden font-mono text-[10px] text-muted sm:inline">shell runs as <b>{user || '…'}</b> · Ctrl/Cmd+` docks a panel</span>} />
         <GlassCard className="flex h-[calc(100dvh-15.5rem)] min-h-[12rem] min-w-0 flex-col overflow-hidden !p-0 sm:h-[calc(100dvh-12.5rem)]">
           <div ref={cardRef} className="flex min-h-0 flex-1 flex-col">{strip}{terms}{keyRow}</div>
         </GlassCard>
