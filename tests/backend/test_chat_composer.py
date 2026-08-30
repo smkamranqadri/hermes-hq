@@ -19,9 +19,10 @@ def test_parts_and_model_options_reach_the_gateway(env):
     assert path == "/api/sessions/api_1_abc/chat/stream"
     assert body["message"] == [{"type": "text", "text": "what colour?"}, {"type": "image_url", "image_url": {"url": PNG}}]
     assert body["model"] == "gpt-5.6-luna" and body["provider"] == "openai" and body["model_options"] == {"reasoning_effort": "high", "fast": True}
-    # plain text still plain, no options keys when none given
+    # plain text still plain, no options keys when none given; the hq-options hint rides along as an ephemeral system message
     c.post("/api/chat/orchestrator/api_1_abc", json={"message": "hi"}, headers=h)
-    assert FakeGateway.calls[-1][1] == {"message": "hi"}
+    body = FakeGateway.calls[-1][1]
+    assert body["message"] == "hi" and set(body) == {"message", "system_message"} and "hq-options" in body["system_message"]
     # activity preview mentions the image
     con = store._connect(store.DEFAULT_DB_PATH)
     try:

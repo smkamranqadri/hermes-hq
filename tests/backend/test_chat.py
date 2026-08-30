@@ -114,6 +114,7 @@ def test_disabled_agent_is_409_before_any_bytes(env):
 
 
 def test_session_then_streaming_turn_passthrough(env):
+    from backend import chat as chat_mod
     c, store, gw, root = env
     h = login(c); db = store.DEFAULT_DB_PATH
     gw._set_meta("enabled", "coder", "1", db)          # owner enabled chat; fake gateway already "running"
@@ -129,7 +130,7 @@ def test_session_then_streaming_turn_passthrough(env):
     assert "".join(d["delta"] for n, d in ev if n == "assistant.delta") == "Hello gnip"
     assert ev[2][1]["tool_name"] == "terminal" and ev[0][1]["run_id"] == "run_9"
     assert KEY not in body                                                  # key never forwarded
-    assert FakeGateway.calls[-1] == ("/api/sessions/api_1_abc/chat/stream", {"message": "ping"})
+    assert FakeGateway.calls[-1] == ("/api/sessions/api_1_abc/chat/stream", {"message": "ping", "system_message": chat_mod.HQ_OPTIONS_HINT})
     assert gw._meta("last_used", "coder", db) is not None                  # touched for the idle sweeper
     r = c.post("/api/chat/coder/%s/stop/run_9" % sid, headers=h)
     assert r.status_code == 200 and r.json()["status"] == "stopping"

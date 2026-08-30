@@ -29,7 +29,8 @@ function Bubble({ role, children, ts, tokens }: { role: string; children: React.
 }
 
 /** Stored transcript → bubbles; an assistant row's tool_calls become cards, fed by the tool rows that follow. */
-function Transcript({ rows }: { rows: ChatMessage[] }) {
+function Transcript({ rows, onChoose }: { rows: ChatMessage[]; onChoose?: (t: string) => void }) {
+  const lastAssistant = [...rows].reverse().find(m => m.role === 'assistant' && m.content && m.content.trim())?.id
   const items = useMemo(() => {
     const out: React.ReactNode[] = []
     const pending: ToolView[] = []
@@ -48,10 +49,10 @@ function Transcript({ rows }: { rows: ChatMessage[] }) {
           pending.push(t); out.push(<ToolCard key={t.key} t={t} />)
         }
       }
-      if (m.content && m.content.trim()) out.push(<Bubble key={m.id} role={m.role} ts={m.timestamp} tokens={m.token_count}>{m.role === 'assistant' ? <Markdown text={m.content} /> : <div className="whitespace-pre-wrap break-words">{m.content}</div>}</Bubble>)
+      if (m.content && m.content.trim()) out.push(<Bubble key={m.id} role={m.role} ts={m.timestamp} tokens={m.token_count}>{m.role === 'assistant' ? <Markdown text={m.content} onChoose={onChoose} optionsDisabled={m.id !== lastAssistant} /> : <div className="whitespace-pre-wrap break-words">{m.content}</div>}</Bubble>)
     }
     return out
-  }, [rows])
+  }, [rows, onChoose, lastAssistant])
   return <>{items}</>
 }
 
@@ -356,7 +357,7 @@ export function Chat() {
             <div ref={box} data-transcript className="flex min-h-0 flex-1 flex-col gap-2 overflow-y-auto pr-1">
               {id && detail.isLoading && <Loading rows={3} />}
               {id && detail.isError && <Empty error title="Could not load this session" note={String(detail.error)} />}
-              {detail.data && <Transcript rows={detail.data.transcript} />}
+              {detail.data && <Transcript rows={detail.data.transcript} onChoose={busy ? undefined : (t) => void send(t)} />}
               {!id && !pendingUser && (
                 <div className="m-auto flex w-full max-w-md flex-col items-center gap-4 text-center">
                   <div>
