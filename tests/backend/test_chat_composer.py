@@ -52,5 +52,15 @@ def test_steer_passthrough_and_models_list(env):
     assert FakeGateway.calls[-1] == ("/v1/runs/run_9/steer", {"message": "focus on tests"})
     assert c.post("/api/chat/orchestrator/api_1_abc/steer/run_done", json={"message": "x"}, headers=h).status_code == 502
     assert c.post("/api/chat/orchestrator/api_1_abc/steer/run_9", json={"message": " "}, headers=h).status_code == 409
+    import json as _j
+    os.environ["HERMES_HOME"] = str(root)   # providers are read from <HERMES_HOME>/auth.json, not the live box
     m = c.get("/api/chat/models?q=luna").json()
-    assert "high" in m["efforts"] and isinstance(m["models"], list) and isinstance(m["providers"], list)
+    assert "high" in m["efforts"] and isinstance(m["models"], list) and m["providers"] == []
+    # providers come from Hermes auth.json / config.yaml, per profile
+    (root / "auth.json").write_text(_j.dumps({"providers": {"openai-codex": {}}, "credential_pool": {"nous": {}}, "active_provider": "openai-codex"}))
+    (root / "profiles" / "coder" / "auth.json").write_text(_j.dumps({"credential_pool": {"opencode-go": {}}}))
+    (root / "profiles" / "coder" / "config.yaml").write_text("model:\n  default: x\n  provider: copilot\n")
+    ids = [p["id"] for p in c.get("/api/chat/models?profile=orchestrator").json()["providers"]]
+    assert ids == ["openai-codex", "nous"]
+    ids = [p["id"] for p in c.get("/api/chat/models?profile=coder").json()["providers"]]
+    assert ids == ["opencode-go", "copilot", "openai-codex", "nous"]

@@ -111,9 +111,10 @@ def task_chat_sessions(task_id: int):
 
 
 @router.get("/chat/models")
-def chat_models(q: str = Query("", max_length=80), provider: str = Query("", max_length=80)):
+def chat_models(q: str = Query("", max_length=80), provider: str = Query("", max_length=80), profile: str = Query("", max_length=80)):
     from backend import pricing
-    return {"models": pricing.model_ids(q or None, provider=provider or None), "providers": pricing.providers(), "efforts": list(chat.EFFORTS)}
+    return {"models": pricing.models_for_hermes_provider(provider, q or None) if provider else pricing.model_ids(q or None),
+            "providers": pricing.hermes_providers(profile or None), "efforts": list(chat.EFFORTS)}
 
 
 @router.get("/chat/search")
