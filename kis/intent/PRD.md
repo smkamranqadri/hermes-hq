@@ -1,5 +1,7 @@
 # hermes-hq — PRD (v1)
 
+**v1 shipped 2026-08-30** — Groups 1–8 all live (install story delivered in `Group8Plan.md`). This file stays as the reference for what v1 means.
+
 ## v1 success
 On a fresh server with Hermes installed: one command installs hermes-hq → add agents from templates in the UI → create project + task → task runs in a real session you can open → status correct in the 5-state model → anything stuck appears under "Needs you" with a working unblock action → reviewer gate runs automatically. Legacy `wm.db` imported with history intact.
 
