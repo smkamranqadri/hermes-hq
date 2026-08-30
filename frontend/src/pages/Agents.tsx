@@ -8,9 +8,10 @@ import { Btn, Modal } from '../components/Modal'
 import { usePageTitle } from '../usePageTitle'
 
 export function GatewayDot({ g }: { g: AgentSummary['gateway'] }) {
-  const label = g.running ? 'chat on' : g.enabled ? 'starting' : g.configured ? 'chat off' : 'no gateway'
+  const label = g.running ? 'chat ready' : g.enabled ? 'chat starting' : g.configured ? 'chat off' : 'chat off'
   const cls = g.running ? 'bg-working' : g.enabled ? 'bg-queued' : 'bg-muted'
-  return <span className="inline-flex items-center gap-1.5 font-mono text-[10px] text-muted"><span className={`size-1.5 rounded-full ${cls}`} />{label}{g.port ? ` :${g.port}` : ''}</span>
+  const title = g.port ? `Hermes gateway on port ${g.port}${g.running ? ' (running)' : g.enabled ? ' (enabled, not answering yet)' : ' (disabled)'}` : 'No gateway configured — enable chat to set one up'
+  return <span title={title} className="inline-flex items-center gap-1.5 font-mono text-[10px] text-muted"><span className={`size-1.5 rounded-full ${cls}`} />{label}</span>
 }
 
 function AgentCard({ a }: { a: AgentSummary }) {
