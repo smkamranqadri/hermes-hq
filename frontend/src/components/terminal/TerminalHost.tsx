@@ -66,6 +66,7 @@ export function TerminalHost() {
     if (t.session) { try { await (await import('../../api')).post(`/api/terminal/${t.session}/close`) } catch { /* already gone */ } }
     termStore.closeTab(t.id)
   }, [])
+  const dock = () => { termStore.setPanel(true); if (window.history.length > 1) nav(-1); else nav('/') }
   const rename = (t: TermTab) => { const n = window.prompt('Tab name', t.title); if (n?.trim()) termStore.update(t.id, { title: n.trim() }) }
 
   const strip = (
@@ -90,7 +91,7 @@ export function TerminalHost() {
           <MenuItem onClick={() => active?.restart()}>Restart shell</MenuItem>
           <MenuItem onClick={() => { const t = st.tabs.find(x => x.id === st.active); if (t) rename(t) }}>Rename tab</MenuItem>
           {mode === 'panel' && <MenuItem onClick={() => nav('/terminal')}>Open full page</MenuItem>}
-          {mode === 'page' && !mobile && <MenuItem onClick={() => { termStore.setPanel(true); nav(-1) }}>Dock as panel</MenuItem>}
+          {mode === 'page' && !mobile && <MenuItem onClick={dock}>Dock as panel</MenuItem>}
           <MenuItem onClick={() => { termStore.get().tabs.forEach(closeTab); termStore.setPanel(false) }}>Close all</MenuItem>
         </Menu>
         {mode === 'panel' && <button aria-label="Close panel" onClick={() => termStore.setPanel(false)} className="rounded-full px-2 py-0.5 font-mono text-[11px] text-muted hover:text-fg">×</button>}
@@ -112,7 +113,7 @@ export function TerminalHost() {
       <section className="mx-auto max-w-7xl p-4 sm:p-6">
         <PageHeader crumb="terminal" title="Terminal" right={<div className="hidden items-center gap-2 font-mono text-[10px] text-muted sm:flex">
           <span className="rounded-full border border-line px-2 py-0.5" title="The Unix user the shell runs as (never root)">user <b className="text-fg">{user || '…'}</b></span>
-          <span className="rounded-full border border-line px-2 py-0.5" title="On any other page, press Ctrl+` (Cmd+` on Mac) to open this terminal as a bottom panel">Ctrl+` <span className="text-fg">bottom panel</span></span>
+          <button type="button" onClick={dock} className="rounded-full border border-line px-2 py-0.5 hover:border-accent hover:text-fg" title="Dock this terminal as a bottom panel and go back to the previous page (Ctrl+` / Cmd+` toggles it anywhere)">Ctrl+` <span className="text-fg">dock as panel</span></button>
         </div>} />
         <GlassCard className="flex h-[calc(100dvh-15.5rem)] min-h-[12rem] min-w-0 flex-col overflow-hidden !p-0 sm:h-[calc(100dvh-12.5rem)]">
           <div ref={cardRef} className="flex min-h-0 flex-1 flex-col">{strip}{terms}{keyRow}</div>
