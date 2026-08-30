@@ -13,6 +13,7 @@ import { GatewayDot } from './Agents'
 import { Markdown } from '../components/chat/Markdown'
 import { ToolCard, Thinking, fmtTokens, type ToolView } from '../components/chat/Blocks'
 import { SessionMenu, RenameDialog, SearchModal, FindBar } from '../components/chat/SessionTools'
+import { loadPrefs, chime } from '../components/notify'
 import { fileToAttachment, buildMessage, loadOpts, saveOpts, saveDraft, takeDraft, clearDraft, matchSlash, SLASH, type Attachment } from '../components/chat/composer'
 
 type Live = { text: string; tools: ToolView[]; thinking: string; runId: string | null; error: string | null; startedAt: number }
@@ -276,6 +277,7 @@ export function Chat() {
       const finalText = turnRef.current.text || liveRef.current?.text || ''; const runId = turnRef.current.runId || liveRef.current?.runId || ''
       const away = document.hidden || !window.location.pathname.endsWith(`/chat/${profile}/${sid}`)
       const asked = /```hq-options/.test(finalText)
+      if (!failed && !away && loadPrefs().sound) chime(asked ? 'attention' : 'info')
       if (!failed && (away || asked)) {
         void addNotification({ kind: asked ? 'question' : 'chat', title: asked ? `${profile} asked you a question` : `${profile} replied`, body: finalText.replace(/```[\s\S]*?```/g, '').trim().slice(0, 200) || undefined, href: `/chat/${profile}/${sid}`, source_key: `chat:${sid}:${runId || Date.now()}` })
           .then(() => qc.invalidateQueries({ queryKey: ['notifications'] })).catch(() => {})

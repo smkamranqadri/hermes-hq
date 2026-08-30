@@ -3,6 +3,7 @@ import { useNavigate } from 'react-router-dom'
 import { useQueryClient } from '@tanstack/react-query'
 import clsx from 'clsx'
 import { useNotifications, markNotificationsRead, ago, type Notification } from '../api'
+import { loadPrefs, savePrefs, permission, requestPermission, showBrowserNotification, userIsAway, chime, supportsNotifications, type NotifyPrefs } from './notify'
 
 const TONE: Record<Notification['kind'], string> = { needs_you: 'bg-needsyou', done: 'bg-working', info: 'bg-queued', chat: 'bg-accent', question: 'bg-needsyou' }
 
@@ -15,6 +16,29 @@ export function Bell() {
   useEffect(() => { if (!open) return; const h = (e: MouseEvent) => { if (!ref.current?.contains(e.target as Node)) setOpen(false) }; document.addEventListener('mousedown', h); return () => document.removeEventListener('mousedown', h) }, [open])
   const unread = q.data?.unread ?? 0
   const rows = q.data?.notifications ?? []
+  // OS notifications + chime for items that arrived since the last poll (first load only sets the high-water mark)
+  const [prefs, setPrefs] = useState<NotifyPrefs>(loadPrefs)
+  const [perm, setPerm] = useState(permission())
+  const seen = useRef<number | null>(null)
+  useEffect(() => {
+    if (!q.data) return
+    const top = rows.reduce((m, n) => Math.max(m, n.id), 0)
+    if (seen.current === null) { seen.current = top; return }
+    const fresh = rows.filter(n => n.id > seen.current! && !n.read_at)
+    seen.current = Math.max(seen.current, top)
+    if (fresh.length === 0) return
+    const attention = fresh.some(n => n.kind === 'needs_you' || n.kind === 'question')
+    if (prefs.sound) chime(attention ? 'attention' : 'info')
+    if (prefs.browser && userIsAway()) for (const n of fresh.slice(0, 3)) showBrowserNotification(n.title, n.body ?? undefined, `hq-${n.id}`, () => { void openItem(n) })
+    if (prefs.browser && userIsAway() && fresh.length > 3) showBrowserNotification(`${fresh.length - 3} more notifications`, undefined, 'hq-more', () => setOpen(true))
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [q.data])
+  const setPref = (patch: Partial<NotifyPrefs>) => { const next = { ...prefs, ...patch }; setPrefs(next); savePrefs(next) }
+  async function toggleBrowser() {
+    if (prefs.browser) { setPref({ browser: false }); return }
+    const p = await requestPermission(); setPerm(p)
+    if (p === 'granted') { setPref({ browser: true }); showBrowserNotification('hermes-hq notifications on', 'You will be alerted here when a task needs you or an agent replies while you are away.', 'hq-test') }
+  }
   async function openItem(n: Notification) {
     setOpen(false)
     if (!n.read_at) { try { await markNotificationsRead([n.id]) } catch {} qc.invalidateQueries({ queryKey: ['notifications'] }) }
@@ -44,6 +68,12 @@ export function Bell() {
                 </button>
               </li>))}
           </ul>
+          <div className="mt-1 flex flex-wrap items-center gap-x-4 gap-y-1 border-t border-line px-1 pt-2 font-mono text-[10px] uppercase tracking-wider text-muted">
+            <label className={clsx('flex items-center gap-1.5', (!supportsNotifications() || perm === 'denied') && 'opacity-60')} title={!supportsNotifications() ? 'This browser has no Notification API' : perm === 'denied' ? 'Blocked in the browser — allow notifications for this site to enable' : 'OS notifications when a task needs you or an agent replies while this tab is not focused'}>
+              <input type="checkbox" data-pref-browser checked={prefs.browser && perm === 'granted'} disabled={!supportsNotifications() || perm === 'denied'} onChange={() => void toggleBrowser()} /> Browser alerts{perm === 'denied' ? ' (blocked)' : ''}
+            </label>
+            <label className="flex items-center gap-1.5" title="Soft chime for new notifications and finished chat replies"><input type="checkbox" data-pref-sound checked={prefs.sound} onChange={e => { setPref({ sound: e.target.checked }); if (e.target.checked) chime('info') }} /> Sound</label>
+          </div>
         </div>
       )}
     </div>
