@@ -6,3 +6,4 @@ frontend/dist/
 backend/static/
 .env
 screenshots/
+frontend/tsconfig.tsbuildinfo
