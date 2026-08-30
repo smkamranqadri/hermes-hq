@@ -10,7 +10,7 @@ Single owner: Kamran Qadri, running an Orchestrator + specialist agents (analyst
 | Source | Taken | Rejected |
 |---|---|---|
 | `../hermes-work-manager` (owner's, Python/SQLite, live v0.9.0 at :9009) | Engine: `wm_store`/`wm_dispatch`/`wm_run_agent`, completion contract, review gate, task/goal state machine, `design/IA_FLOWS.md` top-bar IA, live `wm.db` history | vanilla-JS dashboard, `deploy.sh` + Hermes-cron install, 11-status UI |
-| `../hermes-workspace` (upstream clone, TanStack/React 19/Tailwind 4) | Design language + components, overview layout, one-command `install.sh` pattern, `swarm.yaml`-style agent roster, chat/terminal/memory/skills/MCP browsers | sidebar shell (→ top bar), Electron, 3D world, swarm mode, gateway-centric agent model |
+| `../hermes-workspace` (upstream clone, TanStack/React 19/Tailwind 4) | Design language + components, overview layout, one-command `install.sh` pattern, `swarm.yaml`-style agent roster, chat/terminal/memory/skills/MCP browsers, file explorer (`src/routes/files.tsx`, added 2026-08-30 for Group 5) | sidebar shell (→ top bar), Electron, 3D world, swarm mode, gateway-centric agent model |
 | `../hermeshq` (upstream clone, FastAPI/Postgres) | `agent_supervisor` patterns: durable queue, stream buffer, WebSocket event broker, schedules | Postgres, Docker-first, RBAC/users, channels, secrets vault, integration factory |
 
 ## Scope
