@@ -1,5 +1,5 @@
 """Group 6-1 terminal: WS auth/origin, uid drop, reattach replay, resize, close, limits."""
-import json, os, sys, time
+import json, os, shutil, sys, tempfile, time
 ROOT = os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "..")
 sys.path.insert(0, ROOT)
 import pytest
@@ -9,8 +9,9 @@ import pytest
 def env(tmp_path, monkeypatch):
     monkeypatch.setenv("HERMES_HQ_HOME", str(tmp_path / "hq"))
     monkeypatch.setenv("HERMES_HQ_PASSWORD", "pw-test")
-    home = tmp_path / "home"; home.mkdir(); home.chmod(0o777)
-    monkeypatch.setenv("HERMES_HQ_TERMINAL_HOME", str(home))
+    # pytest's basetemp is 0700 for the running user; the dropped-privilege shell needs a traversable HOME
+    home = tempfile.mkdtemp(prefix="hq-term-home-", dir="/tmp"); os.chmod(home, 0o777)
+    monkeypatch.setenv("HERMES_HQ_TERMINAL_HOME", home)
     for m in list(sys.modules):
         if m.startswith(("core", "backend")):
             del sys.modules[m]
@@ -25,6 +26,7 @@ def env(tmp_path, monkeypatch):
         c.headers.update({"x-csrf": r.json()["csrf"]})
         yield c, terminal, home
         terminal.REGISTRY.close_all()
+    shutil.rmtree(home, ignore_errors=True)
 
 
 def _read_until(ws, needle: bytes, timeout=8.0) -> bytes:
@@ -32,6 +34,9 @@ def _read_until(ws, needle: bytes, timeout=8.0) -> bytes:
     deadline = time.time() + timeout
     while time.time() < deadline:
         m = ws.receive()
+        if m.get("type") == "websocket.close":
+            from starlette.websockets import WebSocketDisconnect
+            raise WebSocketDisconnect(m.get("code", 1000), m.get("reason"))
         if "bytes" in m and m["bytes"] is not None:
             buf += m["bytes"]
         elif "text" in m and m["text"]:
@@ -139,3 +144,18 @@ def test_close_no_csrf_is_403(env):
     bare = c.__class__(c.app); bare.cookies = c.cookies
     assert bare.post(f"/api/terminal/{s['id']}/close").status_code == 403
     assert c.post(f"/api/terminal/{s['id']}/close").status_code == 200
+
+
+def test_logout_stops_input(env):
+    c, terminal, _ = env
+    O = {"origin": "http://testserver"}
+    from starlette.websockets import WebSocketDisconnect
+    with c.websocket_connect("/api/terminal/ws", headers=O) as ws:
+        _hello(ws)
+        ws.send_text(json.dumps({"t": "i", "d": "echo BEFORE_LOGOUT\n"}))
+        _read_until(ws, b"BEFORE_LOGOUT")
+        assert c.post("/api/logout").status_code == 200
+        ws.send_text(json.dumps({"t": "i", "d": "echo AFTER_LOGOUT\n"}))
+        with pytest.raises(WebSocketDisconnect) as e:
+            _read_until(ws, b"AFTER_LOGOUT", timeout=3)
+        assert e.value.code == terminal.CLOSE_NO_AUTH

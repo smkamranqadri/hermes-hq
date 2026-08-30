@@ -7,6 +7,7 @@ import { SearchAddon } from '@xterm/addon-search'
 import { WebLinksAddon } from '@xterm/addon-web-links'
 import '@xterm/xterm/css/xterm.css'
 import { termStore, type TermTab } from './store'
+import { getCsrf } from '../../api'
 
 export type TermHandle = { send: (d: string) => void; focus: () => void; fit: () => void; search: (q: string, dir: 1 | -1) => void; restart: () => void }
 
@@ -36,9 +37,12 @@ export const TerminalTab = forwardRef<TermHandle, { tab: TermTab; visible: boole
   const wantFresh = useRef(false)
   const refused = useRef(false)
 
+  const closeOld = () => { const old = session.current; session.current = null; if (old) fetch(`/api/terminal/${old}/close`, { method: 'POST', headers: { 'x-csrf': getCsrf() } }).catch(() => undefined) }
   const send = (d: string) => { if (ws.current?.readyState === WebSocket.OPEN) ws.current.send(JSON.stringify({ t: 'i', d })) }
   const sendSize = () => { const t = term.current; if (t && ws.current?.readyState === WebSocket.OPEN) ws.current.send(JSON.stringify({ t: 'r', cols: t.cols, rows: t.rows })) }
   const doFit = () => { try { fit.current?.fit(); sendSize() } catch { /* not laid out yet */ } }
+
+  const fresh = () => { wantFresh.current = true; refused.current = false; tries.current = 0; termStore.update(tab.id, { exited: null, session: null }); term.current?.reset(); ws.current?.close(); ws.current = null; closeOld(); connect() }
 
   const connect = () => {
     const t = term.current; if (!t || closed.current) return
@@ -54,13 +58,18 @@ export const TerminalTab = forwardRef<TermHandle, { tab: TermTab; visible: boole
         try { m = JSON.parse(ev.data) } catch { return }
         if (m.t === 'err') {
           refused.current = true
-          if (m.code === 4404) { session.current = null; termStore.update(tab.id, { session: null }); t.write('\r\n\x1b[2m[session gone — starting a new shell]\x1b[0m\r\n'); setTimeout(() => { refused.current = false; connect() }, 300) }
+          if (m.code === 4404) {
+            session.current = null; termStore.update(tab.id, { session: null })
+            const was = termStore.get().tabs.find(x => x.id === tab.id)?.exited
+            if (was != null) { t.write('\r\n\x1b[2m[shell ended] — press Enter to start a new one\x1b[0m\r\n'); return }
+            t.write('\r\n\x1b[2m[session gone — starting a new shell]\x1b[0m\r\n'); setTimeout(() => { refused.current = false; connect() }, 300)
+          }
           else { termStore.update(tab.id, { exited: -1 }); t.write(`\r\n\x1b[31m[${m.reason || 'cannot start terminal'}]\x1b[0m — press Enter to retry\r\n`) }
           return
         }
         if (m.t === 'hello' && m.id) {
           session.current = m.id; termStore.update(tab.id, { session: m.id, exited: m.exited ?? null })
-          if (m.reattach) t.write('\r\n\x1b[2m[reattached]\x1b[0m\r\n')
+          if (m.reattach) { t.reset(); t.write('\x1b[2m[reattached]\x1b[0m\r\n') }
           if (m.exited != null) t.write(`\r\n\x1b[2m[process exited code=${m.exited}] — press Enter to start a new shell\x1b[0m\r\n`)
           sendSize()
         } else if (m.t === 'exit') {
@@ -94,7 +103,7 @@ export const TerminalTab = forwardRef<TermHandle, { tab: TermTab; visible: boole
     term.current = t; fit.current = f; search.current = s
     t.onData(d => {
       const st = termStore.get().tabs.find(x => x.id === tab.id)
-      if (st?.exited != null && d === '\r') { wantFresh.current = true; refused.current = false; tries.current = 0; termStore.update(tab.id, { exited: null }); t.reset(); ws.current?.close(); ws.current = null; connect(); return }
+      if (st?.exited != null && d === '\r') { fresh(); return }
       send(d)
     })
     t.onResize(sendSize)
@@ -112,7 +121,7 @@ export const TerminalTab = forwardRef<TermHandle, { tab: TermTab; visible: boole
   useImperativeHandle(ref, () => ({
     send, focus: () => term.current?.focus(), fit: doFit,
     search: (q, dir) => { if (!q) { search.current?.clearDecorations(); return } dir > 0 ? search.current?.findNext(q) : search.current?.findPrevious(q) },
-    restart: () => { wantFresh.current = true; termStore.update(tab.id, { exited: null }); term.current?.reset(); ws.current?.close(); ws.current = null; connect() },
+    restart: fresh,
   }))
 
   return <div ref={box} className="h-full w-full min-w-0 [&_.xterm]:h-full [&_.xterm-viewport]:!bg-transparent" style={{ display: visible ? undefined : 'none' }} />
