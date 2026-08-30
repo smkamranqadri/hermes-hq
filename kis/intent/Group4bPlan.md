@@ -1,4 +1,4 @@
-# Group 4b — Chat polish + notifications (approved in scope 2026-08-30, Phase mode)
+# Group 4b — Chat polish + notifications (approved 2026-08-30, Phase mode) — COMPLETE 2026-08-30 (all six phases incl. Web Push proved on the owner's phone)
 
 Owner asked for the full "high" + "medium" list from the hermes-workspace comparison, plus Ctrl+V image paste, agent-asked questions with options, and notifications (no PRD group covers them; slotted here as 4b-5). Order below is the build order; each phase ships and is proved on its own. Group 5 (files) follows.
 
