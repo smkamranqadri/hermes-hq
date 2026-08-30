@@ -404,6 +404,35 @@ CREATE TABLE IF NOT EXISTS notifications (
     read_at     REAL
 );
 
+CREATE TABLE IF NOT EXISTS schedules (
+    id                 INTEGER PRIMARY KEY,
+    name               TEXT NOT NULL,
+    cron               TEXT NOT NULL,
+    zone               TEXT NOT NULL DEFAULT 'Asia/Karachi',
+    project_id         INTEGER NOT NULL REFERENCES projects(id),
+    title              TEXT NOT NULL,
+    description        TEXT DEFAULT '',
+    definition_of_done TEXT DEFAULT '',
+    assignee_profile   TEXT,
+    goal_id            INTEGER REFERENCES goals(id),
+    review_policy      TEXT DEFAULT 'none',
+    is_code            INTEGER DEFAULT 0,
+    overlap            TEXT DEFAULT 'skip',      -- skip | always
+    enabled            INTEGER DEFAULT 1,
+    created_at         REAL,
+    updated_at         REAL,
+    last_fired_at      REAL,
+    next_fire_at       REAL,
+    last_task_id       INTEGER REFERENCES tasks(id)
+);
+CREATE TABLE IF NOT EXISTS schedule_runs (
+    id          INTEGER PRIMARY KEY,
+    schedule_id INTEGER NOT NULL REFERENCES schedules(id),
+    ts          REAL,
+    kind        TEXT,                            -- fired | late | skipped | manual | error
+    task_id     INTEGER REFERENCES tasks(id),
+    detail      TEXT
+);
 CREATE TABLE IF NOT EXISTS push_subscriptions (
     id          INTEGER PRIMARY KEY,
     endpoint    TEXT UNIQUE NOT NULL,
@@ -465,6 +494,9 @@ def _migrate(conn):
     # their first edit — a NULL updated_at means "never edited since create".
     if "updated_at" not in _table_columns(conn, "goals"):
         conn.execute("ALTER TABLE goals ADD COLUMN updated_at REAL")
+    # Group 7: tasks spawned by a schedule keep the link for the list chip / detail back-link.
+    if "schedule_id" not in _table_columns(conn, "tasks"):
+        conn.execute("ALTER TABLE tasks ADD COLUMN schedule_id INTEGER REFERENCES schedules(id)")
 
 
 def init_db(db_path=None):
@@ -3308,3 +3340,236 @@ def push_subscription_failed(sid, db_path=None):
             return int(row["failures"]) if row else 0
     finally:
         conn.close()
+
+
+# ---------------------------------------------------------------------------
+# Schedules (Group 7): recurring WM tasks. The dispatcher calls fire_due();
+# everything else is plain CRUD. A schedule is a standing approval, so the
+# spawned task is marked ready immediately (create_task parks goal-less tasks).
+# ---------------------------------------------------------------------------
+OVERLAPS = ("skip", "always")
+OPEN_TASK_STATUSES = ("planned", "waiting_approval", "ready", "running", "needs_review", "rework", "stalled", "blocked", "manual")
+
+
+def _schedule_row(conn, sid):
+    row = conn.execute("SELECT s.*, p.slug AS project_slug, p.name AS project_name FROM schedules s "
+                       "JOIN projects p ON p.id = s.project_id WHERE s.id=?", (sid,)).fetchone()
+    if row is None:
+        raise ValueError("no schedule with id %s" % sid)
+    return row
+
+
+def create_schedule(name, cron, project_slug, title, description="", definition_of_done="",
+                    assignee_profile=None, goal_id=None, review_policy="none", is_code=False,
+                    zone=None, overlap="skip", enabled=True, db_path=None):
+    from core import schedule as sch
+    zone = zone or sch.DEFAULT_ZONE
+    sch.validate(cron, zone)
+    if overlap not in OVERLAPS:
+        raise ValueError("overlap must be one of %s" % (OVERLAPS,))
+    if review_policy not in REVIEW_POLICIES:
+        raise ValueError("review_policy must be one of %s" % (REVIEW_POLICIES,))
+    if not (name or "").strip() or not (title or "").strip():
+        raise ValueError("schedule needs a name and a task title")
+    validate_assignee(assignee_profile)
+    conn = _connect(db_path)
+    try:
+        with conn:
+            proj = _require_project(conn, project_slug)
+            if goal_id is not None and not conn.execute(
+                    "SELECT 1 FROM goals WHERE id=? AND project_id=?", (goal_id, proj["id"])).fetchone():
+                raise ValueError("goal %s does not belong to project '%s'" % (goal_id, project_slug))
+            now = time.time()
+            cur = conn.execute(
+                "INSERT INTO schedules(name, cron, zone, project_id, title, description, definition_of_done, "
+                "assignee_profile, goal_id, review_policy, is_code, overlap, enabled, created_at, updated_at, next_fire_at) "
+                "VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
+                (name.strip(), cron, zone, proj["id"], title, description, definition_of_done,
+                 assignee_profile, goal_id, review_policy, 1 if is_code else 0, overlap,
+                 1 if enabled else 0, now, now, sch.next_fires(cron, zone, 1, now)[0]))
+            sid = cur.lastrowid
+        log_activity(action="schedule_create", project_id=proj["id"], detail=name, db_path=db_path)
+        return sid
+    finally:
+        conn.close()
+
+
+def update_schedule(sid, db_path=None, **fields):
+    from core import schedule as sch
+    allowed = {"name", "cron", "zone", "title", "description", "definition_of_done",
+               "assignee_profile", "goal_id", "review_policy", "is_code", "overlap", "enabled"}
+    bad = set(fields) - allowed
+    if bad:
+        raise ValueError("cannot update %s" % ", ".join(sorted(bad)))
+    if "overlap" in fields and fields["overlap"] not in OVERLAPS:
+        raise ValueError("overlap must be one of %s" % (OVERLAPS,))
+    if "review_policy" in fields and fields["review_policy"] not in REVIEW_POLICIES:
+        raise ValueError("review_policy must be one of %s" % (REVIEW_POLICIES,))
+    if "assignee_profile" in fields:
+        validate_assignee(fields["assignee_profile"])
+    conn = _connect(db_path)
+    try:
+        with conn:
+            row = _schedule_row(conn, sid)
+            cron = fields.get("cron", row["cron"]); zone = fields.get("zone", row["zone"])
+            sch.validate(cron, zone)
+            now = time.time()
+            sets = {k: (1 if v else 0) if k in ("is_code", "enabled") else v for k, v in fields.items()}
+            sets["updated_at"] = now
+            if "cron" in fields or "zone" in fields or fields.get("enabled"):
+                sets["next_fire_at"] = sch.next_fires(cron, zone, 1, now)[0]
+            conn.execute("UPDATE schedules SET %s WHERE id=?" % ", ".join("%s=?" % k for k in sets),
+                         (*sets.values(), sid))
+        return get_schedule(sid, db_path=db_path)
+    finally:
+        conn.close()
+
+
+def delete_schedule(sid, db_path=None):
+    conn = _connect(db_path)
+    try:
+        with conn:
+            _schedule_row(conn, sid)
+            conn.execute("UPDATE tasks SET schedule_id=NULL WHERE schedule_id=?", (sid,))
+            conn.execute("DELETE FROM schedule_runs WHERE schedule_id=?", (sid,))
+            conn.execute("DELETE FROM schedules WHERE id=?", (sid,))
+    finally:
+        conn.close()
+
+
+def get_schedule(sid, db_path=None):
+    conn = _connect(db_path)
+    try:
+        return dict(_schedule_row(conn, sid))
+    finally:
+        conn.close()
+
+
+def list_schedules(db_path=None):
+    conn = _connect(db_path)
+    try:
+        rows = conn.execute(
+            "SELECT s.*, p.slug AS project_slug, p.name AS project_name, "
+            "t.status AS last_task_status, "
+            "(SELECT kind FROM schedule_runs r WHERE r.schedule_id = s.id ORDER BY r.ts DESC LIMIT 1) AS last_run_kind, "
+            "(SELECT ts FROM schedule_runs r WHERE r.schedule_id = s.id ORDER BY r.ts DESC LIMIT 1) AS last_run_ts "
+            "FROM schedules s JOIN projects p ON p.id = s.project_id "
+            "LEFT JOIN tasks t ON t.id = s.last_task_id ORDER BY s.name").fetchall()
+        return [dict(r) for r in rows]
+    finally:
+        conn.close()
+
+
+def list_schedule_runs(sid, limit=50, db_path=None):
+    conn = _connect(db_path)
+    try:
+        _schedule_row(conn, sid)
+        rows = conn.execute(
+            "SELECT r.*, t.title AS task_title, t.status AS task_status FROM schedule_runs r "
+            "LEFT JOIN tasks t ON t.id = r.task_id WHERE r.schedule_id=? ORDER BY r.ts DESC LIMIT ?",
+            (sid, int(limit))).fetchall()
+        return [dict(r) for r in rows]
+    finally:
+        conn.close()
+
+
+def _record_schedule_run(conn, sid, kind, task_id=None, detail=None, ts=None):
+    conn.execute("INSERT INTO schedule_runs(schedule_id, ts, kind, task_id, detail) VALUES(?,?,?,?,?)",
+                 (sid, ts or time.time(), kind, task_id, detail))
+
+
+def _spawn_from_schedule(row, kind, now, db_path=None):
+    """Create the WM task for one firing; the schedule is the approval, so the task goes ready."""
+    from core import schedule as sch
+    ex = lambda t: sch.expand_tokens(t or "", row["zone"], now)
+    tid = create_task(row["project_slug"], ex(row["title"]), ex(row["description"]),
+                      ex(row["definition_of_done"]), assignee_profile=row["assignee_profile"],
+                      goal_id=row["goal_id"], review_policy=row["review_policy"],
+                      is_code=bool(row["is_code"]), db_path=db_path)
+    conn = _connect(db_path)
+    try:
+        with conn:
+            conn.execute("UPDATE tasks SET schedule_id=? WHERE id=?", (row["id"], tid))
+            conn.execute("UPDATE schedules SET last_fired_at=?, last_task_id=?, updated_at=? WHERE id=?",
+                         (now, tid, now, row["id"]))
+            _record_schedule_run(conn, row["id"], kind, task_id=tid)
+    finally:
+        conn.close()
+    try:
+        mark_ready(tid, db_path=db_path)
+    except ValueError:
+        pass          # e.g. under an unreleased goal: stays parked, still linked
+    return tid
+
+
+def run_schedule_now(sid, db_path=None):
+    """Owner's Run now: create the task regardless of overlap; does not move next_fire_at."""
+    conn = _connect(db_path)
+    try:
+        row = dict(_schedule_row(conn, sid))
+    finally:
+        conn.close()
+    return _spawn_from_schedule(row, "manual", time.time(), db_path=db_path)
+
+
+LATE_AFTER = 90.0     # seconds past due before a firing is recorded as "late"
+
+
+def fire_due(now=None, db_path=None):
+    """One dispatcher-tick pass: fire every enabled schedule whose next_fire_at has passed.
+    Catch-up is collapsed to at most one firing (recorded `late`); overlap=skip records
+    `skipped` while the last spawned task is still open. Errors never stop the loop."""
+    from core import schedule as sch
+    now = now or time.time()
+    conn = _connect(db_path)
+    try:
+        due = [dict(r) for r in conn.execute(
+            "SELECT s.*, p.slug AS project_slug, t.status AS last_task_status "
+            "FROM schedules s JOIN projects p ON p.id = s.project_id "
+            "LEFT JOIN tasks t ON t.id = s.last_task_id "
+            "WHERE s.enabled=1 AND s.next_fire_at IS NOT NULL AND s.next_fire_at <= ?", (now,)).fetchall()]
+    finally:
+        conn.close()
+    results = []
+    for row in due:
+        sid = row["id"]
+        try:
+            open_prev = (row["overlap"] == "skip" and row["last_task_id"] is not None
+                         and row["last_task_status"] in OPEN_TASK_STATUSES)
+            if open_prev:
+                kind = "skipped"
+                conn = _connect(db_path)
+                try:
+                    with conn:
+                        _record_schedule_run(conn, sid, "skipped", task_id=row["last_task_id"],
+                                             detail="previous task #%s still %s" % (row["last_task_id"], row["last_task_status"]))
+                finally:
+                    conn.close()
+                tid = None
+            else:
+                kind = "late" if now - row["next_fire_at"] > LATE_AFTER else "fired"
+                tid = _spawn_from_schedule(row, kind, now, db_path=db_path)
+            results.append((sid, kind, tid))
+        except Exception as e:   # noqa: BLE001 - one broken schedule must not stop the rest
+            results.append((sid, "error", None))
+            conn = _connect(db_path)
+            try:
+                with conn:
+                    _record_schedule_run(conn, sid, "error", detail=str(e)[:500])
+            finally:
+                conn.close()
+            add_notification("needs_you", "Schedule '%s' failed" % row["name"], body=str(e)[:300],
+                             href="/schedules", project_id=row["project_id"],
+                             source_key="schedule-error:%s:%s" % (sid, int(row["next_fire_at"])), db_path=db_path)
+        # always advance next_fire_at past now (collapses any backlog of missed windows)
+        try:
+            nxt = sch.next_fires(row["cron"], row["zone"], 1, now)[0]
+        except Exception:
+            nxt = None
+        conn = _connect(db_path)
+        try:
+            with conn:
+                conn.execute("UPDATE schedules SET next_fire_at=? WHERE id=?", (nxt, sid))
+        finally:
+            conn.close()
+    return results
