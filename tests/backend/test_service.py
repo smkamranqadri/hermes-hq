@@ -117,6 +117,10 @@ def test_updater_noop_dirty_and_update(gitrepo, tmp_path):
     import sqlite3
     con = sqlite3.connect(hq_home / "hq.db"); row = con.execute("SELECT kind, title FROM notifications").fetchone(); con.close()
     assert row == ("needs_you", "hermes-hq update failed")
+    # a second identical failure dedupes into the same row (source_key without a timestamp)
+    code2, res2 = _run_updater(clone, {"HERMES_HQ_SUPERVISOR": "none", "HERMES_HQ_HOME": str(hq_home)})
+    con = sqlite3.connect(hq_home / "hq.db"); n = con.execute("SELECT COUNT(*) FROM notifications").fetchone()[0]; con.close()
+    assert n == 1
 
 
 def test_updater_lock_and_tool_precheck(gitrepo, tmp_path):

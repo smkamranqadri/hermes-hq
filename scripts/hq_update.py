@@ -64,8 +64,11 @@ def out(**kw):
             kw["notified"] = notify("info", "hermes-hq updated to %s" % kw.get("sha", "?")[:9],
                                     ", ".join(kw.get("steps", [])), "hq-update:%s" % kw.get("sha", "?"))
         else:
+            # dedupe by (sha, error): retrying the same failing update must not stack Inbox rows/pushes
+            import hashlib
+            key = hashlib.sha1((kw.get("error", "") or "").encode()).hexdigest()[:10]
             kw["notified"] = notify("needs_you", "hermes-hq update failed", kw.get("error", ""),
-                                    "hq-update-fail:%s:%s" % (kw.get("sha", "?"), int(time.time())))
+                                    "hq-update-fail:%s:%s" % (kw.get("sha", "?"), key))
     print("\n" + json.dumps(kw), flush=True)
     return 0 if ok else 1
 
