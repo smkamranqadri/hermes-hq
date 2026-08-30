@@ -310,11 +310,11 @@ export function Chat() {
               ) : (
                 <div className="flex items-end gap-2">
                   <TextArea rows={1} value={draft} placeholder={agentKnown ? `Message ${profile}… (Enter to send, Shift+Enter for newline)` : 'Loading agent…'} disabled={busy || !agentKnown}
-                    style={{ resize: 'none', maxHeight: '40vh', overflowY: 'auto' }}
+                    style={{ resize: 'none', maxHeight: '40vh', overflowY: 'auto', paddingTop: 3.5, paddingBottom: 3.5 }}
                     onChange={e => { setDraft(e.target.value); e.target.style.height = 'auto'; e.target.style.height = `${e.target.scrollHeight}px` }}
                     ref={el => { if (el) { el.style.height = 'auto'; el.style.height = draft ? `${el.scrollHeight}px` : '' } }}
                     onKeyDown={e => { if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); void send() } }} />
-                  {busy ? <Btn kind="warn" className="h-[38px] shrink-0" onClick={() => void stop()}>Stop</Btn> : <Btn className="h-[38px] shrink-0" onClick={() => void send()} disabled={!draft.trim() || !agentKnown}>Send</Btn>}
+                  {busy ? <Btn kind="warn" className="shrink-0" onClick={() => void stop()}>Stop</Btn> : <Btn className="shrink-0" onClick={() => void send()} disabled={!draft.trim() || !agentKnown}>Send</Btn>}
                 </div>
               )}
               {detail.data && <ContextLine d={detail.data} />}
