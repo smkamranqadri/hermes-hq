@@ -2,7 +2,7 @@ import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { Link, useLocation, useNavigate, useParams } from 'react-router-dom'
 import { useQueryClient } from '@tanstack/react-query'
 import clsx from 'clsx'
-import { useAgents, useAgentSessions, useSessionDetail, useProjects, startScopedChat, streamChat, post, get, ago, when, ApiError, type SseEvent, type ChatMessage, type ScopedSession, type SessionDetail } from '../api'
+import { useAgents, useAgentSessions, useSessionDetail, useProjects, startScopedChat, streamChat, steerTurn, updateSession, useModels, post, get, ago, when, ApiError, type SseEvent, type ChatMessage, type ScopedSession, type SessionDetail, type TurnOptions } from '../api'
 import { GlassCard, PageHeader } from '../components/GlassCard'
 import { Empty, Loading, Select } from '../components/ui'
 import { ActionBtn } from '../components/forms'
@@ -13,6 +13,7 @@ import { GatewayDot } from './Agents'
 import { Markdown } from '../components/chat/Markdown'
 import { ToolCard, Thinking, fmtTokens, type ToolView } from '../components/chat/Blocks'
 import { SessionMenu, RenameDialog, SearchModal, FindBar } from '../components/chat/SessionTools'
+import { fileToAttachment, buildMessage, loadOpts, saveOpts, saveDraft, takeDraft, clearDraft, matchSlash, SLASH, type Attachment } from '../components/chat/composer'
 
 type Live = { text: string; tools: ToolView[]; thinking: string; runId: string | null; error: string | null; startedAt: number }
 const emptyLive = (): Live => ({ text: '', tools: [], thinking: '', runId: null, error: null, startedAt: Date.now() })
@@ -62,7 +63,7 @@ function ScopeChip({ scope, className }: { scope: { project_slug: string | null;
 }
 
 /** Status line under the composer, shaped like a terminal statusline: model · ██░░ pct · window · cost · scope. Click for the breakdown. */
-function ContextLine({ d }: { d: SessionDetail }) {
+function ContextLine({ d, opts, onOptions }: { d: SessionDetail; opts: TurnOptions; onOptions: () => void }) {
   const [open, setOpen] = useState(false)
   const cost = d.actual_cost_usd || d.estimated_cost_usd
   const est = d.cost_estimate
@@ -72,11 +73,11 @@ function ContextLine({ d }: { d: SessionDetail }) {
   const filled = pct == null ? 0 : Math.min(10, Math.round(pct / 10))
   const bar = '█'.repeat(filled) + '░'.repeat(10 - filled)
   const scope = d.scope?.task_id ? `#${d.scope.task_id}` : d.scope?.project_slug
-  if (!d.model && !(c && c.used > 0)) return null
+  if (!d.model && !opts.model && !(c && c.used > 0)) return null
   return (
     <div className="mt-1.5 flex flex-wrap items-center gap-x-3 font-mono text-[10px] text-muted">
       <button type="button" onClick={() => setOpen(o => !o)} className="inline-flex flex-wrap items-center gap-x-3 hover:text-fg" title={c ? `context ≈ ${c.used.toLocaleString()} of ${c.limit ? c.limit.toLocaleString() : '?'} tokens — transcript ${c.transcript.toLocaleString()} + system overhead ${c.overhead.toLocaleString()} (${c.source}); click for the breakdown` : 'click for the breakdown'}>
-        {d.model && <span className="text-accent-2">{d.model}</span>}
+        <span className="text-accent-2" onClick={e => { e.stopPropagation(); onOptions() }} title="Model, reasoning effort and fast mode for this session">{opts.model || d.model}{opts.effort ? ` · ${opts.effort}` : ''}{opts.fast ? ' · fast' : ''}</span>
         {c && c.used > 0 && <span className={tone}>{bar} {pct != null ? `${pct < 1 ? '<1' : pct.toFixed(0)}%` : fmtTokens(c.used)}{c.limit ? <span className="text-muted"> {fmtTokens(c.limit)}</span> : null}</span>}
         {cost ? <span>${cost.toFixed(2)}</span> : est ? <span title={`≈ from models.dev prices for ${est.model}; Hermes reports this session as included`}>≈${est.usd.toFixed(2)}</span> : null}
         {scope && <span className="opacity-70">{scope}</span>}
@@ -89,6 +90,24 @@ function ContextLine({ d }: { d: SessionDetail }) {
         {est && !cost ? <span>cost ≈${est.usd.toFixed(3)} via models.dev ({est.model})</span> : null}
         <span className="truncate">{d.id}</span>
       </>}
+    </div>
+  )
+}
+
+/** Model / reasoning effort / fast for this session; models suggested from models.dev, free text allowed. */
+function OptionsPanel({ opts, current, onChange, onClose }: { opts: TurnOptions; current: string | null; onChange: (o: TurnOptions) => void; onClose: () => void }) {
+  const [q, setQ] = useState(opts.model ?? '')
+  const models = useModels(q.length >= 2 ? q : '')
+  return (
+    <div className="mt-2 grid gap-2 rounded-lg border border-line bg-inset p-2 text-xs sm:grid-cols-[1fr_auto_auto_auto]">
+      <label className="flex min-w-0 items-center gap-2"><span className="shrink-0 text-muted">Model</span>
+        <input list="hq-models" value={q} placeholder={current ? `${current} (gateway default)` : 'gateway default'} onChange={e => setQ(e.target.value)} onBlur={() => onChange({ model: q.trim() || undefined })} onKeyDown={e => { if (e.key === 'Enter') { onChange({ model: q.trim() || undefined }); onClose() } }} className="min-w-0 flex-1 rounded-md border border-line bg-glass px-2 py-1 font-mono text-[11px] outline-none focus:border-accent" />
+        <datalist id="hq-models">{(models.data?.models ?? []).slice(0, 50).map(m => <option key={m} value={m} />)}</datalist></label>
+      <label className="flex items-center gap-2"><span className="text-muted">Reasoning</span>
+        <select value={opts.effort ?? ''} onChange={e => onChange({ effort: e.target.value || undefined })} className="hq-select appearance-none rounded-md border border-line bg-glass py-1 pl-2 pr-7 font-mono text-[11px] outline-none focus:border-accent">
+          <option value="">default</option>{(models.data?.efforts ?? ['none', 'minimal', 'low', 'medium', 'high', 'xhigh', 'max', 'ultra']).map(e => <option key={e} value={e}>{e}</option>)}</select></label>
+      <label className="flex items-center gap-2 text-muted"><input type="checkbox" checked={!!opts.fast} onChange={e => onChange({ fast: e.target.checked || undefined })} /> fast</label>
+      <div className="flex items-center gap-2"><button type="button" onClick={() => { setQ(''); onChange({ model: undefined, effort: undefined, fast: undefined }) }} className="text-muted hover:text-fg">reset</button><button type="button" onClick={onClose} className="text-muted hover:text-fg">✕</button></div>
     </div>
   )
 }
@@ -140,6 +159,29 @@ export function Chat() {
   const installed = useMemo(() => (agents.data?.agents ?? []).filter(a => a.installed), [agents.data])
   const busy = live !== null
   const [rename, setRename] = useState<{ id: string; title: string } | null>(null)
+  const [atts, setAtts] = useState<Attachment[]>([])
+  const [opts, setOpts] = useState<TurnOptions>({})
+  const [showOpts, setShowOpts] = useState(false)
+  const [down, setDown] = useState<{ msg: string; retry: () => void } | null>(null)
+  const [restored, setRestored] = useState<'draft' | 'pending' | null>(null)
+  const [slashSel, setSlashSel] = useState(0)
+  const fileInput = useRef<HTMLInputElement>(null)
+  const slash = useMemo(() => matchSlash(draft), [draft])
+  useEffect(() => { setSlashSel(0) }, [slash?.length])
+  // per-session options + unsent text come back after a reload
+  useEffect(() => {
+    if (!profile) return
+    setOpts(loadOpts(profile, id)); setDown(null)
+    if (abort.current) return   // we navigated here ourselves while sending (new session): keep the composer as it is
+    setAtts([])
+    const d = takeDraft(profile, id); if (d) { setDraft(d.text); setRestored(d.pending ? 'pending' : 'draft') } else { setDraft(''); setRestored(null) }
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [profile, id])
+  const setOpt = (patch: TurnOptions) => { if (!profile) return; const next = { ...opts, ...patch }; setOpts(next); saveOpts(profile, id, next) }
+  async function addFiles(files: FileList | File[] | null | undefined) {
+    if (!files) return
+    for (const f of Array.from(files)) { try { const a = await fileToAttachment(f); setAtts(x => x.length >= 4 && a.kind === 'image' ? x : [...x, a]) } catch (e) { toast(e instanceof Error ? e.message : String(e), 'err') } }
+  }
   const [search, setSearch] = useState(false)
   const findSeed = (loc.state as { find?: string } | null)?.find
   const [find, setFind] = useState<string | null>(null)
@@ -154,15 +196,47 @@ export function Chat() {
     window.addEventListener('keydown', h); return () => window.removeEventListener('keydown', h)
   }, [id])
 
+  /** hq-owned slash commands; returns true when the text was consumed. */
+  async function runSlash(text: string): Promise<boolean> {
+    const [head, ...rest] = text.trim().split(/\s+/); const arg = rest.join(' ').trim(); const cmd = head.toLowerCase()
+    if (!SLASH.some(s => s.cmd === cmd)) return false
+    const needSession = () => { if (!id) { toast('Start the session first', 'err'); return false } return true }
+    switch (cmd) {
+      case '/help': toast(SLASH.map(s => `${s.cmd}${s.args ? ' ' + s.args : ''} — ${s.desc}`).join('\n')); break
+      case '/model': setOpt({ model: arg || undefined }); toast(arg ? `Model for this session: ${arg}` : 'Model: gateway default'); break
+      case '/reasoning': if (!arg) { setShowOpts(true); break } setOpt({ effort: arg === 'default' ? undefined : arg }); toast(`Reasoning effort: ${arg}`); break
+      case '/fast': setOpt({ fast: arg !== 'off' }); toast(arg === 'off' ? 'Fast mode off' : 'Fast mode on'); break
+      case '/title': if (!needSession()) break; if (!arg) { setRename({ id: id!, title: detail.data?.title || '' }); break } try { await updateSession(profile!, id!, { title: arg }); qc.invalidateQueries({ queryKey: ['agent-sessions', profile] }); qc.invalidateQueries({ queryKey: ['session', profile, id] }) } catch (e) { toast(e instanceof ApiError ? e.message : String(e), 'err') } break
+      case '/pin': case '/unpin': if (!needSession()) break; try { await updateSession(profile!, id!, { pinned: cmd === '/pin' }); qc.invalidateQueries({ queryKey: ['agent-sessions', profile] }) } catch (e) { toast(e instanceof ApiError ? e.message : String(e), 'err') } break
+      case '/export': if (!needSession()) break; window.open(`/api/session/${profile}/${id}/export.md`, '_blank'); break
+      case '/find': if (!needSession()) break; setFind(arg); break
+      case '/new': nav(`/chat/${profile}`); break
+      case '/steer': if (!live?.runId) { toast('Nothing is running to steer', 'err'); break } if (!arg) break; try { await steerTurn(profile!, id!, live.runId, arg); toast('Steer sent') } catch (e) { toast(e instanceof ApiError ? e.message : String(e), 'err') } break
+    }
+    return true
+  }
   async function send(text?: string) {
-    const msg = (text ?? draft).trim()
-    if (!profile || !msg || busy) return
+    const raw = (text ?? draft).trim()
+    if (!profile) return
+    // busy + a run id = steer the running turn instead of a new message
+    if (busy) {
+      if (!raw || !id || !live?.runId) return
+      const steerText = raw.startsWith('/steer ') ? raw.slice(7).trim() : raw
+      try { await steerTurn(profile, id, live.runId, steerText); setDraft(''); clearDraft(profile, id); toast('Steer sent to the running turn') } catch (e) { toast(e instanceof ApiError ? e.message : String(e), 'err') }
+      return
+    }
+    if (raw.startsWith('/') && text === undefined && await runSlash(raw)) { setDraft(''); clearDraft(profile, id); return }
+    const attsNow = text === undefined ? atts : []
+    if (!raw && attsNow.length === 0) return
+    const msg = raw || (attsNow.some(a => a.kind === 'image') ? 'Describe the attached image.' : ' ')
     let sid = id
     try {
-      if (!sid) { const s = await post<{ id: string }>(`/api/chat/${profile}/sessions`, { title: msg.slice(0, 60) }); sid = s.id; nav(`/chat/${profile}/${sid}`, { replace: true }) }
+      if (!sid) { const s = await post<{ id: string }>(`/api/chat/${profile}/sessions`, { title: msg.slice(0, 60) }); sid = s.id; saveOpts(profile, sid, opts); clearDraft(profile, undefined); nav(`/chat/${profile}/${sid}`, { replace: true }) }
     } catch (e) { toast(e instanceof ApiError ? e.message : String(e), 'err'); return }
-    if (text === undefined) setDraft('')
-    setPendingUser(msg); setLive(emptyLive()); setAtBottom(true)
+    const payload = buildMessage(msg, attsNow)
+    if (text === undefined) { setDraft(''); setAtts([]); setRestored(null) }
+    saveDraft(profile, sid, msg, true)
+    setPendingUser(msg + (attsNow.length ? `\n${attsNow.map(a => a.kind === 'image' ? '🖼 ' + a.name : '📄 ' + a.name).join('  ')}` : '')); setLive(emptyLive()); setAtBottom(true); setDown(null)
     let failed = false
     abort.current = new AbortController()
     const onEvent = (e: SseEvent) => setLive(l => {
@@ -182,11 +256,16 @@ export function Chat() {
         default: return l
       }
     })
-    try { await streamChat(profile, sid!, msg, onEvent, abort.current.signal) }
-    catch (e) { if (!(e instanceof DOMException && e.name === 'AbortError')) { failed = true; toast(e instanceof ApiError ? e.message : String(e), 'err') } }
+    try { await streamChat(profile, sid!, payload, onEvent, abort.current.signal, opts) }
+    catch (e) {
+      if (!(e instanceof DOMException && e.name === 'AbortError')) {
+        failed = true; const m = e instanceof ApiError ? e.message : String(e)
+        if (e instanceof ApiError && (e.status === 502 || e.status === 0)) setDown({ msg: m, retry: () => { setDown(null); void send(msg) } }); else toast(m, 'err')
+      }
+    }
     finally {
       abort.current = null; setLive(null); setPendingUser(null)
-      if (failed) setDraft(msg)
+      if (failed) { setDraft(msg); saveDraft(profile, sid, msg) } else clearDraft(profile, sid)
       qc.invalidateQueries({ queryKey: ['session', profile, sid] }); qc.invalidateQueries({ queryKey: ['agent-sessions', profile] }); qc.invalidateQueries({ queryKey: ['agents'] })
     }
   }
@@ -308,16 +387,41 @@ export function Chat() {
               ) : chatDisabled ? (
                 <div className="flex flex-wrap items-center justify-between gap-2 text-xs text-muted"><span>Chat is off for <span className="font-mono text-accent-2">{profile}</span> — its gateway is not enabled.</span><ActionBtn url={`/api/agent/${profile}/gateway`} label="Enable chat" body={{ enabled: true }} confirm={`Start the ${profile} gateway? Its .env gets API_SERVER_PORT/KEY if missing.`} /></div>
               ) : (
-                <div className="flex items-end gap-2">
-                  <TextArea rows={1} value={draft} placeholder={agentKnown ? `Message ${profile}… (Enter to send, Shift+Enter for newline)` : 'Loading agent…'} disabled={busy || !agentKnown}
-                    style={{ resize: 'none', maxHeight: '40vh', overflowY: 'auto', paddingTop: 3.5, paddingBottom: 3.5 }}
-                    onChange={e => { setDraft(e.target.value); e.target.style.height = 'auto'; e.target.style.height = `${e.target.scrollHeight}px` }}
-                    ref={el => { if (el) { el.style.height = 'auto'; el.style.height = draft ? `${el.scrollHeight}px` : '' } }}
-                    onKeyDown={e => { if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); void send() } }} />
-                  {busy ? <Btn kind="warn" className="shrink-0" onClick={() => void stop()}>Stop</Btn> : <Btn className="shrink-0" onClick={() => void send()} disabled={!draft.trim() || !agentKnown}>Send</Btn>}
+                <div className="relative" onDragOver={e => { e.preventDefault() }} onDrop={e => { e.preventDefault(); void addFiles(e.dataTransfer.files) }}>
+                  {down && <div className="mb-2 flex flex-wrap items-center justify-between gap-2 rounded-lg border border-needsyou/50 bg-needsyou/10 px-3 py-1.5 text-xs text-needsyou"><span>Gateway unreachable — {down.msg}</span><span className="flex gap-2"><Btn kind="warn" onClick={down.retry}>Retry</Btn><button type="button" onClick={() => setDown(null)} className="px-1 hover:text-fg">✕</button></span></div>}
+                  {restored && <p className="mb-1 text-[11px] text-muted">{restored === 'pending' ? 'This message was being sent when the page reloaded — it was not delivered. Send it again?' : 'Unsent draft restored.'}</p>}
+                  {slash && slash.length > 0 && !busy && (
+                    <div className="mb-1 overflow-hidden rounded-lg border border-line bg-glass-strong text-xs shadow-lg">
+                      {slash.map((c, i) => <button key={c.cmd} type="button" onMouseEnter={() => setSlashSel(i)} onClick={() => { setDraft(c.cmd + (c.args ? ' ' : '')); if (!c.args) void send(c.cmd) }} className={clsx('flex w-full items-baseline gap-2 px-3 py-1 text-left hover:bg-raised', i === slashSel && 'bg-raised')}><span className="font-mono text-accent-2">{c.cmd}</span>{c.args && <span className="font-mono text-[10px] text-muted">{c.args}</span>}<span className="min-w-0 flex-1 truncate text-muted">{c.desc}</span></button>)}
+                    </div>
+                  )}
+                  {atts.length > 0 && <div className="mb-1.5 flex flex-wrap gap-2">{atts.map(a => (
+                    <span key={a.id} className="group/att relative inline-flex items-center gap-1.5 rounded-lg border border-line bg-inset p-1 text-[11px]">
+                      {a.kind === 'image' ? <img src={a.dataUrl} alt={a.name} className="h-12 w-12 rounded object-cover" /> : <span className="px-1 font-mono">📄 {a.name}</span>}
+                      <button type="button" aria-label={`Remove ${a.name}`} onClick={() => setAtts(x => x.filter(y => y.id !== a.id))} className="absolute -right-1.5 -top-1.5 rounded-full border border-line bg-glass-strong px-1 text-[10px] leading-none text-muted hover:text-fg">✕</button>
+                    </span>))}</div>}
+                  <div className="flex items-end gap-2">
+                    <input ref={fileInput} type="file" multiple accept="image/*,.md,.txt,.json,.csv,.ts,.tsx,.js,.py,.yaml,.yml,.toml,.sh,.html,.css,.sql,.log" className="hidden" onChange={e => { void addFiles(e.target.files); e.target.value = '' }} />
+                    <button type="button" aria-label="Attach image or text file" title="Attach image or text file (or paste / drop)" disabled={busy || !agentKnown} onClick={() => fileInput.current?.click()} className="inline-flex h-[29px] w-[29px] shrink-0 items-center justify-center rounded-full border border-line text-muted hover:text-fg disabled:opacity-50"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true"><path d="m21.4 11.05-9.2 9.2a6 6 0 0 1-8.5-8.5l9.2-9.2a4 4 0 0 1 5.66 5.66l-9.2 9.2a2 2 0 0 1-2.83-2.83l8.5-8.5" /></svg></button>
+                    <TextArea rows={1} value={draft} placeholder={!agentKnown ? 'Loading agent…' : busy && live?.runId ? `Steer the running turn… (Enter to send guidance without stopping)` : busy ? 'Waiting for the run to start…' : `Message ${profile}… (Enter to send, Shift+Enter for newline, / for commands)`} disabled={!agentKnown || (busy && !live?.runId)}
+                      style={{ resize: 'none', maxHeight: '40vh', overflowY: 'auto', paddingTop: 3.5, paddingBottom: 3.5 }}
+                      onChange={e => { setDraft(e.target.value); setRestored(null); if (profile) saveDraft(profile, id, e.target.value); e.target.style.height = 'auto'; e.target.style.height = `${e.target.scrollHeight}px` }}
+                      onPaste={e => { const files = Array.from(e.clipboardData?.files ?? []); if (files.length) { e.preventDefault(); void addFiles(files) } }}
+                      ref={el => { if (el) { el.style.height = 'auto'; el.style.height = draft ? `${el.scrollHeight}px` : '' } }}
+                      onKeyDown={e => {
+                        if (slash && slash.length > 0 && !busy) {
+                          if (e.key === 'ArrowDown') { e.preventDefault(); setSlashSel(i => Math.min(slash.length - 1, i + 1)); return }
+                          if (e.key === 'ArrowUp') { e.preventDefault(); setSlashSel(i => Math.max(0, i - 1)); return }
+                          if (e.key === 'Tab' || (e.key === 'Enter' && draft.trim() !== slash[slashSel].cmd)) { e.preventDefault(); const c = slash[slashSel]; setDraft(c.cmd + (c.args ? ' ' : '')); if (!c.args) void send(c.cmd); return }
+                        }
+                        if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); void send() }
+                      }} />
+                    {busy ? <><Btn kind="ghost" className="shrink-0" onClick={() => void send()} disabled={!draft.trim() || !live?.runId}>Steer</Btn><Btn kind="warn" className="shrink-0" onClick={() => void stop()}>Stop</Btn></> : <Btn className="shrink-0" onClick={() => void send()} disabled={(!draft.trim() && atts.length === 0) || !agentKnown}>Send</Btn>}
+                  </div>
                 </div>
               )}
-              {detail.data && <ContextLine d={detail.data} />}
+              {detail.data && <ContextLine d={detail.data} opts={opts} onOptions={() => setShowOpts(o => !o)} />}
+              {showOpts && profile && <OptionsPanel opts={opts} current={detail.data?.model ?? null} onChange={setOpt} onClose={() => setShowOpts(false)} />}
             </div>
           </GlassCard>
         </div>

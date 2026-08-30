@@ -261,7 +261,81 @@ def stop_turn(profile, run_id, db_path=None):
     return _gateway_json(port, key, "POST", "/v1/runs/%s/stop" % run_id, {})
 
 
-def stream_turn(profile, session_id, message, db_path=None):
+MAX_IMAGES = 4
+MAX_IMAGE_BYTES = 1_400_000        # base64 length of one image part (≈1 MB decoded)
+EFFORTS = ("none", "minimal", "low", "medium", "high", "xhigh", "max", "ultra")
+
+
+def normalize_message(message):
+    """Text, or a list of OpenAI-style parts ({type:text}|{type:image_url, image_url:{url:data:image/...}}).
+    Returns (payload, preview) — payload is what the gateway receives, preview a short text for the activity log."""
+    if isinstance(message, str):
+        if not message.strip():
+            raise ValueError("message is required")
+        return message, message.strip()[:120]
+    if not isinstance(message, list) or not message:
+        raise ValueError("message must be text or a list of parts")
+    parts, texts, images = [], [], 0
+    for p in message:
+        if not isinstance(p, dict):
+            raise ValueError("bad message part")
+        t = p.get("type")
+        if t == "text":
+            txt = p.get("text")
+            if not isinstance(txt, str):
+                raise ValueError("text part needs text")
+            if txt.strip():
+                parts.append({"type": "text", "text": txt}); texts.append(txt.strip())
+        elif t == "image_url":
+            url = (p.get("image_url") or {}).get("url") if isinstance(p.get("image_url"), dict) else p.get("image_url")
+            if not isinstance(url, str) or not url.startswith("data:image/"):
+                raise ValueError("images must be data:image/... URLs")
+            if len(url) > MAX_IMAGE_BYTES:
+                raise ValueError("image too large (max ~1 MB after encoding)")
+            images += 1
+            if images > MAX_IMAGES:
+                raise ValueError("at most %d images per message" % MAX_IMAGES)
+            parts.append({"type": "image_url", "image_url": {"url": url}})
+        else:
+            raise ValueError("unsupported part type: %s" % t)
+    if not parts:
+        raise ValueError("message is required")
+    preview = (" ".join(texts)[:120] or "") + (" [%d image%s]" % (images, "s" if images > 1 else "") if images else "")
+    return parts, preview.strip()
+
+
+def model_options(model=None, effort=None, fast=None):
+    """Per-turn routing fields for the gateway: `model` (+ provider-prefixed ids), `model_options.reasoning_effort|fast`."""
+    body = {}
+    if isinstance(model, str) and model.strip():
+        body["model"] = model.strip()[:120]
+    opts = {}
+    if isinstance(effort, str) and effort.strip():
+        e = effort.strip().lower()
+        if e not in EFFORTS:
+            raise ValueError("reasoning effort must be one of %s" % ", ".join(EFFORTS))
+        opts["reasoning_effort"] = e
+    if fast is not None:
+        opts["fast"] = bool(fast)
+    if opts:
+        body["model_options"] = opts
+    return body
+
+
+def steer_turn(profile, run_id, message, db_path=None):
+    """Inject guidance into a running turn (`POST /v1/runs/{id}/steer`); 409 from the gateway when the run is not steerable."""
+    _check_profile(profile); _check_session(run_id)
+    if not isinstance(message, str) or not message.strip():
+        raise ValueError("message is required")
+    port, key = gateways.credentials(profile)
+    if not (port and key) or not gateways.healthy(profile):
+        raise ValueError("gateway for %s is not running" % profile)
+    out = _gateway_json(port, key, "POST", "/v1/runs/%s/steer" % run_id, {"message": message.strip()})
+    store.log_activity(action="chat_steer", agent_profile=profile, detail="run %s: %s" % (run_id, message.strip()[:120]), db_path=db_path)
+    return out
+
+
+def stream_turn(profile, session_id, message, db_path=None, model=None, effort=None, fast=None):
     """Generator of SSE bytes from the gateway's /chat/stream, pass-through.
 
     Raises ValueError (chat disabled / bad input) or GatewayError BEFORE the
@@ -269,14 +343,15 @@ def stream_turn(profile, session_id, message, db_path=None):
     reported in-band as an `event: error` + `event: done` pair.
     """
     _check_profile(profile); _check_session(session_id)
-    if not isinstance(message, str) or not message.strip():
-        raise ValueError("message is required")
+    payload, preview = normalize_message(message)
+    body = {"message": payload}
+    body.update(model_options(model, effort, fast))
     port, key = gateways.ensure_running(profile, db_path)
     c = http.client.HTTPConnection("127.0.0.1", port, timeout=CONNECT_TIMEOUT)
     try:
         c.connect()
         c.sock.settimeout(TURN_TIMEOUT)   # connect fast, then allow a long-running turn
-        c.request("POST", "/api/sessions/%s/chat/stream" % session_id, body=json.dumps({"message": message}),
+        c.request("POST", "/api/sessions/%s/chat/stream" % session_id, body=json.dumps(body),
                   headers={"Authorization": "Bearer " + key, "Content-Type": "application/json", "Accept": "text/event-stream"})
         r = c.getresponse()
     except (OSError, http.client.HTTPException) as e:
@@ -289,7 +364,7 @@ def stream_turn(profile, session_id, message, db_path=None):
         except (ValueError, AttributeError):
             msg = raw[:300]
         raise GatewayError("gateway chat -> %d: %s" % (r.status, msg))
-    store.log_activity(action="chat_message", agent_profile=profile, detail="session %s: %s" % (session_id, message.strip()[:120]), db_path=db_path)
+    store.log_activity(action="chat_message", agent_profile=profile, detail="session %s: %s" % (session_id, preview), db_path=db_path)
 
     def gen():
         last_touch = 0.0

@@ -119,3 +119,13 @@ def estimate(model, input_tokens=0, output_tokens=0, cache_read=0, cache_write=0
     usd = ((input_tokens or 0) * cost.get("input", 0) + (output_tokens or 0) * cost.get("output", 0)
            + (cache_read or 0) * cost.get("cache_read", 0) + (cache_write or 0) * cost.get("cache_write", 0)) / 1e6
     return {"usd": round(usd, 4), "model": matched, "source": "models.dev"}
+
+
+def model_ids(prefix=None, limit=200):
+    """Known model ids from models.dev (bare ids, no provider prefix); optional case-insensitive substring filter."""
+    idx = _load() or {}
+    ids = sorted(k for k in idx if "/" not in k)
+    if prefix:
+        p = prefix.lower()
+        ids = [k for k in ids if p in k]
+    return ids[:limit]

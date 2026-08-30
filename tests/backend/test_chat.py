@@ -33,6 +33,10 @@ class FakeGateway(BaseHTTPRequestHandler):
         FakeGateway.calls.append((self.path, body))
         if self.path == "/api/sessions":
             return self._json(201, {"object": "hermes.session", "session": {"id": body.get("id") or "api_1_abc", "title": body.get("title")}})
+        if self.path.startswith("/v1/runs/") and self.path.endswith("/steer"):
+            rid = self.path.split("/")[3]
+            if rid == "run_done": return self._json(409, {"error": {"message": "Run is not currently accepting steer input", "code": "run_not_accepting_steer"}})
+            return self._json(200, {"run_id": rid, "steer": "accepted"})
         if self.path.startswith("/v1/runs/") and self.path.endswith("/stop"):
             return self._json(200, {"run_id": self.path.split("/")[3], "status": "stopping"})
         if self.path.endswith("/chat/stream"):
@@ -46,8 +50,10 @@ class FakeGateway(BaseHTTPRequestHandler):
             ev("tool.started", {"tool_name": "terminal", "preview": "ls"})
             if FakeGateway.slow: time.sleep(0.4)
             ev("tool.completed", {"tool_name": "terminal", "preview": "ok"})
-            for d in ("Hel", "lo ", body["message"][::-1]): ev("assistant.delta", {"delta": d})
-            ev("assistant.completed", {"content": "Hello " + body["message"][::-1]}); ev("run.completed", {}); ev("done", {})
+            msg = body["message"]
+            text = msg if isinstance(msg, str) else " ".join(p.get("text", "[img]" if p.get("type") == "image_url" else "?") for p in msg)
+            for d in ("Hel", "lo ", text[::-1]): ev("assistant.delta", {"delta": d})
+            ev("assistant.completed", {"content": "Hello " + text[::-1]}); ev("run.completed", {}); ev("done", {})
             return
         self._json(404, {"error": {"message": "nope"}})
 

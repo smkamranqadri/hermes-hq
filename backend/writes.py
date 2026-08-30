@@ -234,6 +234,13 @@ class NewSession(BaseModel):
 
 
 class ChatIn(BaseModel):
+    message: str | list[dict]
+    model: str | None = None
+    effort: str | None = None
+    fast: bool | None = None
+
+
+class SteerIn(BaseModel):
     message: str
 
 
@@ -285,9 +292,14 @@ def chat_stop(profile: str, session_id: str, run_id: str):
     return _chat(chat.stop_turn, profile, run_id)
 
 
+@router.post("/chat/{profile}/{session_id}/steer/{run_id}")
+def chat_steer(profile: str, session_id: str, run_id: str, body: SteerIn):
+    return _chat(chat.steer_turn, profile, run_id, body.message)
+
+
 @router.post("/chat/{profile}/{session_id}")
 def chat_send(profile: str, session_id: str, body: ChatIn):
-    gen = _chat(chat.stream_turn, profile, session_id, body.message)
+    gen = _chat(chat.stream_turn, profile, session_id, body.message, model=body.model, effort=body.effort, fast=body.fast)
     return StreamingResponse(gen, media_type="text/event-stream",
                              headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"})
 
