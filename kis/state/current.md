@@ -4,11 +4,11 @@
 **hermes-hq is the live control plane since 2026-08-29 13:40 UTC** (branch `main`). Process: `nohup .venv/bin/hermes-hq serve --host 0.0.0.0 --port 9010 --interval 20 > /opt/data/hermes-hq-serve.log 2>&1 &` with the dispatcher ON; restart by hand after backend changes (`pkill -f 'hermes-hq serve'` in its own command, then that line). Password file `/opt/data/hermes-hq/password` is `test` for the owner's review (generated one kept in `password.prev`). Frontend builds go live without a restart. HTTPS for the phone: `tailscale serve` on the owner's Mac fronts this VM's `:9010` (Knowledge → Web Push). Legacy WM rollback recipe: `knowledge/technical.md` → Legacy WM.
 
 ## Now
-Task: none — **Group 7 (Schedules) is complete as of 2026-08-30**; all PRD v1 groups (1–7) are shipped and live on :9010. Next session: `/kis:plan` for whatever the owner picks — the obvious candidates are in Known limits (install/supervisor unit for the server, PWA), plus backlog debt below.
-Group 6 (Browsers) and Group 7 (Schedules) both completed 2026-08-30.
+Task: **Group 8 — Install & supervisor**, sub-phase **8-1 service manager + auto-update** (`intent/Group8Plan.md`, approved 2026-08-30, Phase mode). Next command: `/kis:act`.
+All PRD v1 groups (1–7) shipped 2026-08-30.
 
 ## Next
-Owner's pick: install/supervisor unit (Known limits), PWA polish, or debt items below — plan first.
+8-2 install.sh → 8-3 cutover of this box, then PWA polish or debt items.
 
 ## Blocker
 None.
