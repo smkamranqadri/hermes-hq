@@ -13,6 +13,8 @@ import { Btn } from './components/Modal'
 import { Loading } from './components/ui'
 import { post, setCsrf, useSession } from './api'
 import { usePageTitle } from './usePageTitle'
+import { termStore, useTermStore } from './components/terminal/store'
+import { useLocation } from 'react-router-dom'
 import { Overview } from './pages/Overview'
 import { Activity } from './pages/Activity'
 import { Projects } from './pages/Projects'
@@ -23,6 +25,7 @@ import { Agents } from './pages/Agents'
 import { AgentDetail } from './pages/AgentDetail'
 import { Chat } from './pages/Chat'
 const Files = lazy(() => import('./pages/Files').then(m => ({ default: m.Files })))
+const TerminalHost = lazy(() => import('./components/terminal/TerminalHost').then(m => ({ default: m.TerminalHost })))
 
 function Placeholder({ title }: { title: string }) {
   usePageTitle(title)
@@ -121,6 +124,13 @@ export default function App() {
     const h = () => { setAuthed(false); qc.clear() }
     window.addEventListener('hq:unauthenticated', h); return () => window.removeEventListener('hq:unauthenticated', h)
   }, [qc])
+  const term = useTermStore()
+  const loc = useLocation()
+  useEffect(() => {
+    const h = (e: KeyboardEvent) => { if ((e.ctrlKey || e.metaKey) && e.key === '`' && window.innerWidth >= 640) { e.preventDefault(); termStore.togglePanel() } }
+    window.addEventListener('keydown', h); return () => window.removeEventListener('keydown', h)
+  }, [])
+  const termMounted = authed === true && (term.opened || loc.pathname === '/terminal')
   if (authed === null) return null
   if (!authed) return <LoginScreen onDone={() => { setAuthed(true); qc.invalidateQueries() }} />
   return (
@@ -130,8 +140,10 @@ export default function App() {
         <TabBar />
         <SnapshotBanner />
         <main>
+          {termMounted && <Suspense fallback={loc.pathname === '/terminal' ? <section className="mx-auto max-w-7xl p-4 sm:p-6"><Loading rows={8} /></section> : null}><TerminalHost /></Suspense>}
           <Routes>
-            {[...TABS, ...TOOLS].filter(([, to]) => !['/projects', '/tasks', '/', '/activity', '/agents', '/chat', '/files'].includes(to)).map(([label, to]) => <Route key={to} path={to} element={<Placeholder title={label} />} />)}
+            <Route path="/terminal" element={null} />
+            {[...TABS, ...TOOLS].filter(([, to]) => !['/projects', '/tasks', '/', '/activity', '/agents', '/chat', '/files', '/terminal'].includes(to)).map(([label, to]) => <Route key={to} path={to} element={<Placeholder title={label} />} />)}
             <Route path="/" element={<Overview />} />
             <Route path="/files" element={<Suspense fallback={<section className="mx-auto max-w-7xl p-4 sm:p-6"><Loading rows={8} /></section>}><Files /></Suspense>} />
             <Route path="/activity" element={<Activity />} />

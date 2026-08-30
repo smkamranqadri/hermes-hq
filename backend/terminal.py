@@ -328,16 +328,23 @@ async def terminal_ws(ws: WebSocket):
     cols = int(ws.query_params.get("cols") or 80); rows = int(ws.query_params.get("rows") or 24)
     s = REGISTRY.sessions.get(sid)
     reattach = s is not None
+    # Auth/origin failures above are refused at the handshake (HTTP 403; browsers see 1006). Everything
+    # below is accepted first so the browser receives the real close code and reason.
+    await ws.accept()
+
+    async def refuse(code: int, reason: str):
+        await ws.send_text(json.dumps({"t": "err", "code": code, "reason": reason}))
+        await ws.close(code=code, reason=reason[:120])
+
     if s is None:
         if sid:
-            await ws.close(code=CLOSE_NOT_FOUND); return
+            await refuse(CLOSE_NOT_FOUND, "session gone"); return
         try:
             s = REGISTRY.spawn(cols, rows)
         except HTTPException as e:
-            await ws.close(code=CLOSE_LIMIT if e.status_code == 429 else 1011, reason=str(e.detail)); return
+            await refuse(CLOSE_LIMIT if e.status_code == 429 else 1011, str(e.detail)); return
         except RuntimeError as e:
-            await ws.close(code=1011, reason=str(e)); return
-    await ws.accept()
+            await refuse(1011, str(e)); return
     q = REGISTRY.attach(s)
     await ws.send_text(json.dumps({"t": "hello", "id": s.id, "reattach": reattach, "exited": s.exit_code}))
     if reattach and s.ring:
