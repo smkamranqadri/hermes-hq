@@ -170,3 +170,11 @@ body {
 @keyframes hq-pulse { 0%,100% { opacity: 1; } 50% { opacity: 0.35; } }
 .hq-dot-live { box-shadow: 0 0 8px currentColor; animation: hq-pulse 2s ease-in-out infinite; }
 .hq-wordmark { letter-spacing: 0.15em; }
+
+/* Select chevron: our own, so the gap between text and arrow is consistent across browsers */
+.hq-select {
+  background-image: url("data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' width='12' height='12' viewBox='0 0 24 24' fill='none' stroke='%23999' stroke-width='2.4' stroke-linecap='round' stroke-linejoin='round'><path d='m6 9 6 6 6-6'/></svg>");
+  background-repeat: no-repeat;
+  background-position: right 0.7rem center;
+  background-size: 12px 12px;
+}

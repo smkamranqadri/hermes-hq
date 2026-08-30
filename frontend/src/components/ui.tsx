@@ -51,7 +51,7 @@ export function Agent({ name }: { name?: string | null }) {
   return <span className="font-mono text-xs text-accent-2">{name}</span>
 }
 export const Select = (p: React.SelectHTMLAttributes<HTMLSelectElement>) => (
-  <select {...p} className={clsx('rounded-full border border-line bg-glass px-3 py-1.5 text-xs text-fg outline-none focus:border-accent', p.className)} />
+  <select {...p} className={clsx('hq-select appearance-none rounded-full border border-line bg-glass py-1.5 pl-3 pr-8 text-xs text-fg outline-none focus:border-accent', p.className)} />
 )
 export const Input = (p: React.InputHTMLAttributes<HTMLInputElement>) => (
   <input {...p} className={clsx('rounded-full border border-line bg-glass px-3 py-1.5 text-xs text-fg outline-none placeholder:text-muted focus:border-accent', p.className)} />
