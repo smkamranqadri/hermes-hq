@@ -178,3 +178,8 @@ body {
   background-position: right 0.7rem center;
   background-size: 12px 12px;
 }
+
+/* iOS zooms into any focused field smaller than 16px and never zooms back out: keep fields at 16px on phones. */
+@media (max-width: 639px) {
+  input:not([type="checkbox"]):not([type="radio"]), textarea, select { font-size: max(16px, 1em); }
+}
