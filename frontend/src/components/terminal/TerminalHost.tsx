@@ -86,7 +86,9 @@ export function TerminalHost() {
           ? <input autoFocus value={find} onChange={e => { setFind(e.target.value); active?.search(e.target.value, 1) }} placeholder="Find" aria-label="Find in terminal"
               onKeyDown={e => { if (e.key === 'Enter') active?.search(find, e.shiftKey ? -1 : 1); if (e.key === 'Escape') { setFind(null); active?.search('', 1); active?.focus() } }}
               className="w-28 rounded-full border border-line bg-inset px-2 py-0.5 font-mono text-[11px] outline-none focus:border-accent sm:w-36" />
-          : <button aria-label="Find" title="Find (Ctrl+Shift+F)" onClick={() => setFind('')} className="rounded-full px-2 py-0.5 font-mono text-[11px] text-muted hover:text-fg">⌕</button>}
+          : <button aria-label="Find" title="Find (Ctrl+Shift+F)" onClick={() => setFind('')} className="flex items-center rounded-full border border-line bg-glass px-2.5 py-1 text-muted hover:text-fg">
+              <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.4" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true"><circle cx="11" cy="11" r="7" /><path d="m20 20-3.5-3.5" /></svg>
+            </button>}
         <Menu button={<span className="font-mono text-[11px]">⋯</span>}>
           <MenuItem onClick={() => active?.restart()}>Restart shell</MenuItem>
           <MenuItem onClick={() => { const t = st.tabs.find(x => x.id === st.active); if (t) rename(t) }}>Rename tab</MenuItem>
@@ -94,7 +96,7 @@ export function TerminalHost() {
           {mode === 'page' && !mobile && <MenuItem onClick={dock}>Dock as panel</MenuItem>}
           <MenuItem onClick={() => { termStore.get().tabs.forEach(closeTab); termStore.setPanel(false) }}>Close all</MenuItem>
         </Menu>
-        {mode === 'panel' && <button aria-label="Close panel" onClick={() => termStore.setPanel(false)} className="rounded-full px-2 py-0.5 font-mono text-[11px] text-muted hover:text-fg">×</button>}
+        {mode === 'panel' && <button aria-label="Close panel" onClick={() => termStore.setPanel(false)} className="rounded-full border border-line bg-glass px-2.5 py-1 font-mono text-[10px] text-muted hover:text-fg">×</button>}
       </div>
     </div>
   )
