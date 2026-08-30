@@ -37,6 +37,11 @@ class DispatcherLoop:
         except Exception:
             log.exception("schedule firing failed")
         summary = wm_dispatch.run_dispatch(db_path=wm_store.DEFAULT_DB_PATH)
+        try:   # Hermes cron: tick off-gateway profiles + surface job errors (no-op within 60 s)
+            from backend import cron as hq_cron
+            hq_cron.minute_pass()
+        except Exception:
+            log.exception("cron minute pass failed")
         self.last_tick = time.time()
         try:   # notifications + web push must not depend on a browser polling
             from backend import push

@@ -11,7 +11,7 @@ from backend import auth as A
 from backend.api import router as api_router
 from backend.writes import router as write_router, make_auth_routes
 from backend.files import router as files_router, artifacts_router
-from backend import gateways, jobs, mcp, memory, schedules, skills, terminal
+from backend import cron, gateways, jobs, mcp, memory, schedules, skills, terminal
 from backend.dispatcher import DispatcherLoop
 from core import wm_store
 
@@ -54,6 +54,7 @@ def create_app(dispatcher_enabled: bool = True, interval: float = 30.0, password
     app.include_router(skills.router)
     app.include_router(mcp.router)
     app.include_router(schedules.router)
+    app.include_router(cron.router)
     app.include_router(jobs.router)
     app.state.sessions = sessions
 
