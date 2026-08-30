@@ -9,10 +9,10 @@ PRD item 5: browse/edit, project-scoped or global. Owner decisions 2026-08-30: *
 4. [x] `tests/backend/test_files.py` with a scratch root: containment (`..`, absolute, symlink out), list order + hidden toggle, read kinds and cap, write happy/409, mkdir/rename/delete/upload, primary_path guard.
 Proof: pytest green; curl of list/read/write against a real project on the live server.
 
-## 5-2 Files page (desktop)
-1. [ ] `frontend/src/pages/Files.tsx` replaces the placeholder; root switcher (Projects root ▾ / project names), breadcrumb, tree pane (~280 px, lazy expand, skeleton on load, hidden toggle), row menu (rename/delete/download), New file / New folder / Upload (`<input multiple>`), deep link `?root=&path=`.
-2. [ ] Editor pane: `@uiw/react-codemirror` + `@codemirror/lang-{markdown,javascript,python,json,html,css}` + oneDark/light via existing theme; Save (Ctrl/Cmd-S, `Btn busy`), dirty indicator, 409 → "Reload / Overwrite" modal; markdown Preview toggle using `components/chat/Markdown.tsx`; image inline; PDF "Open" via raw; binary/large → size note + Download.
-3. [ ] Project detail: **Files** link → `/files?root=project:<slug>`; Artifacts group above the tree when a project root is selected (outside-root ones as download-only).
+## 5-2 Files page (desktop) — DONE 2026-08-30
+1. [x] `frontend/src/pages/Files.tsx` replaces the placeholder; root switcher (Projects root ▾ / project names), breadcrumb, tree pane (~280 px, lazy expand, skeleton on load, hidden toggle), row menu (rename/delete/download), New file / New folder / Upload (`<input multiple>`), deep link `?root=&path=`.
+2. [x] Editor pane: `@uiw/react-codemirror` + `@codemirror/lang-{markdown,javascript,python,json,html,css}` + oneDark/light via existing theme; Save (Ctrl/Cmd-S, `Btn busy`), dirty indicator, 409 → "Reload / Overwrite" modal; markdown Preview toggle using `components/chat/Markdown.tsx`; image inline; PDF "Open" via raw; binary/large → size note + Download.
+3. [x] Project detail: **Files** link → `/files?root=project:<slug>`; Artifacts group above the tree when a project root is selected (outside-root ones as download-only).
 Proof: Playwright 1440: open a project, edit + save a file, reload shows the change; rename + delete round-trip; upload appears.
 
 ## 5-3 Phone
