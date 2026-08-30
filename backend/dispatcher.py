@@ -42,6 +42,13 @@ class DispatcherLoop:
             hq_cron.minute_pass()
         except Exception:
             log.exception("cron minute pass failed")
+        try:   # scheduled self-update (no-op unless the 05:00 PKT window passed)
+            from backend import service as hq_service
+            res = hq_service.auto_update_pass()
+            if res:
+                log.info("auto-update: %s", res)
+        except Exception:
+            log.exception("auto-update pass failed")
         self.last_tick = time.time()
         try:   # notifications + web push must not depend on a browser polling
             from backend import push
