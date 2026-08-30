@@ -4,7 +4,7 @@
 **hermes-hq is the live control plane since 2026-08-29 13:40 UTC** (branch `main`). Process: `nohup .venv/bin/hermes-hq serve --host 0.0.0.0 --port 9010 --interval 20 > /opt/data/hermes-hq-serve.log 2>&1 &` with the dispatcher ON; restart by hand after backend changes (`pkill -f 'hermes-hq serve'` in its own command, then that line). Password file `/opt/data/hermes-hq/password` is `test` for the owner's review (generated one kept in `password.prev`). Frontend builds go live without a restart. HTTPS for the phone: `tailscale serve` on the owner's Mac fronts this VM's `:9010` (Knowledge → Web Push). Legacy WM rollback recipe: `knowledge/technical.md` → Legacy WM.
 
 ## Now
-Task: **Group 5 — Project files** (browse/edit, project-scoped or global) — not planned yet; start the next session with `/kis:plan`. Inputs: `PRD.md` item 5, hermes-workspace's file explorer (lineage allow-list in `knowledge/project.md`; ask before copying), Tools menu / phone More page already route to the `/files` placeholder, project `primary_path` is the natural project root. Then Group 6 browsers (Hermes gateway has `GET /v1/skills` and `GET /v1/toolsets` for it).
+Task: **Group 5 — Project files** — planned 2026-08-30 (`intent/Group5Plan.md`, Phase mode: 5-1 backend API → 5-2 desktop page → 5-3 phone). Not started; next session `/kis:act`. Reference explorer in hermes-workspace is on the lineage allow-list. Then Group 6 browsers (Hermes gateway has `GET /v1/skills` and `GET /v1/toolsets` for it).
 Groups 1–4 and 4b (chat polish, option cards, notifications incl. Web Push, mobile IA) are complete as of 2026-08-30 (`intent/Group4bPlan.md`).
 
 ## Next
