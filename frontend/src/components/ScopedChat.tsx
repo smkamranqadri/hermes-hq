@@ -17,6 +17,7 @@ export function ScopedChat({ kind, id, slug }: { kind: 'project' | 'task'; id: n
   const [busy, setBusy] = useState(false)
   const sessions = useScopedSessions(kind, kind === 'project' ? slug : id)
   const noun = kind === 'project' ? 'project' : 'task'
+  const last = sessions.data?.sessions.find(s => s.profile === profile && (kind === 'task' || !s.task_id))
   async function start() {
     if (busy) return
     setBusy(true)
@@ -37,10 +38,11 @@ export function ScopedChat({ kind, id, slug }: { kind: 'project' | 'task'; id: n
             {!installed.some(a => a.name === 'orchestrator') && <option value="orchestrator">orchestrator</option>}
             {installed.map(a => <option key={a.name} value={a.name}>{a.name}</option>)}
           </Select>
-          <Btn busy={busy} onClick={() => void start()}>New chat</Btn>
+          {last && <Btn onClick={() => nav(`/chat/${last.profile}/${last.session_id}`)}>Resume</Btn>}
+          <Btn kind={last ? 'ghost' : 'primary'} busy={busy} onClick={() => void start()}>New chat</Btn>
         </div>
       </div>
-      <p className="mt-1 text-muted">Opens a session seeded with the {noun} brief; the agent only talks, it does not start work.</p>
+      <p className="mt-1 text-muted">{last ? <>Resume continues <span className="font-mono text-accent-2">{profile}</span>'s latest chat about this {noun}; </>: null}New chat opens a session seeded with the {noun} brief; the agent only talks, it does not start work.</p>
       {sessions.isLoading && <div className="mt-2"><Loading rows={2} /></div>}
       {sessions.data && sessions.data.sessions.length > 0 && (
         <ul className="mt-2 flex flex-col gap-1">
