@@ -49,7 +49,7 @@ export type Task = {
   id: number; title: string; description: string; definition_of_done: string; status: string; assignee_profile: string | null
   project_slug: string; project_name?: string; goal_id: number | null; goal_title: string | null; goal_status?: string | null
   review_policy: string; is_code: number; summary: string | null; feedback: string | null; result_paths: string[]
-  created_at: number; updated_at: number | null; human: Human
+  created_at: number; updated_at: number | null; human: Human; schedule_id?: number | null
   deps: { id: number; status: string; title: string }[]; last_run?: Run | null
 }
 export type TaskDetail = Task & {

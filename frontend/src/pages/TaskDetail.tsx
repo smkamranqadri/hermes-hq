@@ -40,6 +40,7 @@ export function TaskDetail() {
             <StatusBadge human={{ state: t.human.state, reason: t.human.reason?.split(':')[0] }} live={st === 'running'} /><span className="font-mono">engine: {t.status}</span>{sys.data && (st === 'running' || st === 'ready') && <span className={`font-mono ${st === 'ready' && sys.data.running >= sys.data.cap ? 'text-needsyou' : ''}`}>· slots {sys.data.running}/{sys.data.cap} busy{st === 'ready' && !sys.data.paused && sys.data.running >= sys.data.cap ? ' — waiting for a free slot' : ''}{st === 'ready' && sys.data.paused ? ' — dispatcher paused' : ''}</span>}
             <Agent name={t.assignee_profile} />{!!t.is_code && <Chip>code</Chip>}<Chip>review {t.review_policy}</Chip>
             {t.goal_title && <span>· goal #{t.goal_id} {t.goal_title}</span>}
+            {t.schedule_id != null && <Link to="/schedules" className="text-accent-2 hover:underline">· ⟳ created by a schedule</Link>}
           </div>
         </div>
         {t.human.reason && t.human.reason.includes(':') && <p className="basis-full text-sm text-needsyou">{t.human.reason.slice(t.human.reason.indexOf(':') + 1).trim()}</p>}

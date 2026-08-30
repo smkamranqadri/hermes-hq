@@ -1,4 +1,5 @@
 import { Link } from 'react-router-dom'
+import { useQuery } from '@tanstack/react-query'
 import { useOverview, ago } from '../api'
 import { GlassCard, PageHeader } from '../components/GlassCard'
 import { TaskRow } from '../components/TaskRow'
@@ -12,13 +13,22 @@ function Stat({ label, value, to, tone }: { label: string; value: number | strin
   return to ? <Link to={to}>{inner}</Link> : inner
 }
 
+function NextSchedule() {
+  const n = useQuery({ queryKey: ['schedules-next'], queryFn: () => fetch('/api/schedules/next').then(r => r.json()), refetchInterval: 60000 })
+  if (!n.data?.next?.length) return null
+  const first = n.data.next[0]
+  const mins = Math.max(0, Math.round((first.at - Date.now() / 1000) / 60))
+  const when = mins < 60 ? `${mins} min` : `${Math.round(mins / 60)} h`
+  return <Link to="/schedules" className="font-mono text-[10px] text-muted hover:text-fg">⟳ next: {first.name} in {when}{n.data.total_enabled > 1 ? ` · ${n.data.total_enabled - 1} more` : ''}</Link>
+}
+
 export function Overview() {
   usePageTitle('Overview')
   const q = useOverview()
   const d = q.data
   return (
     <section className="mx-auto max-w-6xl p-4 sm:p-6">
-      <PageHeader crumb="overview" title="Overview" right={d && <span className="font-mono text-[10px] text-muted">{d.stats.paused ? 'dispatcher paused' : `cap ${d.stats.cap || '—'}`} · updated {ago(d.ts)}</span>} />
+      <PageHeader crumb="overview" title="Overview" right={<span className="flex flex-wrap items-center gap-3"><NextSchedule />{d && <span className="font-mono text-[10px] text-muted">{d.stats.paused ? 'dispatcher paused' : `cap ${d.stats.cap || '—'}`} · updated {ago(d.ts)}</span>}</span>} />
       {q.isLoading && <><div className="grid grid-cols-2 gap-3 sm:grid-cols-4"><Loading rows={4} card /></div><div className="mt-6"><Loading rows={3} /></div></>}
       {q.isError && <Empty error title="Could not load /api/overview" note={String(q.error)} />}
       {d && (

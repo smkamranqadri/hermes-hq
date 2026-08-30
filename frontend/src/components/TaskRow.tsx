@@ -16,6 +16,7 @@ export function TaskRow({ t, showProject = true, stacked = false }: { t: Task; s
           {showProject && <span>· {t.project_slug}</span>}
           {t.goal_title && <span className="truncate">· {t.goal_title}</span>}
           {!!t.is_code && <Chip>code</Chip>}
+          {t.schedule_id != null && <Chip tone="muted">⟳ scheduled</Chip>}
         </span>
         {t.human.reason && t.human.reason.length > 40 && (
           <span className="mt-1 line-clamp-2 text-[11px] text-needsyou/90">{t.human.reason}</span>
