@@ -62,10 +62,12 @@ def test_ws_requires_cookie_and_origin(env):
         with c.websocket_connect("/api/terminal/ws"):        # no Origin at all
             pass
     assert e.value.code == terminal.CLOSE_BAD_ORIGIN
-    with pytest.raises(WebSocketDisconnect) as e:
-        with c.websocket_connect("/api/terminal/ws?session=nope", headers={"origin": "http://testserver"}):
-            pass
-    assert e.value.code == terminal.CLOSE_NOT_FOUND
+    with c.websocket_connect("/api/terminal/ws?session=nope", headers={"origin": "http://testserver"}) as ws:
+        err = json.loads(ws.receive_text())
+        assert err == {"t": "err", "code": terminal.CLOSE_NOT_FOUND, "reason": "session gone"}
+        with pytest.raises(WebSocketDisconnect) as e:
+            ws.receive_text()
+        assert e.value.code == terminal.CLOSE_NOT_FOUND
 
 
 def test_shell_user_resize_reattach_close(env):
@@ -124,10 +126,11 @@ def test_exit_notifies_and_limit(env, monkeypatch):
         _hello(ws)
         assert c.post("/api/terminal/spawn").status_code == 429
         from starlette.websockets import WebSocketDisconnect
-        with pytest.raises(WebSocketDisconnect) as e:
-            with c.websocket_connect("/api/terminal/ws", headers=O):
-                pass
-        assert e.value.code == terminal.CLOSE_LIMIT
+        with c.websocket_connect("/api/terminal/ws", headers=O) as ws2:
+            assert json.loads(ws2.receive_text())["code"] == terminal.CLOSE_LIMIT
+            with pytest.raises(WebSocketDisconnect) as e:
+                ws2.receive_text()
+            assert e.value.code == terminal.CLOSE_LIMIT
 
 
 def test_close_no_csrf_is_403(env):
