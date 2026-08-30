@@ -30,6 +30,12 @@ class DispatcherLoop:
         self._stop.set()
 
     def tick_once(self):
+        try:   # schedules fire even while dispatching is paused (a create is a write, not a claim)
+            fired = wm_store.fire_due(db_path=wm_store.DEFAULT_DB_PATH)
+            if fired:
+                log.info("schedules fired: %s", fired)
+        except Exception:
+            log.exception("schedule firing failed")
         summary = wm_dispatch.run_dispatch(db_path=wm_store.DEFAULT_DB_PATH)
         self.last_tick = time.time()
         try:   # notifications + web push must not depend on a browser polling
