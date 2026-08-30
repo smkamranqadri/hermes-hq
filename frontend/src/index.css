@@ -197,3 +197,4 @@ header.glass {
   header.glass { padding-top: calc(0.5rem + env(safe-area-inset-top, 0px)); height: calc(4rem + env(safe-area-inset-top, 0px)); padding-left: calc(1rem + env(safe-area-inset-left, 0px)); padding-right: calc(1rem + env(safe-area-inset-right, 0px)); }
 }
 main { padding-bottom: env(safe-area-inset-bottom, 0px); }
+@media (max-width: 639px) { :root { --hq-tabbar: calc(3.25rem + env(safe-area-inset-bottom, 0px)); } main { padding-bottom: var(--hq-tabbar); } }

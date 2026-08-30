@@ -108,7 +108,7 @@ function useKeyboardInset(box: React.RefObject<HTMLDivElement | null>) {
       root.style.setProperty('--hq-kb', `${kb}px`); if (kb > 0) window.scrollTo({ top: 0 })
       // phones: the chat card fills exactly to the bottom of the visible viewport (no fixed rem guess)
       const card = box.current?.parentElement
-      if (card) { if (window.innerWidth < 640) { const top = card.getBoundingClientRect().top + window.scrollY; card.style.height = `${Math.max(224, Math.round(vh - top - 12))}px` } else card.style.height = '' }
+      if (card) { if (window.innerWidth < 640) { const top = card.getBoundingClientRect().top + window.scrollY; const bar = kb > 0 ? 0 : (document.querySelector('[data-tabbar]')?.getBoundingClientRect().height ?? 0); card.style.height = `${Math.max(224, Math.round(vh - top - 12 - bar))}px` } else card.style.height = '' }
     }
     apply(); const t = setTimeout(apply, 150)
     vv?.addEventListener('resize', apply); vv?.addEventListener('scroll', apply); window.addEventListener('resize', apply)
@@ -351,7 +351,7 @@ export function Chat() {
   const sessionNav = profile && (
     <>
       <div className="flex items-center justify-between gap-2">
-        <Select value={profile} onChange={e => nav(e.target.value ? `/chat/${e.target.value}` : '/chat')} className="min-w-0 max-w-[9rem]" aria-label="Agent">
+        <Select value={profile} onChange={e => nav(e.target.value ? `/chat/${e.target.value}` : '/chat')} className="min-w-0 max-w-[12rem] lg:max-w-[9rem]" aria-label="Agent">
           {installed.map(a => <option key={a.name} value={a.name}>{a.name}</option>)}
         </Select>
         {agent && <GatewayDot g={agent.gateway} />}

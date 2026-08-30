@@ -2,6 +2,8 @@ import { useEffect, useState } from 'react'
 import { Route, Routes } from 'react-router-dom'
 import { useQuery, useQueryClient } from '@tanstack/react-query'
 import { TopBar, TABS, TOOLS } from './components/TopBar'
+import { TabBar } from './components/TabBar'
+import { More } from './pages/More'
 import { GlassCard, PageHeader } from './components/GlassCard'
 import { ToastProvider } from './components/Toast'
 import { LoginScreen } from './components/LoginScreen'
@@ -123,6 +125,7 @@ export default function App() {
     <ToastProvider>
       <div className="min-h-full">
         <TopBar />
+        <TabBar />
         <SnapshotBanner />
         <main>
           <Routes>
@@ -139,6 +142,7 @@ export default function App() {
             <Route path="/chat/:profile" element={<Chat />} />
             <Route path="/chat/:profile/:id" element={<Chat />} />
             <Route path="/system" element={<System />} />
+            <Route path="/more" element={<More />} />
           </Routes>
         </main>
       </div>
