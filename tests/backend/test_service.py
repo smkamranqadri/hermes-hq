@@ -96,9 +96,18 @@ def test_updater_noop_dirty_and_update(gitrepo, tmp_path):
     code, res = _run_updater(clone)
     assert code == 1 and "dirty" in res["error"]
     _git(clone, "checkout", "--", "a.txt")
+    # local AHEAD of origin (unpushed commits) → still a noop, no pointless restart
+    (clone / "local.txt").write_text("l"); _git(clone, "add", "."); _git(clone, "commit", "-qm", "local-only")
+    code, res = _run_updater(clone)
+    assert code == 0 and res["noop"]
     (origin / "b.txt").write_text("2"); _git(origin, "add", "."); _git(origin, "commit", "-qm", "c2")
     # no pyproject/frontend changes → steps = pull + restart; force the 'none' supervisor answer
     hq_home = tmp_path / "upd-hq"; hq_home.mkdir()
+    # diverged (local ahead + origin ahead) → ff-only pull refuses, clearly
+    code, res = _run_updater(clone)
+    assert code == 1 and "diverged" in res["error"]
+    _git(clone, "reset", "--hard", "@{u}")
+    _git(origin, "commit", "-qm", "c3", "--allow-empty")
     code, res = _run_updater(clone, {"HERMES_HQ_SUPERVISOR": "none", "HERMES_HQ_HOME": str(hq_home)})
     # supervisor 'none' → restart returns 2 → updater reports restart failure but HAS pulled
     assert code == 1 and res["error"] == "supervisor restart failed" and "pull" in res["steps"]
