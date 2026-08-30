@@ -4,11 +4,11 @@
 **hermes-hq is the live control plane since 2026-08-29 13:40 UTC** (branch `main`). Process: `nohup .venv/bin/hermes-hq serve --host 0.0.0.0 --port 9010 --interval 20 > /opt/data/hermes-hq-serve.log 2>&1 &` with the dispatcher ON; restart by hand after backend changes (`pkill -f 'hermes-hq serve'` in its own command, then that line). Password file `/opt/data/hermes-hq/password` is `test` for the owner's review (generated one kept in `password.prev`). Frontend builds go live without a restart. HTTPS for the phone: `tailscale serve` on the owner's Mac fronts this VM's `:9010` (Knowledge → Web Push). Legacy WM rollback recipe: `knowledge/technical.md` → Legacy WM.
 
 ## Now
-Task: **Group 5 — Project files** — planned 2026-08-30 (`intent/Group5Plan.md`, Phase mode: 5-1 backend API → 5-2 desktop page → 5-3 phone). 5-1 backend API and 5-2 desktop page DONE 2026-08-30 (live). Next: **5-3 phone** (390 px pass of `/files`: sheet, editor, save, no overflow). Reference explorer in hermes-workspace is on the lineage allow-list. Then Group 6 browsers (Hermes gateway has `GET /v1/skills` and `GET /v1/toolsets` for it).
-Groups 1–4 and 4b (chat polish, option cards, notifications incl. Web Push, mobile IA) are complete as of 2026-08-30 (`intent/Group4bPlan.md`).
+Task: **Group 6 — Browsers** (terminal, memory, skills, MCP — PRD item 6) — not planned yet; start the next session with `/kis:plan`. Inputs: `PRD.md` item 6, hermes-workspace's terminal/memory/skills/MCP browsers (on the lineage allow-list), Hermes gateway `GET /v1/skills` and `GET /v1/toolsets`, Tools menu / phone More page already route to the `/terminal`, `/memory`, `/skills`, `/mcp` placeholders.
+Groups 1–5 are complete as of 2026-08-30 (`intent/Group5Plan.md` for files: two roots, full edit set, CodeMirror, phone sheet).
 
 ## Next
-Group 5: 5-2 desktop page → 5-3 phone; then Group 6 browsers, then Group 7 schedules.
+Group 6 browsers (plan first), then Group 7 schedules.
 
 ## Blocker
 None.
@@ -23,12 +23,15 @@ None.
 - The orchestrator SOUL overlay is not applied to the live root profile (button on Agents); option cards don't depend on it any more.
 - Dispatched task runs (CLI sessions) don't get the hq-options hint; a "Needs you" prompt for a run that asks a question is not built.
 - Task detail is long on phones (all blocks stacked); Activity has no "load more".
+- Toasts render over the phone tab bar (global `Toast.tsx`, every page); should sit above it.
+- Files page: the Artifacts group lists every `result_path` flat (27 on personal-brand; collapsed by default over 8); no grouping by task. Playwright note: taps on sheet rows under `isMobile` were intercepted intermittently in the harness while `elementFromPoint` showed no overlap — harness flake, not reproduced by hand.
 
 ## How to run
 `README.md`. Dev: `.venv/bin/hermes-hq serve --no-dispatcher` + `cd frontend && npm run dev`. Owner drops reference images in `screenshots/` (git-ignored). Playwright: settings in memory `hermes-hq-ops` (browser path, 390×844 + `isMobile` for phones); scripts are per-session.
 
 ## Proof (latest, one line per shipped area — details are in git history)
 - Suite: `tests/backend` **61 passed** (2026-08-30, incl. 10 in `test_files.py`).
+- Files phone 5-3 2026-08-30 (Playwright 390×844 `isMobile`, live `personal-brand`): Browse → bottom sheet (root select, ＋ menu, tree) → tap file → sheet closes, editor fills the card (bottom 733 < tab bar 778); New file from the sheet → type → Save → on disk; Preview; row menu Delete → gone; More → Files; name field 16 px; scrollWidth 390/390 on every screen; no page errors. Bug found and fixed on the way: modals opened from the sheet were drawn under it (same z layer) — opening a modal now closes the sheet.
 - Files page 5-2 2026-08-30 (Playwright 1440, live `personal-brand`): Project detail → Files link; open .md → CodeMirror with theme colours; Preview renders; New file → type → Ctrl-S → on disk → reload shows it; disk change + Save → "File changed on disk" → Reload shows the agent's line; row menu Rename → on disk; Delete → gone, editor closed; New folder + Upload 2 files → on disk; Projects root lists `/opt/data/projects`; escape deep-link → "Could not open / outside root". Main bundle unchanged (580 KB); Files chunk 454 KB lazy, grammars per file.
 - Files API 5-1 2026-08-30: live `personal-brand` root — list/read 200, write created → second write 409, `../hermes-hq/password` 403, absolute path 403, POST without CSRF 403, delete 200 and gone from disk, artifacts lists `result_paths`. Reviewer (security lens) found 0 Critical / 2 Important, both fixed with regression tests (planted `.hq-tmp` symlink, HTML/SVG forced to attachment + nosniff + CSP sandbox).
 - Web Push 2026-08-30: owner's iPhone (Home-Screen app over Tailscale https) — `POST /api/push/test` → `{subscriptions: 1, delivered: 1}` after switching the VAPID contact off `@localhost` (Apple 403 BadJwtToken before). Fake-push-service pytest covers aes128gcm body + VAPID header + 410 pruning.

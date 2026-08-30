@@ -1,4 +1,4 @@
-# Group 5 — Project files (approved 2026-08-30, Phase mode)
+# Group 5 — Project files (approved 2026-08-30, Phase mode) — COMPLETE 2026-08-30 (5-1 API, 5-2 desktop page, 5-3 phone all proved live)
 
 PRD item 5: browse/edit, project-scoped or global. Owner decisions 2026-08-30: **A** two roots only (projects root + a project's `primary_path`, realpath-contained); **B** full edit set (write/mkdir/rename/delete/upload, delete behind confirm); **A** CodeMirror 6 editor with markdown preview; **A** one page `/files` with root switcher + deep links + Project-detail link + artifacts group; **B** phone = bottom-sheet tree over a full-screen editor; **A** lazy per-directory listing with hidden/excluded toggle; **A** 1 MB text cap, inline image preview, PDF via view, others download-only, mtime conflict check on save. Reference (allowed in lineage): `../hermes-workspace/src/routes/files.tsx`, `api/files.ts`, `components/file-explorer/*`.
 
@@ -15,8 +15,8 @@ Proof: pytest green; curl of list/read/write against a real project on the live 
 3. [x] Project detail: **Files** link → `/files?root=project:<slug>`; Artifacts group above the tree when a project root is selected (outside-root ones as download-only).
 Proof: Playwright 1440: open a project, edit + save a file, reload shows the change; rename + delete round-trip; upload appears.
 
-## 5-3 Phone
-1. [ ] 390 px: editor fills the card; tree in a bottom sheet (pattern of the chat sessions sheet), breadcrumb button opens it; action row (Save/menu) above the tab bar with safe areas; 16 px fields; no horizontal overflow (`min-w-0`).
+## 5-3 Phone — DONE 2026-08-30
+1. [x] 390 px: editor fills the card; tree in a bottom sheet (pattern of the chat sessions sheet), breadcrumb button opens it; action row (Save/menu) above the tab bar with safe areas; 16 px fields; no horizontal overflow (`min-w-0`).
 Proof: Playwright 390×844 `isMobile` screenshots of tree sheet, editor, save.
 
 Out of scope: search-in-files, git status/diff, "open in chat", drag-drop upload, editing artifacts outside every root, arbitrary filesystem paths, multi-user locks.
