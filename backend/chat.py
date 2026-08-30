@@ -381,12 +381,24 @@ def stream_turn(profile, session_id, message, db_path=None, model=None, effort=N
 
     def gen():
         last_touch = 0.0
+        final = {"text": "", "run_id": None, "event": None}
         try:
             while True:
                 chunk = r.readline()
                 if not chunk:
                     break
                 yield chunk
+                line = chunk.decode("utf-8", "replace").strip()
+                if line.startswith("event: "):
+                    final["event"] = line[7:]
+                elif line.startswith("data: ") and final["event"] in ("assistant.completed", "run.started"):
+                    try:
+                        d = json.loads(line[6:])
+                        final["run_id"] = d.get("run_id") or final["run_id"]
+                        if final["event"] == "assistant.completed" and isinstance(d.get("content"), str):
+                            final["text"] = d["content"]
+                    except ValueError:
+                        pass
                 now = time.time()
                 if now - last_touch > 30:   # keep the idle sweeper off a live turn
                     gateways.touch(profile, db_path); last_touch = now
@@ -395,4 +407,21 @@ def stream_turn(profile, session_id, message, db_path=None, model=None, effort=N
         finally:
             c.close()
             gateways.touch(profile, db_path)
+            _notify_turn_done(profile, session_id, final["run_id"], final["text"], db_path)
     return gen()
+
+
+def _notify_turn_done(profile, session_id, run_id, text, db_path):
+    """Server-side notification for every finished hq chat turn (so every device sees it; the device that
+    watched the reply marks it read straight away via source_key)."""
+    if not text or not text.strip():
+        return
+    asked = "```hq-options" in text
+    body = re.sub(r"```[\s\S]*?```", "", text).strip()[:200] or None
+    try:
+        store.add_notification("question" if asked else "chat",
+                               "%s asked you a question" % profile if asked else "%s replied" % profile,
+                               body, "/chat/%s/%s" % (profile, session_id),
+                               source_key="chat:%s:%s" % (session_id, run_id or int(time.time())), db_path=db_path)
+    except Exception:   # never break a finished stream over bookkeeping
+        logging.getLogger("backend.chat").exception("notification for finished turn failed")
