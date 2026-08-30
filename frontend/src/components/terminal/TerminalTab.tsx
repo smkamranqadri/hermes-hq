@@ -99,6 +99,7 @@ export const TerminalTab = forwardRef<TermHandle, { tab: TermTab; visible: boole
     const t = new Terminal({ cursorBlink: true, fontSize: mobile ? 12 : 13, fontFamily: '"JetBrains Mono", Menlo, Monaco, Consolas, monospace', theme: theme(), allowProposedApi: true, scrollback: 5000 })
     const f = new FitAddon(); const s = new SearchAddon()
     t.loadAddon(f); t.loadAddon(s); t.loadAddon(new WebLinksAddon((_e, uri) => window.open(uri, '_blank', 'noopener')))
+    t.attachCustomKeyEventHandler(e => !((e.ctrlKey || e.metaKey) && e.key === '`'))   // app shortcut, never shell input
     t.open(el)
     term.current = t; fit.current = f; search.current = s
     t.onData(d => {
