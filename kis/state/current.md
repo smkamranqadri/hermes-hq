@@ -4,12 +4,11 @@
 **hermes-hq is the live control plane since 2026-08-29 13:40 UTC** (branch `main`). Process: `nohup .venv/bin/hermes-hq serve --host 0.0.0.0 --port 9010 --interval 20 > /opt/data/hermes-hq-serve.log 2>&1 &` with the dispatcher ON; restart by hand after backend changes (`pkill -f 'hermes-hq serve'` in its own command, then that line). Password file `/opt/data/hermes-hq/password` is `test` for the owner's review (generated one kept in `password.prev`). Frontend builds go live without a restart. HTTPS for the phone: `tailscale serve` on the owner's Mac fronts this VM's `:9010` (Knowledge → Web Push). Legacy WM rollback recipe: `knowledge/technical.md` → Legacy WM.
 
 ## Now
-Task: **Group 6 — Browsers**, sub-phase **6-1 Terminal** (`intent/Group6Plan.md`, approved 2026-08-30, Phase mode) — IN PROGRESS 2026-08-30.
-Ledger: [ ] 1 backend `terminal.py` (WS auth is route-level: `AuthMiddleware` never sees WebSocket handshakes) + tests → [ ] 2 desktop page/tabs/panel → [ ] 3 phone → [ ] security review → proof on live :9010 (Playwright 1440 + 390 `isMobile`).
+Task: **Group 6 — Browsers**, sub-phase **6-2 Memory** (`intent/Group6Plan.md`, Phase mode). 6-1 Terminal is DONE 2026-08-30 (live on :9010). Next command: `/kis:act`.
 Groups 1–5 are complete as of 2026-08-30.
 
 ## Next
-6-2 Memory → 6-3 Skills → 6-4 MCP, then Group 7 schedules.
+6-3 Skills → 6-4 MCP, then Group 7 schedules.
 
 ## Blocker
 None.
@@ -31,7 +30,8 @@ None.
 `README.md`. Dev: `.venv/bin/hermes-hq serve --no-dispatcher` + `cd frontend && npm run dev`. Owner drops reference images in `screenshots/` (git-ignored). Playwright: settings in memory `hermes-hq-ops` (browser path, 390×844 + `isMobile` for phones); scripts are per-session.
 
 ## Proof (latest, one line per shipped area — details are in git history)
-- Suite: `tests/backend` **61 passed** (2026-08-30, incl. 10 in `test_files.py`).
+- Suite: `tests/backend` **66 passed** (2026-08-30, incl. 5 in `test_terminal.py`: cookie/Origin refusals, uid 10000 in the child, `stty size` after resize, ring replay on reattach, exit code, limit 4429, CSRF on close, logout → 4401).
+- Terminal 6-1 2026-08-30 (Playwright on live :9010, 1440 + 390 `isMobile`): `id -u` → 10000, USER=hermes, HOME=/opt/data/home; `stty size` 38×153 → 26×117 after a viewport change; reload → `[reattached]` with the marker replayed, still one session; second tab = second PTY (sessions 1→2→1 after ×); Ctrl+` on /tasks shows the same shell in the bottom panel, Ctrl+` hides it; `?session=nope` → browser sees 4404; phone: scrollWidth 390/390, field 16 px, key-row ^C gives `$?=130`, card bottom 733 < tab bar 778, panel never shown; no page errors. Screenshot review caught the JSX `"\x03"` bug; security review (10 findings, all fixed with tests where testable).
 - Files follow-ups 2026-08-30 (owner): root dropdown uses the app's `hq-select` arrow; `.html` gets a Preview that renders the saved file in a sandboxed iframe (`raw?preview=1` → inline with CSP `sandbox allow-scripts; connect-src 'none'`, no `allow-same-origin`; plain link stays download-only). Proved: iframe body text read on desktop and phone; pytest 61.
 - Files phone 5-3 2026-08-30 (Playwright 390×844 `isMobile`, live `personal-brand`): Browse → bottom sheet (root select, ＋ menu, tree) → tap file → sheet closes, editor fills the card (bottom 733 < tab bar 778); New file from the sheet → type → Save → on disk; Preview; row menu Delete → gone; More → Files; name field 16 px; scrollWidth 390/390 on every screen; no page errors. Bug found and fixed on the way: modals opened from the sheet were drawn under it (same z layer) — opening a modal now closes the sheet.
 - Files page 5-2 2026-08-30 (Playwright 1440, live `personal-brand`): Project detail → Files link; open .md → CodeMirror with theme colours; Preview renders; New file → type → Ctrl-S → on disk → reload shows it; disk change + Save → "File changed on disk" → Reload shows the agent's line; row menu Rename → on disk; Delete → gone, editor closed; New folder + Upload 2 files → on disk; Projects root lists `/opt/data/projects`; escape deep-link → "Could not open / outside root". Main bundle unchanged (580 KB); Files chunk 454 KB lazy, grammars per file.
