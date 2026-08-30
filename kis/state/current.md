@@ -4,11 +4,11 @@
 **hermes-hq is the live control plane since 2026-08-29 13:40 UTC** (branch `main`). Process: `nohup .venv/bin/hermes-hq serve --host 0.0.0.0 --port 9010 --interval 20 > /opt/data/hermes-hq-serve.log 2>&1 &` with the dispatcher ON; restart by hand after backend changes (`pkill -f 'hermes-hq serve'` in its own command, then that line). Password file `/opt/data/hermes-hq/password` is `test` for the owner's review (generated one kept in `password.prev`). Frontend builds go live without a restart. Legacy WM rollback recipe: `knowledge/technical.md` → Legacy WM. Latest commit at sync: see `git log`.
 
 ## Now
-Task: **Group 4 — direct chat scopes — COMPLETE 2026-08-30** (`intent/Group4Plan.md`). Next task: **Group 5 — Project files** (browse/edit, project-scoped or global) — not planned yet; start with `/kis:plan`.
+Task: **Group 4 — direct chat scopes — COMPLETE 2026-08-30** (`intent/Group4Plan.md`). Next: **Group 4b — Chat polish + notifications** (`intent/Group4bPlan.md`, Phase mode, planned 2026-08-30); start with 4b-1 transcript rendering via `/kis:act`. Group 5 files after 4b.
 Groups 1–4 are complete as of 2026-08-30.
 
 ## Next
-Group 5 project files, then Group 6 browsers per PRD.
+Group 4b (6 phases: transcript, sessions, composer, option cards, notifications, mobile), then Group 5 project files.
 
 ## Blocker
 None.
