@@ -1,4 +1,4 @@
-# Group 1 — Work core (approved 2026-08-29)
+# Group 1 — Work core (approved 2026-08-29) — COMPLETE 2026-08-29 (1a read, 1b writes; proof in State git history)
 
 Decisions: snapshot the live WM now and cut over at the end of Group 1 (not before); reads before writes; Tasks page = list by default grouped by human state, board optional, newest first.
 
