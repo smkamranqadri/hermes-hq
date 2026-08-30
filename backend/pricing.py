@@ -208,7 +208,42 @@ def hermes_providers(profile=None):
     return [{"id": i, "name": names.get(i, i), "active": i == active} for i in ids]
 
 
-def models_for_hermes_provider(hermes_id, prefix=None, limit=200):
-    _load()
-    md = HERMES_TO_MODELS_DEV.get(hermes_id, hermes_id)
-    return model_ids(prefix, limit=limit, provider=md if md in _providers else None)
+def _read_json(path):
+    try:
+        with open(path) as f:
+            return json.load(f)
+    except (OSError, ValueError):
+        return None
+
+
+def hermes_models_for_provider(hermes_id, profile=None, prefix=None, limit=300):
+    """Models Hermes itself lists for a provider — what its `/model` picker shows:
+    1. `<home>/provider_models_cache.json` (live `/models` results Hermes fetched; profile home first, then root),
+    2. `<home>/cache/model_catalog.json` (Hermes' curated catalogue).
+    [{id, description}], live entries first, de-duplicated. Empty when Hermes knows nothing (free text then)."""
+    homes = []
+    if profile and profile != store.ORCHESTRATOR_AGENT:
+        homes.append(os.path.join(store.resolve_profiles_dir(), profile))
+    homes.append(store.hermes_home())
+    out, seen = [], set()
+
+    def add(mid, desc=""):
+        if isinstance(mid, str) and mid and mid not in seen:
+            seen.add(mid); out.append({"id": mid, "description": desc or ""})
+    for home in homes:
+        cache = _read_json(os.path.join(home, "provider_models_cache.json")) or {}
+        entry = cache.get(hermes_id) if isinstance(cache, dict) else None
+        for m in (entry or {}).get("models") or []:
+            add(m)
+    for home in homes:
+        cat = _read_json(os.path.join(home, "cache", "model_catalog.json")) or {}
+        prov = ((cat.get("providers") or {}).get(hermes_id) or {}) if isinstance(cat, dict) else {}
+        for m in prov.get("models") or []:
+            if isinstance(m, dict):
+                add(m.get("id"), m.get("description"))
+            else:
+                add(m)
+    if prefix:
+        pl = prefix.lower()
+        out = [m for m in out if pl in m["id"].lower()]
+    return out[:limit]
