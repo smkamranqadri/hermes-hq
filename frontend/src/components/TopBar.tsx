@@ -51,7 +51,7 @@ export function TopBar() {
           </Menu>
           <AppearanceMenu />
         </span>
-        <Bell />
+        <span className="hidden sm:contents"><Bell /></span>
         <span className="flex items-center gap-2 font-mono text-[11px]">
           <span className={clsx('size-2 rounded-full', sys.isError ? 'bg-error text-error' : live ? 'hq-dot-live bg-working text-working' : 'bg-needsyou text-needsyou')} />
           <span>{sys.isError ? 'OFFLINE' : live ? 'LIVE' : 'PAUSED'}</span>

@@ -20,7 +20,7 @@ export function More() {
       <h1 className="mb-4 text-xl font-semibold tracking-tight">More</h1>
       <Label>Tools</Label>
       <GlassCard className="mb-5 mt-2 p-0">
-        {[...TOOLS, ['System', '/system'] as const].map(([label, to]) => <Link key={to} to={to} className={row}><span>{label}</span><span className="text-muted">›</span></Link>)}
+        {[['Agents', '/agents'] as const, ...TOOLS, ['System', '/system'] as const].map(([label, to]) => <Link key={to} to={to} className={row}><span>{label}</span><span className="text-muted">›</span></Link>)}
       </GlassCard>
       <Label>Appearance</Label>
       <GlassCard className="mb-5 mt-2 p-3">
