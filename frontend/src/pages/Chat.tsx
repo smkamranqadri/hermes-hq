@@ -60,26 +60,31 @@ function ScopeChip({ scope, className }: { scope: { project_slug: string | null;
   return <Link to={to} title={scope.task_title ?? scope.project_name ?? ''} onClick={e => e.stopPropagation()} className={clsx('inline-flex shrink-0 items-center rounded-full border border-accent/50 bg-accent/10 px-2 py-0.5 font-mono text-[10px] uppercase tracking-wider text-accent-2 hover:bg-accent/20', className)}>{label}</Link>
 }
 
-/** Model + context line under the composer; click to expand tokens and cost. */
+/** Status line under the composer, shaped like a terminal statusline: model · ██░░ pct · window · cost · scope. Click for the breakdown. */
 function ContextLine({ d }: { d: SessionDetail }) {
   const [open, setOpen] = useState(false)
   const cost = d.actual_cost_usd || d.estimated_cost_usd
   const est = d.cost_estimate
   const c = d.context
   const pct = c?.pct ?? null
-  const tone = pct == null ? '' : pct >= 90 ? 'text-needsyou' : pct >= 70 ? 'text-queued' : ''
+  const tone = pct == null ? 'text-muted' : pct >= 80 ? 'text-needsyou' : pct >= 50 ? 'text-queued' : 'text-working'
+  const filled = pct == null ? 0 : Math.min(10, Math.round(pct / 10))
+  const bar = '█'.repeat(filled) + '░'.repeat(10 - filled)
+  const scope = d.scope?.task_id ? `#${d.scope.task_id}` : d.scope?.project_slug
   return (
     <div className="mt-1.5 flex flex-wrap items-center gap-x-3 font-mono text-[10px] text-muted">
-      <button type="button" onClick={() => setOpen(o => !o)} className="inline-flex items-center gap-1.5 hover:text-fg" title={c ? `≈ ${c.used.toLocaleString()} of ${c.limit ? c.limit.toLocaleString() : '?'} tokens — transcript ${c.transcript.toLocaleString()} + system overhead ${c.overhead.toLocaleString()} (${c.source}); click for the breakdown` : 'click for the breakdown'}>
-        {d.model && <span>{d.model}</span>}
-        {c && c.used > 0 && <span className={tone}>· context ≈{pct != null ? ` ${pct < 1 ? '<1' : pct.toFixed(0)}%` : ''} ({fmtTokens(c.used)}{c.limit ? ` of ${fmtTokens(c.limit)}` : ''})</span>}
-        {c && c.limit && <span className="inline-block h-1 w-16 overflow-hidden rounded-full bg-inset align-middle"><span className={clsx('block h-full', pct != null && pct >= 90 ? 'bg-needsyou' : pct != null && pct >= 70 ? 'bg-queued' : 'bg-working')} style={{ width: `${Math.min(100, Math.max(1, pct ?? 0))}%` }} /></span>}
+      <button type="button" onClick={() => setOpen(o => !o)} className="inline-flex flex-wrap items-center gap-x-3 hover:text-fg" title={c ? `context ≈ ${c.used.toLocaleString()} of ${c.limit ? c.limit.toLocaleString() : '?'} tokens — transcript ${c.transcript.toLocaleString()} + system overhead ${c.overhead.toLocaleString()} (${c.source}); click for the breakdown` : 'click for the breakdown'}>
+        {d.model && <span className="text-accent-2">{d.model}</span>}
+        {c && c.used > 0 && <span className={tone}>{bar} {pct != null ? `${pct < 1 ? '<1' : pct.toFixed(0)}%` : fmtTokens(c.used)}{c.limit ? <span className="text-muted"> {fmtTokens(c.limit)}</span> : null}</span>}
+        {cost ? <span>${cost.toFixed(2)}</span> : est ? <span title={`≈ from models.dev prices for ${est.model}; Hermes reports this session as included`}>≈${est.usd.toFixed(2)}</span> : null}
+        {scope && <span className="opacity-70">{scope}</span>}
         <span>{open ? '▾' : '▸'}</span>
       </button>
       {open && <>
+        <span>context ≈{fmtTokens(c?.used)}{c?.limit ? ` of ${fmtTokens(c.limit)}` : ''} (transcript {fmtTokens(c?.transcript)} + system {fmtTokens(c?.overhead)})</span>
         <span>↓ in {fmtTokens(d.input_tokens)}</span><span>↑ out {fmtTokens(d.output_tokens)}</span>
         {d.cache_read_tokens ? <span>⟳ cache {fmtTokens(d.cache_read_tokens)}</span> : null}
-        {cost ? <span>${cost.toFixed(3)}</span> : est ? <span title={`≈ from models.dev prices for ${est.model}; Hermes reports this session as included`}>≈ ${est.usd.toFixed(3)} (models.dev)</span> : null}
+        {est && !cost ? <span>cost ≈${est.usd.toFixed(3)} via models.dev ({est.model})</span> : null}
         <span className="truncate">{d.id}</span>
       </>}
     </div>

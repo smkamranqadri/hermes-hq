@@ -26,6 +26,7 @@ None.
 `README.md`. Dev: `.venv/bin/hermes-hq serve --no-dispatcher` + `cd frontend && npm run dev`. Owner drops reference images in `screenshots/` (git-ignored).
 
 ## Proof (latest)
+- 2026-08-30 status line (owner: like the Claude Code statusline): `model ░░░░░░░░░░ 2% 1.1M ≈$0.00 personal-brand ▸`, colours 50/80 %, click → breakdown; 1440/390 clean.
 - 2026-08-30 context meter (owner: percentage of allowed): `/api/session` now carries `context {used, transcript, overhead, limit, pct}`; live orchestrator session ≈17.2k of 1.05M (2%), coder run 217 ≈70.8k (7%); bar turns amber ≥70 %, red ≥90 %. Suite 41 passed.
 - 2026-08-30 chat header de-clutter (owner layout): new-chat chooser in the chat area, scope chip + New chat in the page header, title-only card header, model/tokens line under the composer (click → ↓171 ↑19 ⟳16.9k ≈$0.002); Playwright 1440/390 clean.
 - 2026-08-30 4b-1 transcript (live :9010, Playwright 1440/390): coder `wm-run-217` session renders 41 tool cards + 18 thinking blocks from `tool_calls`/`reasoning` in state.db (card expands to args/result), usage strip `↓75.4k ↑4.5k ⟳1.2M ≈$0.220` (models.dev `gpt-5.6-luna`, Hermes says included); orchestrator turn rendered a GFM table, code block (Copy → clipboard `print("hello")`), bullet list; scroll-up shows the `↓ latest` pill and it clears on click; 3 starter chips; timestamps/tokens on hover; scrollWidth 390 on both sessions. Suite 41 passed.
