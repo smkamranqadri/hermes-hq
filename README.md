@@ -68,3 +68,22 @@ kis/              project memory (knowledge / intent / state) — read state fir
 ## License
 
 MIT — see [LICENSE](LICENSE).
+
+
+## Notifications and Web Push
+
+hermes-hq records notifications (tasks that need you, finished work, chat replies, agent questions) in `hq.db`
+and shows them in the bell (desktop) / Inbox tab (phones). Three delivery layers:
+
+1. **In-app** — always on while the app is open.
+2. **Browser alerts** — the Notification API; fires when the tab/app is not in front. iPhone only allows it for
+   a web app added to the Home Screen and served over https.
+3. **Web Push** — alerts while the app is closed or the phone is locked. Requirements: the app must be served
+   over **https** (e.g. `tailscale serve --bg --https=443 http://localhost:9010` on the host, or any reverse proxy
+   with a certificate); on iPhone, add it to the Home Screen first. Turn on *Push to this device* in Inbox.
+
+Nothing is configured per install: the VAPID key pair is generated on first use into
+`<hermes-hq home>/vapid_private.pem` (keep it — subscriptions are bound to it), subscriptions live in
+`push_subscriptions`, and pushes go out from the dispatcher loop, so they do not depend on any browser being
+open. Optional `HERMES_HQ_PUSH_CONTACT=mailto:you@example.com` sets the contact push services may use.
+Dead subscriptions (404/410 from the push service, or 8 failures in a row) are removed automatically.

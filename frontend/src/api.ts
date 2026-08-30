@@ -140,6 +140,12 @@ export const useNotifications = () => useQuery({ queryKey: ['notifications'], qu
 export const markNotificationsRead = (ids?: number[], source_key?: string) => post<{ marked: number }>('/api/notifications/read', source_key ? { source_key } : ids ? { ids } : {})
 export const addNotification = (n: { kind: 'chat' | 'question'; title: string; body?: string; href?: string; source_key?: string }) => post<{ id: number | null }>('/api/notifications', n)
 
+// ---- web push ---------------------------------------------------------
+export const getVapid = () => get<{ publicKey: string; subscriptions: number }>('/api/push/vapid')
+export const pushSubscribe = (sub: PushSubscriptionJSON) => post<{ id: number; subscriptions: number }>('/api/push/subscribe', { endpoint: sub.endpoint, keys: sub.keys })
+export const pushUnsubscribe = (endpoint: string) => post<{ removed: number }>('/api/push/unsubscribe', { endpoint })
+export const pushTest = () => post<{ subscriptions: number; delivered: number }>('/api/push/test')
+
 /** POST a chat message and stream the gateway's SSE events back. Resolves when the stream ends. */
 export type MessagePart = { type: 'text'; text: string } | { type: 'image_url'; image_url: { url: string } }
 export type TurnOptions = { model?: string; provider?: string; effort?: string; fast?: boolean }

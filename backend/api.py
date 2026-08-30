@@ -112,9 +112,18 @@ def task_chat_sessions(task_id: int):
 
 @router.get("/notifications")
 def notifications(limit: int = Query(50, ge=1, le=200), unread: int = 0):
-    wm_store.sync_notifications(db_path=_db())
+    from backend import push
+    push.sync_and_push(db_path=_db())
     rows, n = wm_store.list_notifications(limit=limit, unread_only=bool(unread), db_path=_db())
     return {"notifications": rows, "unread": n}
+
+
+@router.get("/push/vapid")
+def push_vapid():
+    from backend import push
+    _, public = push.vapid()
+    subs = wm_store.list_push_subscriptions(db_path=_db())
+    return {"publicKey": public, "subscriptions": len(subs)}
 
 
 @router.get("/chat/models")

@@ -419,9 +419,12 @@ def _notify_turn_done(profile, session_id, run_id, text, db_path):
     asked = "```hq-options" in text
     body = re.sub(r"```[\s\S]*?```", "", text).strip()[:200] or None
     try:
-        store.add_notification("question" if asked else "chat",
-                               "%s asked you a question" % profile if asked else "%s replied" % profile,
-                               body, "/chat/%s/%s" % (profile, session_id),
-                               source_key="chat:%s:%s" % (session_id, run_id or int(time.time())), db_path=db_path)
+        nid = store.add_notification("question" if asked else "chat",
+                                     "%s asked you a question" % profile if asked else "%s replied" % profile,
+                                     body, "/chat/%s/%s" % (profile, session_id),
+                                     source_key="chat:%s:%s" % (session_id, run_id or int(time.time())), db_path=db_path)
+        if nid:
+            from backend import push
+            push.push_notifications([nid], db_path=db_path)
     except Exception:   # never break a finished stream over bookkeeping
         logging.getLogger("backend.chat").exception("notification for finished turn failed")

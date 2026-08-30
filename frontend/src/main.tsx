@@ -18,3 +18,9 @@ createRoot(document.getElementById('root')!).render(
     </QueryClientProvider>
   </StrictMode>,
 )
+
+// Service worker for Web Push (registered only on secure origins; it does no caching)
+if ('serviceWorker' in navigator && (location.protocol === 'https:' || location.hostname === 'localhost')) {
+  window.addEventListener('load', () => { navigator.serviceWorker.register('/sw.js').catch(() => {}) })
+  navigator.serviceWorker.addEventListener('message', e => { if (e.data?.type === 'hq:navigate' && typeof e.data.href === 'string') window.location.assign(e.data.href) })
+}

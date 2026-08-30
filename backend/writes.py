@@ -330,7 +330,40 @@ def notifications_add(body: NotifIn):
     if body.kind not in ("chat", "question"):
         raise HTTPException(409, "kind must be chat or question")
     nid = store.add_notification(body.kind, body.title[:160], (body.body or "")[:400] or None, body.href, source_key=body.source_key, db_path=_db())
+    if nid:
+        from backend import push
+        push.push_notifications([nid], db_path=_db())
     return {"id": nid}
+
+
+# ---- web push ----------------------------------------------------------
+class PushSub(BaseModel):
+    endpoint: str = Field(min_length=10, max_length=2000)
+    keys: dict
+
+
+class PushEndpoint(BaseModel):
+    endpoint: str = Field(min_length=10, max_length=2000)
+
+
+@router.post("/push/subscribe")
+def push_subscribe(body: PushSub, request: Request):
+    ok_scheme = body.endpoint.startswith("https://") or body.endpoint.startswith("http://127.0.0.1") or body.endpoint.startswith("http://localhost")
+    if not ok_scheme or not isinstance(body.keys.get("p256dh"), str) or not isinstance(body.keys.get("auth"), str):
+        raise HTTPException(409, "subscription must have an https endpoint and p256dh/auth keys")
+    row = store.add_push_subscription(body.endpoint, {"p256dh": body.keys["p256dh"], "auth": body.keys["auth"]}, request.headers.get("user-agent"), db_path=_db())
+    return {"id": row["id"], "subscriptions": len(store.list_push_subscriptions(db_path=_db()))}
+
+
+@router.post("/push/unsubscribe")
+def push_unsubscribe(body: PushEndpoint):
+    return {"removed": store.remove_push_subscription(body.endpoint, db_path=_db())}
+
+
+@router.post("/push/test")
+def push_test():
+    from backend import push
+    return push.send_test(db_path=_db())
 
 
 # ---- system ------------------------------------------------------------

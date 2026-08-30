@@ -41,3 +41,20 @@ export function chime(kind: 'info' | 'attention' = 'info') {
     })
   } catch {}
 }
+
+// ---- Web Push (alerts while the app is closed) ----
+export const supportsPush = () => typeof window !== 'undefined' && 'serviceWorker' in navigator && 'PushManager' in window && (location.protocol === 'https:' || location.hostname === 'localhost')
+function b64ToBytes(b64: string) { const s = atob(b64.replace(/-/g, '+').replace(/_/g, '/').padEnd(Math.ceil(b64.length / 4) * 4, '=')); return Uint8Array.from(s, c => c.charCodeAt(0)) }
+export async function currentPushSubscription(): Promise<PushSubscription | null> {
+  if (!supportsPush()) return null
+  const reg = await navigator.serviceWorker.getRegistration('/'); return reg ? reg.pushManager.getSubscription() : null
+}
+export async function enablePush(publicKey: string): Promise<PushSubscription> {
+  const reg = await navigator.serviceWorker.register('/sw.js'); await navigator.serviceWorker.ready
+  const p = await requestPermission(); if (p !== 'granted') throw new Error(p === 'denied' ? 'Notifications are blocked for this site' : 'Notification permission not granted')
+  return reg.pushManager.subscribe({ userVisibleOnly: true, applicationServerKey: b64ToBytes(publicKey) as BufferSource })
+}
+export async function disablePush(): Promise<string | null> {
+  const sub = await currentPushSubscription(); if (!sub) return null
+  const endpoint = sub.endpoint; await sub.unsubscribe(); return endpoint
+}

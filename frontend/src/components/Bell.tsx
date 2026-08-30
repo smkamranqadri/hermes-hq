@@ -76,6 +76,7 @@ export function Bell() {
             <label className={clsx('flex items-center gap-1.5', (!supportsNotifications() || perm === 'denied') && 'opacity-60')} title={!supportsNotifications() ? (iosBrowser ? 'iPhone/iPad: add Hermes HQ to the Home Screen (Share → Add to Home Screen) and open it from there — Safari tabs cannot show notifications' : 'This browser has no Notification API') : perm === 'denied' ? 'Blocked in the browser — allow notifications for this site to enable' : 'OS notifications when a task needs you or an agent replies while this tab is not focused'}>
               <input type="checkbox" data-pref-browser checked={prefs.browser && perm === 'granted'} disabled={!supportsNotifications() || perm === 'denied'} onChange={() => void toggleBrowser()} /> Browser alerts{perm === 'denied' ? ' (blocked)' : !supportsNotifications() && iosBrowser ? ' — add to Home Screen first' : !supportsNotifications() ? ' (unsupported)' : ''}
             </label>
+            <button type="button" onClick={() => { setOpen(false); nav('/inbox') }} className="hover:text-fg" title="Full inbox and push settings">Inbox ›</button>
             <label className="flex items-center gap-1.5" title="Soft chime for new notifications and finished chat replies"><input type="checkbox" data-pref-sound checked={prefs.sound} onChange={e => { setPref({ sound: e.target.checked }); if (e.target.checked) chime('info') }} /> Sound</label>
           </div>
         </div>
