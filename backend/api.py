@@ -110,6 +110,13 @@ def task_chat_sessions(task_id: int):
     return {"sessions": wm_store.chat_sessions_for_task(task_id, db_path=_db())}
 
 
+@router.get("/notifications")
+def notifications(limit: int = Query(50, ge=1, le=200), unread: int = 0):
+    wm_store.sync_notifications(db_path=_db())
+    rows, n = wm_store.list_notifications(limit=limit, unread_only=bool(unread), db_path=_db())
+    return {"notifications": rows, "unread": n}
+
+
 @router.get("/chat/models")
 def chat_models(q: str = Query("", max_length=80), provider: str = Query("", max_length=80), profile: str = Query("", max_length=80)):
     from backend import pricing

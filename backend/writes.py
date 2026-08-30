@@ -305,6 +305,33 @@ def chat_send(profile: str, session_id: str, body: ChatIn):
                              headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"})
 
 
+# ---- notifications -----------------------------------------------------
+class NotifRead(BaseModel):
+    ids: list[int] | None = None      # None = all
+
+
+class NotifIn(BaseModel):
+    kind: str
+    title: str
+    body: str | None = None
+    href: str | None = None
+    source_key: str | None = None
+
+
+@router.post("/notifications/read")
+def notifications_read(body: NotifRead):
+    return {"marked": store.mark_notifications_read(body.ids, db_path=_db())}
+
+
+@router.post("/notifications")
+def notifications_add(body: NotifIn):
+    """Client-originated events (a chat reply finished while you were elsewhere, an agent asked a question)."""
+    if body.kind not in ("chat", "question"):
+        raise HTTPException(409, "kind must be chat or question")
+    nid = store.add_notification(body.kind, body.title[:160], (body.body or "")[:400] or None, body.href, source_key=body.source_key, db_path=_db())
+    return {"id": nid}
+
+
 # ---- system ------------------------------------------------------------
 @router.post("/system/pause")
 def pause():
