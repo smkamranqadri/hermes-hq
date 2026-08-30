@@ -9,6 +9,7 @@ writes, readiness gate) is Hermes' own — nothing is re-implemented here.
 ops: providers | config | activate | setup | graph | node | limits
      skills_list | skills_content | skills_create | skills_update | skills_toggle
      hub_sources | hub_search | hub_preview | hub_scan
+     mcp_list | mcp_add | mcp_remove | mcp_test | mcp_enabled | mcp_catalog | mcp_catalog_install
 """
 import json
 import sys
@@ -224,6 +225,68 @@ def op_hub_scan(body):
 OPS.update({"skills_list": op_skills_list, "skills_content": op_skills_content, "skills_create": op_skills_create,
             "skills_update": op_skills_update, "skills_toggle": op_skills_toggle, "hub_sources": op_hub_sources,
             "hub_search": op_hub_search, "hub_preview": op_hub_preview, "hub_scan": op_hub_scan})
+
+
+# -- MCP (Hermes dashboard router handlers) --------------------------------------------------------
+def op_mcp_list(body):
+    from hermes_cli.web_routers.mcp import list_mcp_servers
+    return _router_call(list_mcp_servers, None)
+
+
+def op_mcp_add(body):
+    from hermes_cli.web_routers.mcp import add_mcp_server
+    from hermes_cli.web_models import MCPServerCreate
+    from pydantic import SecretStr
+    tok = body.get("bearer_token")
+    m = MCPServerCreate(name=str(body.get("name") or ""), url=body.get("url") or None, command=body.get("command") or None,
+                        args=[str(a) for a in (body.get("args") or [])], env={str(k): str(v) for k, v in (body.get("env") or {}).items()},
+                        auth=body.get("auth") or None, bearer_token=SecretStr(tok) if tok else None)
+    return _router_call(add_mcp_server, m, None)
+
+
+def op_mcp_remove(body):
+    from hermes_cli.web_routers.mcp import remove_mcp_server
+    return _router_call(remove_mcp_server, str(body.get("name") or ""), None)
+
+
+def op_mcp_test(body):
+    from hermes_cli.web_routers.mcp import test_mcp_server
+    return _router_call(test_mcp_server, str(body.get("name") or ""), None)
+
+
+def op_mcp_enabled(body):
+    from hermes_cli.web_routers.mcp import set_mcp_server_enabled
+    from hermes_cli.web_models import MCPEnabledToggle
+    return _router_call(set_mcp_server_enabled, str(body.get("name") or ""), MCPEnabledToggle(enabled=bool(body.get("enabled"))), None)
+
+
+def op_mcp_catalog(body):
+    from hermes_cli.web_routers.mcp import list_mcp_catalog
+    return _router_call(list_mcp_catalog, None)
+
+
+def op_mcp_catalog_install(body):
+    """Sync catalog installs only; entries that need a git bootstrap are reported back so hq runs
+    `hermes mcp install <name>` as a job (the CLI path Hermes uses for the slow clone)."""
+    from hermes_cli import mcp_catalog
+    from hermes_cli.web_routers.mcp import install_mcp_catalog_entry
+    from hermes_cli.web_models import MCPCatalogInstall
+    name = str(body.get("name") or "")
+    entry = mcp_catalog.get_entry(name)
+    if entry is None:
+        return {"ok": False, "status": 404, "error": f"No catalog entry '{name}'"}
+    if entry.install is not None:
+        # write the env values the same way Hermes does, then let hq run the CLI install job
+        from hermes_cli.config import save_env_value
+        for k, v in (body.get("env") or {}).items():
+            if v:
+                save_env_value(str(k), str(v))
+        return {"ok": True, "name": name, "needs_cli_install": True}
+    return _router_call(install_mcp_catalog_entry, MCPCatalogInstall(name=name, env={str(k): str(v) for k, v in (body.get("env") or {}).items()}, enable=bool(body.get("enable", True))), None)
+
+
+OPS.update({"mcp_list": op_mcp_list, "mcp_add": op_mcp_add, "mcp_remove": op_mcp_remove, "mcp_test": op_mcp_test,
+            "mcp_enabled": op_mcp_enabled, "mcp_catalog": op_mcp_catalog, "mcp_catalog_install": op_mcp_catalog_install})
 
 if __name__ == "__main__":
     main()
