@@ -546,6 +546,15 @@ def append_meta(key, value, db_path=None):
         conn.close()
 
 
+def count_running_runs(db_path=None):
+    """Runs currently executing (status='running') — used by the auto-updater's skip rule."""
+    conn = _connect(db_path)
+    try:
+        return conn.execute("SELECT COUNT(*) FROM runs WHERE status='running'").fetchone()[0]
+    finally:
+        conn.close()
+
+
 def get_meta(key, default=None, db_path=None):
     conn = _connect(db_path)
     try:

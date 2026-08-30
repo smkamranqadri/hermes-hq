@@ -6,6 +6,9 @@ import sys
 
 def main(argv=None):
     argv = list(sys.argv[1:] if argv is None else argv)
+    if argv and argv[0] == "service":
+        from backend import service
+        return service.cli(argv[1:])
     if argv and argv[0] == "wm":
         from core import wm_cli
         return wm_cli.main(argv[1:])
@@ -17,6 +20,7 @@ def main(argv=None):
     s.add_argument("--no-dispatcher", action="store_true", help="serve without the background dispatcher")
     s.add_argument("--interval", type=float, default=30.0, help="dispatcher tick seconds")
     sub.add_parser("wm", help="engine CLI passthrough: hermes-hq wm <args>")
+    sub.add_parser("service", help="supervisor integration: hermes-hq service install|uninstall|status|restart|update|auto-update")
     im = sub.add_parser("import", help="import a legacy Work Manager dir (wm.db + runs/) into the hq home")
     im.add_argument("src_dir")
     im.add_argument("--force", action="store_true", help="replace an existing non-empty hq.db (a backup is kept)")
