@@ -135,8 +135,12 @@ export type SearchHit = { profile: string; id: string; title: string | null; mod
 export const useChatSearch = (q: string) => useQuery({ queryKey: ['chat-search', q], queryFn: () => get<{ results: SearchHit[] }>(`/api/chat/search?q=${encodeURIComponent(q)}`), enabled: q.trim().length >= 2, staleTime: 10000 })
 
 /** POST a chat message and stream the gateway's SSE events back. Resolves when the stream ends. */
-export async function streamChat(profile: string, sessionId: string, message: string, onEvent: (e: SseEvent) => void, signal?: AbortSignal): Promise<void> {
-  const r = await fetch(`/api/chat/${profile}/${sessionId}`, { method: 'POST', headers: { 'content-type': 'application/json', 'x-csrf': csrf }, body: JSON.stringify({ message }), signal })
+export type MessagePart = { type: 'text'; text: string } | { type: 'image_url'; image_url: { url: string } }
+export type TurnOptions = { model?: string; effort?: string; fast?: boolean }
+export const steerTurn = (profile: string, sessionId: string, runId: string, message: string) => post<{ run_id: string }>(`/api/chat/${profile}/${sessionId}/steer/${runId}`, { message })
+export const useModels = (q: string) => useQuery({ queryKey: ['chat-models', q], queryFn: () => get<{ models: string[]; efforts: string[] }>(`/api/chat/models?q=${encodeURIComponent(q)}`), staleTime: 600000 })
+export async function streamChat(profile: string, sessionId: string, message: string | MessagePart[], onEvent: (e: SseEvent) => void, signal?: AbortSignal, opts: TurnOptions = {}): Promise<void> {
+  const r = await fetch(`/api/chat/${profile}/${sessionId}`, { method: 'POST', headers: { 'content-type': 'application/json', 'x-csrf': csrf }, body: JSON.stringify({ message, ...opts }), signal })
   if (!r.ok || !r.body) { let msg = `${r.status}`; try { msg = (await r.json()).detail ?? msg } catch {} throw new ApiError(r.status, msg) }
   const reader = r.body.getReader(); const dec = new TextDecoder(); let buf = ''
   for (;;) {

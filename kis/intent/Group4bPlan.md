@@ -18,15 +18,15 @@ Proof: Playwright 1440/390 on a real coder turn with a code block + tool call; m
 4. [x] DONE 2026-08-30 Export transcript as Markdown (server renders `GET /api/session/{p}/{id}/export.md`).
 Proof: rename/delete round-trip visible in the gateway list; search finds a known phrase from a dispatched run; pytest with the fake gateway for PATCH/DELETE/export.
 
-## 4b-3 Composer + reliability — NEXT
-1. [ ] Slash-command menu: built-ins that the gateway handles (`/new /title /compress /usage /model /skills /mcp …` — take the list from `GET /v1/commands` when present, else a fixed set), fuzzy filter, sent as plain text.
-2. [ ] Model picker (`GET /v1/models`), per-session choice stored in hq (`chat_sessions.model` for linked, localStorage for global), sent as `model` per turn; reasoning-effort only if the gateway exposes it (else dropped, noted in Knowledge).
-3. [ ] Image + file attachments: Ctrl+V paste, drag-drop, picker; client downscale to 1920px/JPEG ≤1 MB; text files as text parts; thumbnails in the composer and in the transcript. Verify the `attachments` shape live on coder first.
-4. [ ] Pending send survives reload (localStorage, 5-min TTL, re-sent with confirmation), gateway-down banner with Retry, failed sends keep the draft.
-5. [ ] Steer: "Send while running" → `POST /v1/runs/{id}/steer {message}`; if the gateway rejects, fall back to queueing the message for after the turn. Context meter: DONE 2026-08-30 as an estimate (no `/runtime` on this Hermes; see Knowledge); only revisit if a runtime endpoint appears.
+## 4b-3 Composer + reliability — DONE 2026-08-30
+1. [x] DONE 2026-08-30 Slash-command menu — **hq-owned** commands (`/model /reasoning /fast /title /pin /unpin /export /find /new /steer /help`): this Hermes has no `/v1/commands` and its CLI slash commands are not interpreted by the gateway (sent text just reaches the LLM).
+2. [x] DONE 2026-08-30 Model / reasoning effort / fast per session (browser-local, sent per turn as `model` + `model_options.reasoning_effort|fast`; `/v1/models` only advertises the virtual `hermes-agent`, so suggestions come from models.dev via `GET /api/chat/models`).
+3. [x] DONE 2026-08-30 Image + file attachments: Ctrl+V paste, drag-drop, picker; client downscale to 1920px/JPEG ≤1 MB; text files as text parts; thumbnails in the composer and in the transcript. Verify the `attachments` shape live on coder first.
+4. [x] DONE 2026-08-30 Pending send survives reload (a reload aborts the fetch, so the text comes back as "Unsent draft restored") (localStorage, 5-min TTL, re-sent with confirmation), gateway-down banner with Retry, failed sends keep the draft.
+5. [x] DONE 2026-08-30 Steer: "Send while running" → `POST /v1/runs/{id}/steer {message}`; if the gateway rejects, fall back to queueing the message for after the turn. Context meter: DONE 2026-08-30 as an estimate (no `/runtime` on this Hermes; see Knowledge); only revisit if a runtime endpoint appears.
 Proof: real image turn (agent describes the image), a slash command result, model switch reflected in `session_model_usage`, reload mid-send.
 
-## 4b-4 Agent questions with options
+## 4b-4 Agent questions with options — NEXT
 Convention (hermes-hq's own; workspace has a renderer but no producer): the agent emits a fenced block
 ```hq-options
 {"question": "...", "mode": "single|multi", "options": [{"label": "A", "detail": "..."}]}

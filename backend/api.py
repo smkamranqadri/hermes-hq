@@ -110,6 +110,12 @@ def task_chat_sessions(task_id: int):
     return {"sessions": wm_store.chat_sessions_for_task(task_id, db_path=_db())}
 
 
+@router.get("/chat/models")
+def chat_models(q: str = Query("", max_length=80)):
+    from backend import pricing
+    return {"models": pricing.model_ids(q or None), "efforts": list(chat.EFFORTS)}
+
+
 @router.get("/chat/search")
 def chat_search(q: str = Query("", max_length=200), limit: int = Query(30, ge=1, le=100)):
     return {"q": q, "results": chat.search(q, limit=limit, db_path=_db())}
