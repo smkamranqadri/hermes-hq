@@ -32,6 +32,11 @@ class DispatcherLoop:
     def tick_once(self):
         summary = wm_dispatch.run_dispatch(db_path=wm_store.DEFAULT_DB_PATH)
         self.last_tick = time.time()
+        try:   # notifications + web push must not depend on a browser polling
+            from backend import push
+            push.sync_and_push()
+        except Exception:
+            log.exception("push sync failed")
         self.last_summary = summary
         self.last_error = None
         return summary

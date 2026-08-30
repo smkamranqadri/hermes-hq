@@ -11,6 +11,7 @@ Prerequisites per connection:
   PRAGMA busy_timeout=5000
 """
 
+import json
 import os
 import re
 import shutil
@@ -401,6 +402,16 @@ CREATE TABLE IF NOT EXISTS notifications (
     project_id  INTEGER,
     source_key  TEXT UNIQUE,
     read_at     REAL
+);
+
+CREATE TABLE IF NOT EXISTS push_subscriptions (
+    id          INTEGER PRIMARY KEY,
+    endpoint    TEXT UNIQUE NOT NULL,
+    keys_json   TEXT NOT NULL,
+    user_agent  TEXT,
+    created_at  REAL,
+    last_ok_at  REAL,
+    failures    INTEGER DEFAULT 0
 );
 
 CREATE INDEX IF NOT EXISTS idx_tasks_project ON tasks(project_id);
@@ -3174,7 +3185,7 @@ def add_notification(kind, title, body=None, href=None, task_id=None, run_id=Non
 
 def sync_notifications(db_path=None):
     """Turn new state_transitions into notifications. The first call only sets the watermark (no backfill of
-    history). Returns the number of notifications created."""
+    history). Returns the ids of the notifications created."""
     conn = _connect(db_path)
     try:
         last = conn.execute("SELECT value FROM wm_meta WHERE key=?", (_NOTIF_WATERMARK,)).fetchone()
@@ -3182,12 +3193,12 @@ def sync_notifications(db_path=None):
         if last is None:
             with conn:
                 conn.execute("INSERT OR REPLACE INTO wm_meta(key, value) VALUES (?, ?)", (_NOTIF_WATERMARK, str(top)))
-            return 0
+            return []
         rows = conn.execute(
             "SELECT s.id, s.task_id, s.run_id, s.ts, s.from_status, s.to_status, s.detail, t.title AS task_title, t.project_id, "
             "t.assignee_profile FROM state_transitions s LEFT JOIN tasks t ON t.id = s.task_id WHERE s.id > ? ORDER BY s.id",
             (int(last["value"]),)).fetchall()
-        made = 0
+        made = []
         with conn:
             for r in rows:
                 to = r["to_status"]
@@ -3201,7 +3212,8 @@ def sync_notifications(db_path=None):
                 cur = conn.execute(
                     "INSERT OR IGNORE INTO notifications(ts, kind, title, body, href, task_id, run_id, project_id, source_key) VALUES (?,?,?,?,?,?,?,?,?)",
                     (r["ts"] or time.time(), kind, title, body.strip(" ·"), "/tasks/%s" % r["task_id"], r["task_id"], r["run_id"], r["project_id"], "transition:%s" % r["id"]))
-                made += cur.rowcount
+                if cur.rowcount:
+                    made.append(cur.lastrowid)
             conn.execute("INSERT OR REPLACE INTO wm_meta(key, value) VALUES (?, ?)", (_NOTIF_WATERMARK, str(top)))
         return made
     finally:
@@ -3233,5 +3245,66 @@ def mark_notifications_read(ids=None, db_path=None, source_key=None):
                 return 0
             return conn.execute("UPDATE notifications SET read_at=? WHERE read_at IS NULL AND id IN (%s)" % ",".join("?" * len(ids)),
                                 [time.time()] + ids).rowcount
+    finally:
+        conn.close()
+
+
+def get_notifications(ids, db_path=None):
+    ids = [int(i) for i in ids]
+    if not ids:
+        return []
+    conn = _connect(db_path)
+    try:
+        return [dict(r) for r in conn.execute("SELECT * FROM notifications WHERE id IN (%s) ORDER BY id" % ",".join("?" * len(ids)), ids)]
+    finally:
+        conn.close()
+
+
+# ---- Web Push subscriptions (4b-5.3) -------------------------------------------
+def add_push_subscription(endpoint, keys, user_agent=None, db_path=None):
+    conn = _connect(db_path)
+    try:
+        with conn:
+            conn.execute("INSERT INTO push_subscriptions(endpoint, keys_json, user_agent, created_at, failures) VALUES (?,?,?,?,0) "
+                         "ON CONFLICT(endpoint) DO UPDATE SET keys_json=excluded.keys_json, user_agent=excluded.user_agent, failures=0",
+                         (endpoint, json.dumps(keys), (user_agent or "")[:200], time.time()))
+        return dict(conn.execute("SELECT * FROM push_subscriptions WHERE endpoint=?", (endpoint,)).fetchone())
+    finally:
+        conn.close()
+
+
+def remove_push_subscription(endpoint, db_path=None):
+    conn = _connect(db_path)
+    try:
+        with conn:
+            return conn.execute("DELETE FROM push_subscriptions WHERE endpoint=?", (endpoint,)).rowcount
+    finally:
+        conn.close()
+
+
+def list_push_subscriptions(db_path=None):
+    conn = _connect(db_path)
+    try:
+        return [dict(r) for r in conn.execute("SELECT * FROM push_subscriptions ORDER BY id")]
+    finally:
+        conn.close()
+
+
+def push_subscription_ok(sid, db_path=None):
+    conn = _connect(db_path)
+    try:
+        with conn:
+            conn.execute("UPDATE push_subscriptions SET last_ok_at=?, failures=0 WHERE id=?", (time.time(), sid))
+    finally:
+        conn.close()
+
+
+def push_subscription_failed(sid, db_path=None):
+    conn = _connect(db_path)
+    try:
+        with conn:
+            conn.execute("UPDATE push_subscriptions SET failures=COALESCE(failures,0)+1 WHERE id=?", (sid,))
+            row = conn.execute("SELECT failures FROM push_subscriptions WHERE id=?", (sid,)).fetchone()
+            return int(row["failures"]) if row else 0
     finally:
         conn.close()
