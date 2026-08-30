@@ -4,11 +4,11 @@
 **hermes-hq is the live control plane since 2026-08-29 13:40 UTC** (branch `main`). Process: `nohup .venv/bin/hermes-hq serve --host 0.0.0.0 --port 9010 --interval 20 > /opt/data/hermes-hq-serve.log 2>&1 &` with the dispatcher ON; restart by hand after backend changes (`pkill -f 'hermes-hq serve'` in its own command, then that line). Password file `/opt/data/hermes-hq/password` is `test` for the owner's review (generated one kept in `password.prev`). Frontend builds go live without a restart. HTTPS for the phone: `tailscale serve` on the owner's Mac fronts this VM's `:9010` (Knowledge → Web Push). Legacy WM rollback recipe: `knowledge/technical.md` → Legacy WM.
 
 ## Now
-Task: **Group 6 — Browsers** (terminal, memory, skills, MCP — so the Hermes dashboard isn't needed) — owner chose it ahead of Group 5 on 2026-08-30; not planned yet; start the next session with `/kis:plan`. Inputs: `PRD.md` item 6, hermes-workspace's terminal/memory/skills/MCP browsers (lineage allow-list in `knowledge/project.md`; ask before copying), Tools menu / phone More page already route to `/terminal /memory /skills /mcp` placeholders, Hermes gateway endpoints `GET /v1/skills`, `GET /v1/toolsets` exist (api_server.py endpoint list).
+Task: **Group 5 — Project files** (browse/edit, project-scoped or global) — not planned yet; start the next session with `/kis:plan`. Inputs: `PRD.md` item 5, hermes-workspace's file explorer (lineage allow-list in `knowledge/project.md`; ask before copying), Tools menu / phone More page already route to the `/files` placeholder, project `primary_path` is the natural project root. Then Group 6 browsers (Hermes gateway has `GET /v1/skills` and `GET /v1/toolsets` for it).
 Groups 1–4 and 4b (chat polish, option cards, notifications incl. Web Push, mobile IA) are complete as of 2026-08-30 (`intent/Group4bPlan.md`).
 
 ## Next
-Group 6 browsers (plan first), then Group 5 project files, then Group 7 schedules.
+Group 5 project files (plan first), then Group 6 browsers, then Group 7 schedules.
 
 ## Blocker
 None.
