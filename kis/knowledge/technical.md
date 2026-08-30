@@ -80,6 +80,6 @@ Hermes v0.20.5 at `/opt/hermes`, `HERMES_HOME=/opt/data`, profiles under `/opt/d
 ## Known limits (accepted for now)
 - The server is restarted by hand after backend changes (`pkill -f 'hermes-hq serve'`, then the serve line in State); no systemd/s6 unit yet — belongs to the install work.
 - `IdleSweeper` (gateway idle-stop) runs only when the dispatcher is enabled; `--no-dispatcher` dev mode never idle-stops gateways.
-- Cookie session over plain HTTP; HTTPS is a reverse-proxy concern.
+- Cookie session (`httponly, samesite=lax`, no `secure` flag) works over plain HTTP on the LAN and behind an HTTPS proxy; hermes-hq never terminates TLS itself (the owner uses `tailscale serve` on the Mac that hosts this OrbStack VM).
 - `backend/readers.py` is a straight 1100-line port; agents/sessions/files/overview readers get exposed or pruned as groups need them.
 - `tests/core/test_t2/t5/t7.py` fail identically in the source repo (goal lifecycle draft→planned changed after they were written); fix when touching goal release.
