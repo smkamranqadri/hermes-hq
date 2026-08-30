@@ -183,3 +183,6 @@ body {
 @media (max-width: 639px) {
   input:not([type="checkbox"]):not([type="radio"]), textarea, select { font-size: max(16px, 1em); }
 }
+
+/* Dropdowns/sheets: near-opaque so text stays readable over busy content (owner, 2026-08-30) */
+.hq-menu { background: color-mix(in srgb, var(--hq-bg) 94%, var(--hq-raised)) !important; backdrop-filter: blur(20px); -webkit-backdrop-filter: blur(20px); }

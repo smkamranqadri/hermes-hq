@@ -17,7 +17,7 @@ export function Menu({ button, children, align = 'right', keepOpen = false }: { 
         className="rounded-full border border-line bg-glass px-2.5 py-1 font-mono text-[10px] text-muted hover:text-fg">{button}</button>
       {open && (
         <div onClick={() => { if (!keepOpen) setOpen(false) }}
-          className={`glass-strong absolute top-full mt-2 min-w-44 rounded-xl p-1 shadow-[0_16px_36px_rgba(0,0,0,0.4)] ${align === 'right' ? 'right-0' : 'left-0'}`}>
+          className={`glass-strong hq-menu absolute top-full mt-2 min-w-44 rounded-xl p-1 shadow-[0_16px_36px_rgba(0,0,0,0.4)] ${align === 'right' ? 'right-0' : 'left-0'}`}>
           {children}
         </div>
       )}
