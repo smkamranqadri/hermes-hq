@@ -21,6 +21,7 @@ export function Bell() {
   const rows = q.data?.notifications ?? []
   // OS notifications + chime for items that arrived since the last poll (first load only sets the high-water mark)
   const [prefs, setPrefs] = useState<NotifyPrefs>(loadPrefs)
+  const iosBrowser = /iPhone|iPad|iPod/.test(navigator.userAgent) && !window.matchMedia('(display-mode: standalone)').matches
   const [perm, setPerm] = useState(permission())
   const seen = useRef<number | null>(null)
   useEffect(() => {
@@ -72,8 +73,8 @@ export function Bell() {
               </li>))}
           </ul>
           <div className="mt-1 flex flex-wrap items-center gap-x-4 gap-y-1 border-t border-line px-1 pt-2 font-mono text-[10px] uppercase tracking-wider text-muted">
-            <label className={clsx('flex items-center gap-1.5', (!supportsNotifications() || perm === 'denied') && 'opacity-60')} title={!supportsNotifications() ? 'This browser has no Notification API' : perm === 'denied' ? 'Blocked in the browser — allow notifications for this site to enable' : 'OS notifications when a task needs you or an agent replies while this tab is not focused'}>
-              <input type="checkbox" data-pref-browser checked={prefs.browser && perm === 'granted'} disabled={!supportsNotifications() || perm === 'denied'} onChange={() => void toggleBrowser()} /> Browser alerts{perm === 'denied' ? ' (blocked)' : ''}
+            <label className={clsx('flex items-center gap-1.5', (!supportsNotifications() || perm === 'denied') && 'opacity-60')} title={!supportsNotifications() ? (iosBrowser ? 'iPhone/iPad: add Hermes HQ to the Home Screen (Share → Add to Home Screen) and open it from there — Safari tabs cannot show notifications' : 'This browser has no Notification API') : perm === 'denied' ? 'Blocked in the browser — allow notifications for this site to enable' : 'OS notifications when a task needs you or an agent replies while this tab is not focused'}>
+              <input type="checkbox" data-pref-browser checked={prefs.browser && perm === 'granted'} disabled={!supportsNotifications() || perm === 'denied'} onChange={() => void toggleBrowser()} /> Browser alerts{perm === 'denied' ? ' (blocked)' : !supportsNotifications() && iosBrowser ? ' — add to Home Screen first' : !supportsNotifications() ? ' (unsupported)' : ''}
             </label>
             <label className="flex items-center gap-1.5" title="Soft chime for new notifications and finished chat replies"><input type="checkbox" data-pref-sound checked={prefs.sound} onChange={e => { setPref({ sound: e.target.checked }); if (e.target.checked) chime('info') }} /> Sound</label>
           </div>
