@@ -270,15 +270,19 @@ def bridge(home: str, op: str, body: dict | None = None, timeout: float = 60):
 
 
 _cache: dict[tuple, tuple[float, dict]] = {}
+_gen: dict[str, int] = {}          # per-home invalidation generation
 
 
 def _cached(key: tuple, ttl: float, fn):
+    """Cache per (kind, home). A value computed before an invalidate() for that home is never stored:
+    a read that raced a write (install finishing while a list was being built) must not outlive it."""
     now = time.time()
     hit = _cache.get(key)
     if hit and now - hit[0] < ttl:
         return hit[1]
+    gen = _gen.get(key[1], 0)
     val = fn()
-    if not (isinstance(val, dict) and val.get("ok") is False):     # never cache an error envelope
+    if _gen.get(key[1], 0) == gen and not (isinstance(val, dict) and val.get("ok") is False):     # never cache stale or error envelopes
         _cache[key] = (now, val)
     return val
 
@@ -287,6 +291,8 @@ def invalidate(home: str | None = None):
     for k in list(_cache):
         if home is None or k[1] == home:
             _cache.pop(k, None)
+    for h in ([home] if home else list(_gen)):
+        _gen[h] = _gen.get(h, 0) + 1
 
 
 @router.get("/providers")

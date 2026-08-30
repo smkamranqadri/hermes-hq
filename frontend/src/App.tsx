@@ -25,6 +25,7 @@ import { Agents } from './pages/Agents'
 import { AgentDetail } from './pages/AgentDetail'
 import { Chat } from './pages/Chat'
 const Files = lazy(() => import('./pages/Files').then(m => ({ default: m.Files })))
+const Mcp = lazy(() => import('./pages/Mcp').then(m => ({ default: m.Mcp })))
 const Skills = lazy(() => import('./pages/Skills').then(m => ({ default: m.Skills })))
 const Memory = lazy(() => import('./pages/Memory').then(m => ({ default: m.Memory })))
 const TerminalHost = lazy(() => import('./components/terminal/TerminalHost').then(m => ({ default: m.TerminalHost })))
@@ -151,9 +152,10 @@ export default function App() {
           {termMounted && <Suspense fallback={loc.pathname === '/terminal' ? <section className="mx-auto max-w-7xl p-4 sm:p-6"><Loading rows={8} /></section> : null}><TerminalHost /></Suspense>}
           <Routes>
             <Route path="/terminal" element={null} />
+            <Route path="/mcp" element={<Suspense fallback={<section className="mx-auto max-w-7xl p-4 sm:p-6"><Loading rows={8} /></section>}><Mcp /></Suspense>} />
             <Route path="/skills" element={<Suspense fallback={<section className="mx-auto max-w-7xl p-4 sm:p-6"><Loading rows={8} /></section>}><Skills /></Suspense>} />
             <Route path="/memory" element={<Suspense fallback={<section className="mx-auto max-w-7xl p-4 sm:p-6"><Loading rows={8} /></section>}><Memory /></Suspense>} />
-            {[...TABS, ...TOOLS].filter(([, to]) => !['/projects', '/tasks', '/', '/activity', '/agents', '/chat', '/files', '/terminal', '/memory', '/skills'].includes(to)).map(([label, to]) => <Route key={to} path={to} element={<Placeholder title={label} />} />)}
+            {[...TABS, ...TOOLS].filter(([, to]) => !['/projects', '/tasks', '/', '/activity', '/agents', '/chat', '/files', '/terminal', '/memory', '/skills', '/mcp'].includes(to)).map(([label, to]) => <Route key={to} path={to} element={<Placeholder title={label} />} />)}
             <Route path="/" element={<Overview />} />
             <Route path="/files" element={<Suspense fallback={<section className="mx-auto max-w-7xl p-4 sm:p-6"><Loading rows={8} /></section>}><Files /></Suspense>} />
             <Route path="/activity" element={<Activity />} />

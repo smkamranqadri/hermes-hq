@@ -171,3 +171,17 @@ def test_job_timeout_stop_and_result_after_noise(env, monkeypatch):
     j = c.post("/api/memory/providers/mem0/setup", json={"profile": "coder"}).json()["job"]
     assert c.post("/api/memory/providers/mem0/setup", json={"profile": "coder"}).status_code == 429
     c.post(f"/api/jobs/{j['id']}/stop")
+
+
+def test_cache_never_stores_a_value_computed_before_an_invalidate(env):
+    c, memory, hermes = env
+    home = str(hermes)
+    calls = {"n": 0}
+    def compute():
+        calls["n"] += 1
+        if calls["n"] == 1:
+            memory.invalidate(home)          # a write landed while this read was being built
+        return {"servers": [f"v{calls['n']}"]}
+    assert memory._cached(("mcp", home), 60, compute) == {"servers": ["v1"]}
+    assert memory._cached(("mcp", home), 60, compute) == {"servers": ["v2"]}      # v1 was not cached
+    assert memory._cached(("mcp", home), 60, compute) == {"servers": ["v2"]}      # v2 is
