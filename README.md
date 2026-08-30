@@ -85,5 +85,6 @@ and shows them in the bell (desktop) / Inbox tab (phones). Three delivery layers
 Nothing is configured per install: the VAPID key pair is generated on first use into
 `<hermes-hq home>/vapid_private.pem` (keep it — subscriptions are bound to it), subscriptions live in
 `push_subscriptions`, and pushes go out from the dispatcher loop, so they do not depend on any browser being
-open. Optional `HERMES_HQ_PUSH_CONTACT=mailto:you@example.com` sets the contact push services may use.
+open. Optional `HERMES_HQ_PUSH_CONTACT=you@example.com` sets the contact address push services may use (must be a
+routable domain — Apple rejects `@localhost` with 403 BadJwtToken; the default is `hermes-hq@example.com`).
 Dead subscriptions (404/410 from the push service, or 8 failures in a row) are removed automatically.
