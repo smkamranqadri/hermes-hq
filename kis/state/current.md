@@ -4,11 +4,11 @@
 **hermes-hq is the live control plane since 2026-08-29 13:40 UTC** (branch `main`). Process: `nohup .venv/bin/hermes-hq serve --host 0.0.0.0 --port 9010 --interval 20 > /opt/data/hermes-hq-serve.log 2>&1 &` with the dispatcher ON; restart by hand after backend changes (`pkill -f 'hermes-hq serve'` in its own command, then that line). Password file `/opt/data/hermes-hq/password` is `test` for the owner's review (generated one kept in `password.prev`). Frontend builds go live without a restart. HTTPS for the phone: `tailscale serve` on the owner's Mac fronts this VM's `:9010` (Knowledge → Web Push). Legacy WM rollback recipe: `knowledge/technical.md` → Legacy WM.
 
 ## Now
-Task: **Group 6 — Browsers** (terminal, memory, skills, MCP — PRD item 6) — not planned yet; start the next session with `/kis:plan`. Inputs: `PRD.md` item 6, hermes-workspace's terminal/memory/skills/MCP browsers (on the lineage allow-list), Hermes gateway `GET /v1/skills` and `GET /v1/toolsets`, Tools menu / phone More page already route to the `/terminal`, `/memory`, `/skills`, `/mcp` placeholders.
-Groups 1–5 are complete as of 2026-08-30 (`intent/Group5Plan.md` for files: two roots, full edit set, CodeMirror, phone sheet).
+Task: **Group 6 — Browsers**, sub-phase **6-1 Terminal** (`intent/Group6Plan.md`, approved 2026-08-30, Phase mode). Next command: `/kis:act`.
+Groups 1–5 are complete as of 2026-08-30.
 
 ## Next
-Group 6 browsers (plan first), then Group 7 schedules.
+6-2 Memory → 6-3 Skills → 6-4 MCP, then Group 7 schedules.
 
 ## Blocker
 None.
