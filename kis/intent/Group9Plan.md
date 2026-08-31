@@ -4,10 +4,10 @@ Owner picked all four scope blocks from the 2026-08-31 planning round (phone-fee
 
 Facts that shape it: `sw.js` is push-only by design ("no offline caching — the app must never show stale state"); any offline handling must be navigation-only and static. Push payloads today carry `{title, body, tag, href, id}` (`backend/push.py`); the Badging API can only run while the app is open unless the push payload carries the unread count for `sw.js` to apply — and it is iOS ≥ 16.4 installed-PWA only (degrade silently elsewhere). Toast container is `fixed bottom-4` in `Toast.tsx`; the phone tab bar is `fixed bottom-[calc(env(safe-area-inset-bottom,0px)+0.5rem)]` (`TabBar.tsx`, `sm:hidden`). Unread source: `useNotifications` (`/api/notifications?limit=50` → `{notifications, unread}`, 15 s poll). Every page check: 390×844 `isMobile` + 1440, 16 px fields, no horizontal overflow (memory `hermes-hq-ops` has the Playwright settings).
 
-## 9-1 Phone-feel bundle
-1. [ ] `Toast.tsx`: on `<sm` raise the stack above the tab bar (`bottom-[calc(env(safe-area-inset-bottom,0px)+4.5rem)] sm:bottom-4` or a measured `--tabbar-h` var); desktop unchanged. Closes the "toasts over the tab bar" debt row.
-2. [ ] `index.css`: `overscroll-behavior-y: none` on `html`/`body` (kill rubber-band flash + accidental pull-to-refresh in standalone); verify inner scrollers (Chat, terminal, sheets) still scroll and chain correctly.
-3. [ ] Confirm `More.tsx` is static (no fetch → no skeleton needed) and note it here.
+## 9-1 Phone-feel bundle — DONE 2026-08-31
+1. [x] `Toast.tsx`: on `<sm` raise the stack above the tab bar (`bottom-[calc(env(safe-area-inset-bottom,0px)+4.5rem)] sm:bottom-4` or a measured `--tabbar-h` var); desktop unchanged. Closes the "toasts over the tab bar" debt row.
+2. [x] `index.css`: `overscroll-behavior-y: none` on `html`/`body` (kill rubber-band flash + accidental pull-to-refresh in standalone); verify inner scrollers (Chat, terminal, sheets) still scroll and chain correctly.
+3. [x] Confirmed `More.tsx` is static (theme picker, links, sign-out — no data fetch), so no skeleton is needed.
 Proof: Playwright on live :9010 — trigger a toast on a 390 px page with the tab bar visible → toast bottom edge above tab bar top edge (bounding boxes); desktop toast position unchanged; overscroll checked by hand on the phone (not automatable) + CSS asserted.
 
 ## 9-2 App badge (Inbox unread on the home-screen icon)
