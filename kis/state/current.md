@@ -4,10 +4,10 @@
 **hermes-hq is the live control plane since 2026-08-29 13:40 UTC** (branch `main`), running as the **s6 service `/run/service/hermes-hq`** since 2026-08-30 (dispatcher ON, `--host 0.0.0.0 --port 9010 --interval 20`). Restart after backend changes: `hermes-hq service restart`; logs `/var/log/hermes-hq/current`; auto-update daily 05:00 PKT (`service auto-update --show`). Password file `/opt/data/hermes-hq/password` is `test` for the owner's review (generated one kept in `password.prev`). Frontend builds go live without a restart. HTTPS for the phone: `tailscale serve` on the owner's Mac fronts this VM's `:9010` (Knowledge → Web Push). Legacy WM: fully deleted 2026-08-31 (`knowledge/technical.md` → Legacy WM).
 
 ## Now
-Task: none — **Group 9 (PWA polish) is complete as of 2026-08-31**: toasts above the phone tab bar, overscroll containment, app icon badge (live + push payload), offline fallback page, TaskDetail phone folds, Activity load-older proven (was already shipped). Groups 1–9 all shipped. Next session: `/kis:plan` for the owner's pick (remaining debt items, or new PRD ideas).
+Task: **Group 10 — "Needs you" for dispatched runs, approved 2026-08-31 (Standard mode), not started** (`intent/Group10Plan.md`: brief hint + fence/heuristic transcript scan on the dispatcher tick → question notifications, task banner, steer composer on run-owned Chat sessions; live end-to-end proof on a cheap writer task). Groups 1–9 all shipped (Group 9 complete 2026-08-31 — PWA polish; proof lines below).
 
 ## Next
-Owner's pick — plan first.
+`/kis:act` Group 10, steps 10-1 → 10-3 in order.
 
 ## Blocker
 None.
