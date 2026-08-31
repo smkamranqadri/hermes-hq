@@ -7,9 +7,10 @@
 Task: none — **SSE stream shield COMPLETE 2026-08-31** (`intent/SseShieldPlan.md`; proof below). Three WM-fix slices shipped today: Fast sweep, owner-close pass, SSE shield. Board clean (only #82/#85/#86 manual); phone-lock no longer kills live chat turns.
 
 ## Next
-`/kis:plan` for the owner's pick. Remaining debt rows below (feedback-from-manual is the last
-WM-fix bundle item; the rest are small). When fresh GitHub/LinkedIn/Medium tasks are created:
-repoint #89 via `wm task undepend 89 <old>` + `wm task depend 89 <new>`, close/supersede #82/#85/#86.
+Feedback-from-manual + task edit — Standard, PLANNED 2026-08-31 (`intent/FeedbackEditPlan.md`;
+owner locked scope C: feedback from manual + audited description/DoD edit with inline UI).
+`/kis:act` to execute. After it the WM-fix bundle is done; small rows remain (below). When fresh
+GitHub/LinkedIn/Medium tasks exist: repoint #89 (undepend+depend), close/supersede #82/#85/#86.
 When fresh GitHub/LinkedIn/Medium tasks are created: repoint #89 via `wm task undepend 89 <old>` +
 `wm task depend 89 <new>`, and owner-close or supersede #82/#85/#86.
 
