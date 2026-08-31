@@ -16,6 +16,21 @@ function Block({ title, children }: { title: string; children: React.ReactNode }
   return <div><Label>{title}</Label><div className="mt-1 whitespace-pre-wrap break-words text-sm">{children}</div></div>
 }
 
+/** Phone-only collapsible section: tap-header under `sm`; plain label and always-open content on desktop. */
+function Fold({ title, children, desk = true }: { title: string; children: React.ReactNode; desk?: boolean }) {
+  const [open, setOpen] = useState(false)
+  return (
+    <>
+      <button type="button" data-fold aria-expanded={open} onClick={() => setOpen(o => !o)} className="flex w-full items-center justify-between sm:hidden">
+        <Label>{title}</Label>
+        <span aria-hidden="true" className={clsx('font-mono text-sm text-muted transition-transform', open && 'rotate-90')}>{'\u203a'}</span>
+      </button>
+      {desk && <span className="hidden sm:block"><Label>{title}</Label></span>}
+      <div className={clsx('min-w-0', !open && 'hidden', 'sm:block')}>{children}</div>
+    </>
+  )
+}
+
 export function TaskDetail() {
   const id = Number(useParams().id)
   const q = useTask(id)
@@ -70,7 +85,7 @@ export function TaskDetail() {
           </GlassCard>
           {latest && <RunLog key={latest.id} runId={latest.id} active={latest.status === 'running'} />}
           <div>
-            <Label>Runs · {t.runs.length}</Label>
+            <Fold title={`Runs · ${t.runs.length}`}>
             {t.runs.length === 0 ? <p className="mt-1 text-xs text-muted">No run yet — this task has never been dispatched.</p> : (
               <div className="mt-2 flex flex-col gap-2">{t.runs.map(r => (
                 <GlassCard key={r.id} className="py-3 text-xs" accent={r.status === 'done' ? 'var(--hq-working)' : r.status === 'running' ? 'var(--hq-queued)' : 'var(--hq-needsyou)'}>
@@ -86,30 +101,35 @@ export function TaskDetail() {
                   {r.error && <p className="mt-1.5 whitespace-pre-wrap break-words text-error">{r.error}</p>}
                 </GlassCard>))}</div>
             )}
+            </Fold>
           </div>
         </div>
         <div className="flex min-w-0 flex-col gap-4">
           <ScopedChat kind="task" id={t.id} />
           {(t.deps.length > 0 || t.dependents.length > 0) && (
             <GlassCard className="text-xs">
+              <Fold title={`Dependencies · ${t.deps.length + t.dependents.length}`} desk={false}>
               {t.deps.length > 0 && <><Label>Waits on</Label><ul className="mb-3 mt-1">{t.deps.map(d => <li key={d.id}><Link to={`/tasks/${d.id}`} className="hover:text-accent-2">#{d.id} {d.title}</Link> <span className="font-mono text-muted">{d.status}</span></li>)}</ul></>}
               {t.dependents.length > 0 && <><Label>Unblocks</Label><ul className="mt-1">{t.dependents.map(d => <li key={d.id}><Link to={`/tasks/${d.id}`} className="hover:text-accent-2">#{d.id} {d.title}</Link> <span className="font-mono text-muted">{d.status}</span></li>)}</ul></>}
+              </Fold>
             </GlassCard>
           )}
           {t.reviews.length > 0 && (
             <GlassCard className="text-xs">
-              <Label>Reviews · {t.reviews.length}</Label>
+              <Fold title={`Reviews · ${t.reviews.length}`}>
               <div className="mt-2 flex flex-col gap-2">{t.reviews.map(r => (
                 <div key={r.id} className="border-b border-line-subtle pb-2 last:border-0">
                   <div className="flex items-center gap-2"><Agent name={r.reviewer_profile} /><span className={clsx('font-mono uppercase', r.verdict === 'approved' ? 'text-working' : r.verdict ? 'text-needsyou' : 'text-muted')}>{r.verdict ?? r.status}</span><span className="ml-auto font-mono text-[10px] text-muted">{ago(r.decided_at ?? r.requested_at)}</span></div>
                   {r.comments && <p className="mt-1 line-clamp-4 whitespace-pre-wrap text-muted">{r.comments}</p>}
                 </div>))}</div>
+              </Fold>
             </GlassCard>
           )}
           <GlassCard className="text-xs">
-            <Label>History</Label>
+            <Fold title="History">
             <div className="mt-2 flex flex-col gap-1.5">{t.transitions.map(x => (
               <div key={x.id} className="flex gap-2"><span className="w-24 shrink-0 font-mono text-[10px] text-muted">{when(x.ts)}</span><span className="font-mono">{x.from_status ?? '∅'} → {x.to_status}</span>{x.detail && <span className="truncate text-muted">{x.detail}</span>}</div>))}</div>
+            </Fold>
             <p className="mt-3 font-mono text-[10px] text-muted">created {when(t.created_at)}{latest ? ` · last run ${ago(latest.started_at)}` : ''}</p>
           </GlassCard>
         </div>
