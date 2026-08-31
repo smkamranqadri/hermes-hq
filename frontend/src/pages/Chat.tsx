@@ -2,7 +2,7 @@ import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { Link, useLocation, useNavigate, useParams } from 'react-router-dom'
 import { useQueryClient } from '@tanstack/react-query'
 import clsx from 'clsx'
-import { useAgents, useAgentSessions, useSessionDetail, useProjects, startScopedChat, streamChat, steerTurn, updateSession, useModels, markNotificationsRead, post, get, ago, when, ApiError, type SseEvent, type ChatMessage, type ScopedSession, type SessionDetail, type TurnOptions } from '../api'
+import { useAgents, useAgentSessions, useSessionDetail, useProjects, startScopedChat, streamChat, steerTurn, sendRunAnswer, updateSession, useModels, markNotificationsRead, post, get, ago, when, ApiError, type SseEvent, type ChatMessage, type ScopedSession, type SessionDetail, type TurnOptions } from '../api'
 import { GlassCard, PageHeader } from '../components/GlassCard'
 import { Empty, Loading, Select } from '../components/ui'
 import { ActionBtn } from '../components/forms'
@@ -437,7 +437,10 @@ export function Chat() {
             {!atBottom && <button type="button" onClick={scrollDown} className="absolute bottom-24 left-1/2 z-10 -translate-x-1/2 rounded-full border border-line bg-glass-strong px-3 py-1 font-mono text-[10px] uppercase tracking-wider text-fg shadow-lg hover:bg-raised">↓ {unread > 0 ? `${unread} new` : 'latest'}</button>}
             <div className="mt-3 border-t border-line pt-3">
               {liveRun ? (
+                <div>
                 <div className="flex flex-wrap items-center justify-between gap-2 text-xs"><span className="text-working"><span className="hq-dot-live mr-1.5 inline-block size-1.5 rounded-full bg-current" />{profile} is working in this session (run #{liveRun.run_id}{liveRun.task_id ? `, task #${liveRun.task_id}` : ''}) — chat opens when the run ends.</span>{liveRun.task_id && <Link to={`/tasks/${liveRun.task_id}`} className="rounded-full border border-working/60 px-2 py-0.5 font-mono text-[10px] uppercase tracking-wider text-working hover:bg-working/20">Watch log</Link>}</div>
+                <RunAnswerBox runId={liveRun.run_id} />
+                </div>
               ) : chatDisabled ? (
                 <div className="flex flex-wrap items-center justify-between gap-2 text-xs text-muted"><span>Chat is off for <span className="font-mono text-accent-2">{profile}</span> — its gateway is not enabled.</span><ActionBtn url={`/api/agent/${profile}/gateway`} label="Enable chat" body={{ enabled: true }} confirm={`Start the ${profile} gateway? Its .env gets API_SERVER_PORT/KEY if missing.`} /></div>
               ) : (
@@ -481,5 +484,29 @@ export function Chat() {
         </div>
       )}
     </section>
+  )
+}
+
+/** Group 10: answer a question asked by the dispatched run that owns this session.
+ *  Delivered as <runs_dir>/<run>.answer.txt — the brief tells the agent to check it between steps. */
+function RunAnswerBox({ runId }: { runId: number }) {
+  const [text, setText] = useState('')
+  const [busy, setBusy] = useState(false)
+  const toast = useToast()
+  const send = async () => {
+    const t = text.trim()
+    if (!t || busy) return
+    setBusy(true)
+    try { await sendRunAnswer(runId, t); setText(''); toast('Answer delivered — the agent checks for it between steps') }
+    catch (e) { toast(e instanceof ApiError ? e.message : String(e), 'err') }
+    finally { setBusy(false) }
+  }
+  return (
+    <div className="mt-2 flex items-end gap-2">
+      <TextArea rows={1} value={text} disabled={busy} placeholder="Answer the agent's question… (Enter to send)" style={{ resize: 'none' }}
+        onChange={e => setText(e.target.value)}
+        onKeyDown={e => { if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); void send() } }} />
+      <Btn kind="ghost" busy={busy} onClick={() => void send()}>Answer</Btn>
+    </div>
   )
 }

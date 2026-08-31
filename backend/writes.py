@@ -139,6 +139,10 @@ class TaskIn(BaseModel):
     deps: list[int] = Field(default_factory=list)
 
 
+class Answer(BaseModel):
+    message: str = Field(min_length=1, max_length=4000)
+
+
 class Feedback(BaseModel):
     comment: str
 
@@ -175,6 +179,25 @@ def feedback(tid: int, body: Feedback):
     if not body.comment.strip():
         raise HTTPException(422, "comment is required")
     _engine(store.owner_feedback, tid, body.comment.strip()); return _after(tid)
+
+
+@router.post("/run/{rid}/answer")
+def run_answer(rid: int, body: Answer):
+    """Group 10: deliver the owner's answer to a RUNNING dispatched run — appended
+    to <runs_dir>/<rid>.answer.txt, which the brief tells the agent to check
+    between steps. Marks the run's open question notifications read."""
+    run = store.get_run(rid, db_path=_db())
+    if run is None:
+        raise HTTPException(404, "no such run")
+    if run["status"] != "running":
+        raise HTTPException(409, "run %s is not running (status %s) — use task feedback instead" % (rid, run["status"]))
+    import time as _t
+    line = "[owner %s] %s\n" % (_t.strftime("%Y-%m-%d %H:%M:%S"), body.message.strip())
+    import os as _os
+    _os.makedirs(_os.path.dirname(store.answer_path(rid)), exist_ok=True)
+    with open(store.answer_path(rid), "a", encoding="utf-8") as f:
+        f.write(line)
+    return {"ok": True, "marked_read": store.mark_run_questions_read(rid, db_path=_db())}
 
 
 @router.post("/task/{tid}/retry")

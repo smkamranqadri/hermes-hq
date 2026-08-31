@@ -248,6 +248,12 @@ def brief_path(run_id):
     return os.path.join(resolve_runs_dir(), "%d.brief.txt" % run_id)
 
 
+def answer_path(run_id):
+    """Owner answers to a running run's question (Group 10): appended by the
+    dashboard, read by the agent between steps (the brief names this path)."""
+    return os.path.join(resolve_runs_dir(), "%d.answer.txt" % run_id)
+
+
 def run_log_path(run_id):
     return os.path.join(resolve_runs_dir(), "%d.log" % run_id)
 
@@ -2687,19 +2693,24 @@ def _render_orchestrator_planning_brief(run, task, project, primary_path,
 # completed parents (task_deps) — automatic handoff context (their result_path,
 # summary, and a --resume line for their latest sessioned run).
 # ---------------------------------------------------------------------------
-_ASK_OWNER_LINES = [
-    "ASKING THE OWNER",
-    "-" * 40,
-    "If you hit a decision only the owner can make, put ONE fenced block in "
-    "your reply text tagged hq-options containing JSON {\"question\": str, "
-    "\"mode\": \"single\"|\"multi\", \"options\": [{\"label\": str, "
-    "\"detail\": str}]} (2-6 options, labels short, detail optional). The "
-    "owner is notified on their phone and may steer an answer into this "
-    "session; if no answer arrives, continue with your best-judgment default "
-    "and note it in your summary. If you truly cannot proceed without the "
-    "answer, finish with completed=\"blocked\" and a precise blocker instead.",
-    "",
-]
+def _ask_owner_lines(run_id):
+    return [
+        "ASKING THE OWNER",
+        "-" * 40,
+        "If you hit a decision only the owner can make, put ONE fenced block in "
+        "your reply text tagged hq-options containing JSON {\"question\": str, "
+        "\"mode\": \"single\"|\"multi\", \"options\": [{\"label\": str, "
+        "\"detail\": str}]} (2-6 options, labels short, detail optional). The "
+        "owner is notified on their phone and can send an answer while you run.",
+        "After asking, keep working on everything that does not depend on the "
+        "answer, and CHECK THE FILE %s between steps — it may not exist yet; "
+        "when it appears, its contents are the owner's answer/guidance. Act on "
+        "it. If no answer arrives, continue with your best-judgment default and "
+        "note it in your summary. If you truly cannot proceed without the "
+        "answer, finish with completed=\"blocked\" and a precise blocker "
+        "instead." % answer_path(run_id),
+        "",
+    ]
 
 
 def render_brief(run_id, db_path=None):
@@ -2770,7 +2781,7 @@ def render_brief(run_id, db_path=None):
             "  (approved -> origin done + dependents fire; changes_requested -> "
             "origin rework + your comments feed the next run's brief.)",
             "",
-        ] + _ASK_OWNER_LINES + [
+        ] + _ask_owner_lines(run_id) + [
             "COMPLETION CONTRACT (REQUIRED — your LAST action):",
             "Write a JSON file to %s" % cpath,
             "with EXACTLY this structure:",
@@ -2834,7 +2845,7 @@ def render_brief(run_id, db_path=None):
     lines.append("-" * 40)
     lines.append("Work in the project's Working directory above. Complete the task.")
     lines.append("")
-    lines += _ASK_OWNER_LINES
+    lines += _ask_owner_lines(run_id)
     lines += _completion_contract_lines(cpath)
     if handoff:
         lines.append("")
@@ -3215,6 +3226,20 @@ def _set_meta(key, value, db_path=None):
     try:
         with conn:
             conn.execute("INSERT OR REPLACE INTO wm_meta(key, value) VALUES (?, ?)", (key, str(value)))
+    finally:
+        conn.close()
+
+
+def mark_run_questions_read(run_id, db_path=None):
+    """Mark a run's open question notifications read (the owner just answered)."""
+    conn = _connect(db_path)
+    try:
+        with conn:
+            cur = conn.execute(
+                "UPDATE notifications SET read_at=? WHERE run_id=? AND "
+                "source_key LIKE 'runq:%' AND read_at IS NULL",
+                (time.time(), run_id))
+            return cur.rowcount
     finally:
         conn.close()
 

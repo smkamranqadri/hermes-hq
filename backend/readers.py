@@ -518,6 +518,13 @@ def task_detail(db_path, task_id):
             r["result_paths"] = _parse_paths(r.get("result_paths"))
         t["reviews"] = _fetchall(con,
             "SELECT * FROM reviews WHERE task_id=? ORDER BY id DESC", (task_id,))
+        # Group 10: the newest running run's open question (unread runq: row)
+        t["question"] = None
+        if t["runs"] and t["runs"][0].get("status") == "running":
+            t["question"] = _fetchone(con,
+                "SELECT id, title, body, href, run_id FROM notifications "
+                "WHERE run_id=? AND source_key LIKE 'runq:%' AND read_at IS NULL "
+                "ORDER BY id DESC LIMIT 1", (t["runs"][0]["id"],))
         return t
     finally:
         con.close()
