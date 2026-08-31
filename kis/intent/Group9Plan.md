@@ -21,9 +21,9 @@ Proof: pytest for the payload; live — mark-all-read → badge clears (effect p
 2. [x] `sw.js`: version-keyed cache precaching only `/offline.html` at install (old caches cleaned on activate); `fetch` handler **only** for `request.mode === 'navigate'` — network-first, catch → cached offline page. Never touches `/api/*`, assets, or non-navigation requests; the no-stale-state rule holds.
 Proof: Playwright/CDP offline emulation → navigation shows offline.html; back online → reload shows live data (nothing stale); `/api/*` requests bypass the sw (network entries confirm).
 
-## 9-4 Phone debt items
-1. [ ] `Activity.tsx`: "Load more" (mirror Agent detail's 30 + 40-at-a-time pattern within the reader's 120-row cap).
-2. [ ] `TaskDetail.tsx`: collapsible sections on phones so the page isn't one long stack — headers with counts, primary block (status/actions) open by default, rest collapsed; desktop layout unchanged.
+## 9-4 Phone debt items — DONE 2026-08-31
+1. [x] `Activity.tsx` already had "Load older" (100 + cursor `next_before`) — shipped at cutover (`9fb2cac`); the State debt row was stale. Proven live instead of rebuilt.
+2. [x] `TaskDetail.tsx`: collapsible sections on phones so the page isn't one long stack — headers with counts, primary block (status/actions) open by default, rest collapsed; desktop layout unchanged.
 Proof: Playwright 390 px — Activity paginates (row count grows on tap); Task detail initial height meaningfully shorter, sections expand/collapse, fields 16 px, `scrollWidth` 390; 1440 unchanged (screenshots).
 
 ## 9-5 Sync
