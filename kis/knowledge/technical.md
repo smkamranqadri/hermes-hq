@@ -54,7 +54,7 @@ Single password (`HERMES_HQ_PASSWORD`, else generated → serve log + `$HERMES_H
 - One persistent Hermes session per task run; session id must be deterministic, never "newest session".
 - `planned` never auto-runs; completion only via `runs/<id>.completion.json` (exit code ≠ completion).
 - Review = system-created review run (single-model), never a hand-made task; `changes_requested → rework → re-run → re-review` is the only rework path.
-- Liveness = process state + Hermes session `last_activity_at` + timeout.
+- Liveness = process state + Hermes session `last_activity_at` + timeout. `mark_stalled(label=...)` names the verdict's origin in the transition detail: `liveness:` (dispatcher scan, default) vs `owner stop:` (backend/stop.py).
 
 ## Environment (this box)
 Repo layout: `core/` (engine package: wm_store/wm_dispatch/wm_run_agent/wm_cli, no web deps), `backend/` (package `backend`: app.py, cli.py, dispatcher.py, static/ = built UI), `frontend/` (Vite+React), `tests/core/`. Two top-level packages on purpose (owner choice 2026-08-29): core is standalone and predates the UI.
@@ -123,6 +123,8 @@ Hermes v0.20.5 at `/opt/hermes`, `HERMES_HOME=/opt/data`, profiles under `/opt/d
 - `GET /api/project/{slug}/artifacts` = `result_paths` of the project's runs/tasks that exist on disk, with `inside_primary`/`rel` for the Files page. The old RO tree/preview readers were removed.
 
 ## Known limits (accepted for now)
+- `runs/<id>.log` holds only the wrapper's lines; the agent transcript is the Hermes session (readable via Chat).
+- Playwright harness flakes (not app bugs): taps on fixed-bottom-sheet rows under `isMobile` intermittently "intercepted" while `elementFromPoint` shows no overlap; during the login transition, locators can briefly resolve duplicate DOM matches — filter with `:visible`.
 - `IdleSweeper` (gateway idle-stop) runs only when the dispatcher is enabled; `--no-dispatcher` dev mode never idle-stops gateways.
 - Cookie session (`httponly, samesite=lax`, no `secure` flag) works over plain HTTP on the LAN and behind an HTTPS proxy; hermes-hq never terminates TLS itself (the owner uses `tailscale serve` on the Mac that hosts this OrbStack VM).
 - `backend/readers.py` is a straight 1100-line port; agents/sessions/files/overview readers get exposed or pruned as groups need them.
