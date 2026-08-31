@@ -27,17 +27,19 @@ def test_transitions_become_notifications_without_backfill(env):
     _transition(store, tid, "needs_review", "done", "approved")
     _transition(store, tid, "done", "rework", "owner feedback: fix the title")
     d = c.get("/api/notifications").json()
-    assert d["unread"] == 3
+    # the needs_review row was auto-read when the task moved on (-> done)
+    assert d["unread"] == 2
     kinds = [(n["kind"], n["title"]) for n in d["notifications"]]
     assert kinds == [("info", "Task #%d sent back for rework" % tid), ("done", "Task #%d is done" % tid), ("needs_you", "Task #%d needs you — needs review" % tid)]
+    assert d["notifications"][2]["read_at"] is not None
     assert d["notifications"][0]["href"] == "/tasks/%d" % tid and "fix the title" in d["notifications"][0]["body"] and d["notifications"][0]["body"].startswith("Write docs")
     # idempotent: a second sync creates nothing new
-    assert c.get("/api/notifications").json()["unread"] == 3
+    assert c.get("/api/notifications").json()["unread"] == 2
     # read one, then all
     first = d["notifications"][0]["id"]
     assert c.post("/api/notifications/read", json={"ids": [first]}, headers=h).json()["marked"] == 1
-    assert c.get("/api/notifications?unread=1").json()["unread"] == 2
-    assert c.post("/api/notifications/read", json={}, headers=h).json()["marked"] == 2
+    assert c.get("/api/notifications?unread=1").json()["unread"] == 1
+    assert c.post("/api/notifications/read", json={}, headers=h).json()["marked"] == 1
     assert c.get("/api/notifications").json()["unread"] == 0
 
 
