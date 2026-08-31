@@ -496,6 +496,11 @@ def cmd_review(args):
         _p("error: no task with id %s" % args.id)
         return 1
     try:
+        if getattr(args, "close_orphan", False):
+            rid = store.close_orphan_review(args.id, comment=args.comment)
+            _p("Review #%d (task #%d) closed as orphaned — task stays done, "
+               "verdict recorded 'waived'." % (rid, t["id"]))
+            return 0
         if args.waive:
             ts, rs, prom = store.waive_review(args.id, comment=args.comment)
         else:
@@ -909,6 +914,9 @@ def build_parser():
                     choices=["approved", "changes_requested"], default=None)
     rv.add_argument("--waive", action="store_true",
                     help="waive an optional-policy review (non-blocking -> done)")
+    rv.add_argument("--close-orphan", action="store_true", dest="close_orphan",
+                    help="close a review left open on an already-done task "
+                         "(audited; the task is untouched)")
     rv.add_argument("--comment", "-c", dest="comment", default=None)
     rv.set_defaults(fn=cmd_review)
     rl = sub.add_parser("reviews", help="list review rows (auto-created)")

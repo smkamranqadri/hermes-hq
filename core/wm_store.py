@@ -1266,7 +1266,19 @@ def deps_done(task_id, db_path=None):
 
 
 def mark_ready(task_id, db_path=None):
-    """Set a task to 'ready' only if all deps are done; else raise ValueError."""
+    """Set a task to 'ready' only if all deps are done; else raise ValueError.
+    A task already 'ready' is a silent no-op (no duplicate transition/activity);
+    a 'running' task is refused — re-releasing a claimed task would let the
+    next dispatcher tick claim it a second time."""
+    t = get_task(task_id, db_path=db_path)
+    if t is None:
+        raise ValueError("no task with id %s" % task_id)
+    if t["status"] == "ready":
+        return
+    if t["status"] == "running":
+        raise ValueError(
+            "task %d is 'running' (claimed by the dispatcher) — it cannot be "
+            "re-released while a run owns it" % task_id)
     if not deps_done(task_id, db_path=db_path):
         deps = list_task_deps(task_id, db_path=db_path)
         raise ValueError(
@@ -1276,10 +1288,13 @@ def mark_ready(task_id, db_path=None):
     try:
         with conn:
             cur = conn.execute(
-                "UPDATE tasks SET status='ready', updated_at=? WHERE id=? AND status != 'done'",
+                "UPDATE tasks SET status='ready', updated_at=? WHERE id=? "
+                "AND status NOT IN ('done', 'running', 'ready')",
                 (time.time(), task_id))
             if cur.rowcount == 0:
-                raise ValueError("no task %d (or it is already done)" % task_id)
+                raise ValueError(
+                    "task %d was not released (done, or its status changed "
+                    "concurrently)" % task_id)
             _record_transition_conn(conn, task_id, "ready", from_status="*",
                                     detail="explicit release (mark-ready)")
         log_activity(action="task_ready", task_id=task_id, db_path=db_path)
@@ -2160,6 +2175,38 @@ def waive_review(task_id, comment=None, db_path=None):
     return ("done", "waived", promoted)
 
 
+def close_orphan_review(task_id, comment=None, db_path=None):
+    """Close a review left open after its task already reached 'done' (e.g. the
+    reviewer run finished but no verdict ever landed). The review becomes
+    'waived' with an audit-trail activity row; the task is untouched.
+    Returns the closed review id."""
+    t = get_task(task_id, db_path=db_path)
+    if t is None:
+        raise ValueError("no task with id %s" % task_id)
+    if t["status"] != "done":
+        raise ValueError("task %s is '%s', not 'done' — only reviews orphaned "
+                         "by an already-done task can be closed this way"
+                         % (task_id, t["status"]))
+    review = get_open_review(task_id, db_path=db_path)
+    if review is None:
+        raise ValueError("no open review for task %s" % task_id)
+    conn = _connect(db_path)
+    try:
+        with conn:
+            conn.execute("UPDATE reviews SET status='waived', verdict='waived', "
+                         "comments=?, decided_at=? WHERE id=?",
+                         (comment or "orphan review closed (task already done)",
+                          time.time(), review["id"]))
+    finally:
+        conn.close()
+    log_activity(action="review_orphan_closed", task_id=task_id,
+                 agent_profile="owner",
+                 detail="orphaned review #%d closed on done task: %s"
+                        % (review["id"], comment or ""),
+                 db_path=db_path)
+    return review["id"]
+
+
 # ---------------------------------------------------------------------------
 # Phase 6.5.1 — OWNER feedback (the human's own "send this back" channel)
 # ---------------------------------------------------------------------------
@@ -2969,6 +3016,15 @@ def check_integrity(db_path=None):
         for r in running_rev_no_run:
             findings.append("review #%s (task #%s) is 'running' but has no "
                             "linked Reviewer run" % (r["id"], r["task_id"]))
+        orphan_reviews = conn.execute(
+            "SELECT r.id, r.task_id, r.status FROM reviews r "
+            "JOIN tasks t ON t.id = r.task_id "
+            "WHERE r.status IN ('pending','running','reviewed') AND t.status='done'").fetchall()
+        for r in orphan_reviews:
+            findings.append("review #%s (task #%s) is still open (%r) but its "
+                            "task is already 'done' — orphaned review; close it "
+                            "with `wm review %s --close-orphan`"
+                            % (r["id"], r["task_id"], r["status"], r["task_id"]))
         desync = conn.execute(
             "SELECT id,task_id,status FROM runs WHERE status='running' AND NOT EXISTS "
             "(SELECT 1 FROM tasks WHERE tasks.id=runs.task_id AND tasks.status='running')").fetchall()
@@ -3284,6 +3340,15 @@ def sync_notifications(db_path=None):
         made = []
         with conn:
             for r in rows:
+                if r["task_id"] is not None:
+                    # The task moved on: attention rows raised before this
+                    # transition are stale. ts-bound so a question scanned
+                    # after the transition (same tick) is never swallowed.
+                    conn.execute(
+                        "UPDATE notifications SET read_at=? WHERE task_id=? "
+                        "AND kind IN ('needs_you','question') AND read_at IS "
+                        "NULL AND ts <= ?",
+                        (time.time(), r["task_id"], r["ts"] or time.time()))
                 to = r["to_status"]
                 if to in NOTIFY_NEEDS_YOU:
                     kind = "needs_you"; title = "Task #%s needs you — %s" % (r["task_id"], to.replace("_", " "))
