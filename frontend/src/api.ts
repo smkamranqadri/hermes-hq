@@ -57,6 +57,7 @@ export type TaskDetail = Task & {
   transitions: { id: number; ts: number; from_status: string | null; to_status: string; detail: string | null; run_id: number | null }[]
   runs: Run[]
   reviews: { id: number; status: string; verdict: string | null; comments: string | null; reviewer_profile: string; requested_at: number; decided_at: number | null }[]
+  question: { id: number; title: string; body: string | null; href: string | null; run_id: number } | null
 }
 export type TasksEnvelope = { tasks: Task[]; total: number; stateCounts: Record<string, number>; stateOptions: string[]; limit: number | null; offset: number }
 export type ProjectDetail = Project & { goals: Goal[]; tasks: Task[]; runs: Run[]; activity: { id: number; ts: number; action: string; detail: string; agent_profile: string | null; task_id: number | null }[]; reviews: unknown[]; agents: { name: string; runs_total?: number; status?: string }[] }
@@ -150,6 +151,7 @@ export const pushTest = () => post<{ subscriptions: number; delivered: number }>
 export type MessagePart = { type: 'text'; text: string } | { type: 'image_url'; image_url: { url: string } }
 export type TurnOptions = { model?: string; provider?: string; effort?: string; fast?: boolean }
 export const steerTurn = (profile: string, sessionId: string, runId: string, message: string) => post<{ run_id: string }>(`/api/chat/${profile}/${sessionId}/steer/${runId}`, { message })
+export const sendRunAnswer = (runId: number, message: string) => post<{ ok: boolean; marked_read: number }>(`/api/run/${runId}/answer`, { message })
 export const useModels = (q: string, provider = '', profile = '') => useQuery({ queryKey: ['chat-models', q, provider, profile], queryFn: () => get<{ provider: string | null; models: { id: string; description: string }[]; providers: { id: string; name: string; active: boolean }[]; efforts: string[] }>(`/api/chat/models?q=${encodeURIComponent(q)}&provider=${encodeURIComponent(provider)}&profile=${encodeURIComponent(profile)}`), staleTime: 600000 })
 export async function streamChat(profile: string, sessionId: string, message: string | MessagePart[], onEvent: (e: SseEvent) => void, signal?: AbortSignal, opts: TurnOptions = {}): Promise<void> {
   const r = await fetch(`/api/chat/${profile}/${sessionId}`, { method: 'POST', headers: { 'content-type': 'application/json', 'x-csrf': csrf }, body: JSON.stringify({ message, ...opts }), signal })

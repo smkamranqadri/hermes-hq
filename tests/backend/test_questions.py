@@ -114,3 +114,33 @@ def test_brief_carries_ask_owner_section(env):
     brief = store.render_brief(rid, db_path=db)
     assert "ASKING THE OWNER" in brief and "hq-options" in brief
     assert brief.index("ASKING THE OWNER") < brief.index("COMPLETION CONTRACT")
+
+
+def test_answer_endpoint_and_task_question_field(env):
+    c, store, gw, root = env
+    from backend import questions
+    db = store.DEFAULT_DB_PATH
+    h = login(c)
+    _seed_state_db(root, "coder", "qs9", "wm-run-z", [("assistant", FENCE, None)])
+    tid, rid = _mk_run(store, "coder", "demoq9", session_id="qs9")
+    questions.scan_running_runs(db_path=db)
+    # task payload carries the open question
+    t = c.get("/api/task/%d" % tid).json()
+    assert t["question"]["body"] == "Deploy to staging or prod?" and t["question"]["run_id"] == rid
+    assert t["question"]["href"] == "/chat/coder/qs9"
+    # answer: file appended (twice), notifications marked read, question gone
+    r = c.post("/api/run/%d/answer" % rid, json={"message": "prod please"}, headers=h)
+    assert r.status_code == 200 and r.json()["marked_read"] == 1
+    assert c.post("/api/run/%d/answer" % rid, json={"message": "and be careful"}, headers=h).status_code == 200
+    content = open(store.answer_path(rid)).read()
+    assert "prod please" in content and "and be careful" in content and content.count("[owner ") == 2
+    assert c.get("/api/task/%d" % tid).json()["question"] is None
+    # the brief names the concrete answer file
+    assert store.answer_path(rid) in store.render_brief(rid, db_path=db)
+    # guards: unknown run 404, finished run 409
+    assert c.post("/api/run/999/answer", json={"message": "x"}, headers=h).status_code == 404
+    con = store._connect(db)
+    with con:
+        con.execute("UPDATE runs SET status='done' WHERE id=?", (rid,))
+    con.close()
+    assert c.post("/api/run/%d/answer" % rid, json={"message": "late"}, headers=h).status_code == 409

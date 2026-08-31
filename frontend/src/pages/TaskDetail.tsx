@@ -1,6 +1,6 @@
 import { Link, useParams } from 'react-router-dom'
 import clsx from 'clsx'
-import { useTask, useSystem, ago, when } from '../api'
+import { useTask, useSystem, ago, when, markNotificationsRead } from '../api'
 import { GlassCard } from '../components/GlassCard'
 import { StatusBadge } from '../components/StatusBadge'
 import { Empty, Loading, Chip, Crumbs, Label, Agent } from '../components/ui'
@@ -59,6 +59,12 @@ export function TaskDetail() {
           </div>
         </div>
         {t.human.reason && t.human.reason.includes(':') && <p className="basis-full text-sm text-needsyou">{t.human.reason.slice(t.human.reason.indexOf(':') + 1).trim()}</p>}
+        {t.question && (
+          <div className="flex basis-full flex-wrap items-center justify-between gap-2 rounded-lg border border-needsyou/50 bg-needsyou/10 px-3 py-2 text-sm" data-run-question>
+            <span className="min-w-0 break-words"><span className="mr-2 font-mono text-[10px] uppercase tracking-wider text-needsyou">question</span>{t.question.body || t.question.title}</span>
+            {t.question.href && <Link to={t.question.href} onClick={() => void markNotificationsRead([t.question!.id])} className="shrink-0 rounded-full border border-needsyou/60 px-2.5 py-0.5 font-mono text-[10px] uppercase tracking-wider text-needsyou hover:bg-needsyou/20">Answer in session</Link>}
+          </div>
+        )}
         <div className="flex basis-full flex-wrap gap-2">
           {st === 'planned' && <ActionBtn url={`/api/task/${t.id}/mark-ready`} label="Mark ready" confirm={t.goal_id && t.goal_status !== 'released' ? 'This bypasses the goal release gate for this task. Continue?' : undefined} />}
           {t.human.action === 'release_goal' && t.goal_id && <ActionBtn url={`/api/goal/${t.goal_id}/release`} label="Release goal" confirm={`Release goal #${t.goal_id}?`} />}
