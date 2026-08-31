@@ -47,4 +47,4 @@ terminal/PTY streams.
 
 ## Status
 
-PLANNED — awaiting `/kis:act`.
+COMPLETE 2026-08-31 — all acceptance checks passed; proof in `kis/state/current.md`.
