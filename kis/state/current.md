@@ -7,10 +7,10 @@
 Task: none — **feedback-from-manual + task edit COMPLETE 2026-08-31** (`intent/FeedbackEditPlan.md`; proof below). **The WM-fix bundle is DONE**: all four slices (Fast sweep, owner-close, SSE shield, feedback+edit) shipped 2026-08-31. Board clean; only #82/#85/#86 manual, #89 parked behind them.
 
 ## Next
-`/kis:plan` for the owner's pick. Open rows are small (below): agent-history display cap,
-per-profile API keys, manual-status "Done" badge label. When fresh GitHub/LinkedIn/Medium tasks
-exist: repoint #89 (`wm task undepend 89 <old>` + `depend`), close/supersede #82/#85/#86 —
-or just `wm task edit` them now that briefs can be fixed in place.
+Polish+ops bundle — Standard, PLANNED 2026-08-31 (`intent/PolishOpsPlan.md`; owner picked ALL
+remaining rows): "Handed over" chip, per-profile gateway keys, agent-history paging, and
+brand-board edits (#82/#85/#86, drafted → owner-reviewed → applied in place, kept parked;
+#89 repoint is OBSOLETE — edit-in-place keeps its deps valid). `/kis:act` to execute.
 When fresh GitHub/LinkedIn/Medium tasks are created: repoint #89 via `wm task undepend 89 <old>` +
 `wm task depend 89 <new>`, and owner-close or supersede #82/#85/#86.
 
