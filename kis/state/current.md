@@ -4,10 +4,10 @@
 **hermes-hq is the live control plane since 2026-08-29 13:40 UTC** (branch `main`), running as the **s6 service `/run/service/hermes-hq`** since 2026-08-30 (dispatcher ON, `--host 0.0.0.0 --port 9010 --interval 20`). Restart after backend changes: `hermes-hq service restart`; logs `/var/log/hermes-hq/current`; auto-update daily 05:00 PKT (`service auto-update --show`). Password file `/opt/data/hermes-hq/password` is `test` for the owner's review (generated one kept in `password.prev`). Frontend builds go live without a restart. HTTPS for the phone: `tailscale serve` on the owner's Mac fronts this VM's `:9010` (Knowledge → Web Push). Legacy WM: fully deleted 2026-08-31 (`knowledge/technical.md` → Legacy WM).
 
 ## Now
-Task: none — **Group 8 (Install & supervisor) is complete as of 2026-08-30**; hermes-hq now runs as a supervised s6 service on this box with daily auto-update. Groups 1–8 all shipped. Next session: `/kis:plan` for the owner's pick (PWA polish, debt items below, or new PRD ideas).
+Task: **Group 9 — PWA polish, approved 2026-08-31 (Standard mode), not started** (`intent/Group9Plan.md`: toasts above the phone tab bar, overscroll containment, app badge = Inbox unread incl. push payload, offline fallback page, Activity load-more, Task detail collapsible sections; skeletons dropped from scope — already on 15/16 pages). Groups 1–8 all shipped (Group 8 complete 2026-08-30).
 
 ## Next
-Owner's pick — plan first.
+`/kis:act` Group 9, steps 9-1 → 9-5 in order.
 
 ## Blocker
 None.
