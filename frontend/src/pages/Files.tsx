@@ -195,19 +195,36 @@ function Artifacts({ slug, onOpen }: { slug: string; onOpen: (p: string) => void
   const list = a.data?.artifacts ?? []
   const [open, setOpen] = useState<boolean | null>(null)   // long lists start collapsed so the tree stays reachable
   const isOpen = open ?? list.length <= 8
+  const [openGroups, setOpenGroups] = useState<Record<number, boolean>>({})
   if (a.isLoading) return <Skeleton rows={2} />
   if (!list.length) return null
+  // Grouped by task, newest task first; artifacts of task-less runs land in one "other runs" group (key 0).
+  const groups = new Map<number, Artifact[]>()
+  for (const x of list) { const k = x.task_id || 0; const g = groups.get(k); if (g) g.push(x); else groups.set(k, [x]) }
+  const ordered = [...groups.entries()].sort((x, y) => y[0] - x[0])
   return (
     <div className="mb-2 border-b border-line-subtle pb-2">
-      <button type="button" onClick={() => setOpen(!isOpen)} className="flex w-full items-center gap-1 py-1 font-mono text-[10px] uppercase tracking-widest text-muted hover:text-fg"><span className="w-3 text-center">{isOpen ? '▾' : '▸'}</span>Artifacts <Chip tone="muted">{list.length}</Chip></button>
-      {isOpen && <ul className="min-w-0">
-        {list.map(x => (
-          <li key={x.path} className="min-w-0">
-            {x.inside_primary && x.rel && !x.is_dir
-              ? <button type="button" onClick={() => onOpen(x.rel!)} className="flex w-full min-w-0 items-center gap-1.5 rounded-md py-1 pl-4 pr-1 text-left text-[13px] hover:bg-raised" title={`${x.task_title} · ${x.agent} · run #${x.run_id}`}><span className="truncate">{x.rel}</span></button>
-              : <span className="flex min-w-0 items-center gap-1.5 py-1 pl-4 pr-1 text-[13px] text-muted" title={`${x.path} — outside this root (${x.task_title})`}><span className="truncate">{x.name}</span><span className="shrink-0 font-mono text-[9px]">outside</span></span>}
-          </li>))}
-      </ul>}
+      <button type="button" data-artifacts-toggle onClick={() => setOpen(!isOpen)} className="flex w-full items-center gap-1 py-1 font-mono text-[10px] uppercase tracking-widest text-muted hover:text-fg"><span className="w-3 text-center">{isOpen ? '\u25be' : '\u25b8'}</span>Artifacts <Chip tone="muted">{list.length}</Chip></button>
+      {isOpen && ordered.map(([tid, items]) => {
+        const gOpen = openGroups[tid] ?? list.length <= 8
+        return (
+          <div key={tid} className="min-w-0" data-artifact-group>
+            <button type="button" onClick={() => setOpenGroups(g => ({ ...g, [tid]: !gOpen }))} title={items[0].task_title} className="flex w-full min-w-0 items-center gap-1 py-0.5 pl-3 pr-1 text-left text-[11px] text-muted hover:text-fg">
+              <span className="w-3 shrink-0 text-center">{gOpen ? '\u25be' : '\u25b8'}</span>
+              <span className="truncate">{tid ? `#${tid} \u00b7 ${items[0].task_title || 'task'}` : 'other runs'}</span>
+              <Chip tone="muted">{items.length}</Chip>
+            </button>
+            {gOpen && <ul className="min-w-0">
+              {items.map(x => (
+                <li key={x.path} className="min-w-0">
+                  {x.inside_primary && x.rel && !x.is_dir
+                    ? <button type="button" onClick={() => onOpen(x.rel!)} className="flex w-full min-w-0 items-center gap-1.5 rounded-md py-1 pl-7 pr-1 text-left text-[13px] hover:bg-raised" title={`${x.task_title} \u00b7 ${x.agent} \u00b7 run #${x.run_id}`}><span className="truncate">{x.rel}</span></button>
+                    : <span className="flex min-w-0 items-center gap-1.5 py-1 pl-7 pr-1 text-[13px] text-muted" title={`${x.path} \u2014 outside this root (${x.task_title})`}><span className="truncate">{x.name}</span><span className="shrink-0 font-mono text-[9px]">outside</span></span>}
+                </li>))}
+            </ul>}
+          </div>
+        )
+      })}
     </div>
   )
 }
