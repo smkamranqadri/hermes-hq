@@ -80,7 +80,7 @@ def stop_task(task_id, keep_in_queue=False, db_path=None):
             store.log_activity(action="task_stopped", task_id=task_id, run_id=run["id"],
                                agent_profile=run["agent_profile"], detail=detail, db_path=db_path)
             # run -> failed, task running -> stalled (guarded; no double-finalize)
-            store.mark_stalled(run["id"], task_id, STOP_NOTE, db_path=db_path)
+            store.mark_stalled(run["id"], task_id, STOP_NOTE, db_path=db_path, label="owner stop")
             if run["review_id"]:
                 store.set_review_status(run["review_id"], "failed", db_path=db_path)
             if store.get_task(task_id, db_path=db_path)["status"] == "stalled":

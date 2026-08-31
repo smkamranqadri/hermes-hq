@@ -166,3 +166,23 @@ def test_fence_in_codex_message_items(env):
     rows = _rows(store)
     assert any(r["run_id"] == rid and r["body"] == "Deploy to staging or prod?" and
                not r["source_key"].endswith("heuristic") for r in rows)
+
+
+def test_mark_stalled_label_names_the_origin(env):
+    """Owner stops must not read as liveness failures in Task history."""
+    c, store, gw, root = env
+    db = store.DEFAULT_DB_PATH
+    for slug, label, want in (("lbl1", None, "liveness: boom"), ("lbl2", "owner stop", "owner stop: boom")):
+        tid, rid = _mk_run(store, "coder", slug)
+        con = store._connect(db)
+        with con:
+            con.execute("UPDATE tasks SET status='running' WHERE id=?", (tid,))
+        con.close()
+        if label:
+            store.mark_stalled(rid, tid, "boom", db_path=db, label=label)
+        else:
+            store.mark_stalled(rid, tid, "boom", db_path=db)
+        con = store._connect(db)
+        d = con.execute("SELECT detail FROM state_transitions WHERE task_id=? AND to_status='stalled'", (tid,)).fetchone()["detail"]
+        con.close()
+        assert d == want
