@@ -16,6 +16,7 @@ None.
 - Agent detail history shows 30 rows + "Show more" (40 at a time) over the reader's 120-row cap; the cap itself is unchanged.
 - Specialist `.env` files carry the root `API_SERVER_KEY` (template-inherited); per-profile keys are an owner choice.
 - SSE disconnect kills live chat turns: when the browser drops the stream (phone lock, tab switch, nav), the Hermes gateway hard-interrupts the running turn (`_INTERRUPT_REASON_SSE_DISCONNECT`, gateway/run.py:3254; gateway.log 2026-08-31 07:20/07:37) and the engine mislabels it "User sent a new message" → chat shows "Operation interrupted." Fix candidate: backend shields the gateway stream — keep consuming after client disconnect so the turn finishes and lands as a notification.
+- `mark_ready` re-readies a RUNNING task → dispatcher double-claims: task #109 (2026-08-31) was auto-readied on creation (released goal, deps done) and claimed (run #229); an explicit `wm task mark-ready` then ran `* -> ready` on the running task and the next tick claimed it again (run #230) — two coder runs raced the same repo. Fix: `mark_ready` should refuse when status is 'running' (and no-op on 'ready'); `wm_store.py:1268` uses `from_status='*'` with only a `!= 'done'` guard.
 
 ## How to run
 `README.md`. Dev: `.venv/bin/hermes-hq serve --no-dispatcher` + `cd frontend && npm run dev`. Owner drops reference images in `screenshots/` (git-ignored). Playwright: settings in memory `hermes-hq-ops` (browser path, 390×844 + `isMobile` for phones); scripts are per-session.
