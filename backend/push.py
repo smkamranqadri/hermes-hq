@@ -86,8 +86,18 @@ def send(sub, payload, db_path=None):
         return False
 
 
-def payload_for(n):
-    return {"id": n["id"], "kind": n["kind"], "title": n["title"], "body": n.get("body"), "href": n.get("href") or "/inbox", "tag": "hq-%s" % n["id"]}
+def payload_for(n, unread=None):
+    p = {"id": n["id"], "kind": n["kind"], "title": n["title"], "body": n.get("body"), "href": n.get("href") or "/inbox", "tag": "hq-%s" % n["id"]}
+    if unread is not None:
+        p["unread"] = unread  # lets the service worker set the app icon badge while the app is closed
+    return p
+
+
+def _unread_count(db_path=None):
+    try:
+        return store.list_notifications(limit=1, db_path=db_path)[1]
+    except Exception:  # pragma: no cover - defensive; a badge is never worth failing a push
+        return None
 
 
 def push_notifications(ids, db_path=None, background=True):
@@ -101,8 +111,9 @@ def push_notifications(ids, db_path=None, background=True):
     rows = store.get_notifications(ids, db_path=db_path)
 
     def work():
+        unread = _unread_count(db_path=db_path)
         for n in rows:
-            p = payload_for(n)
+            p = payload_for(n, unread=unread)
             for s in subs:
                 send(s, p, db_path=db_path)
     if background:
@@ -126,5 +137,5 @@ def send_test(db_path=None):
     subs = store.list_push_subscriptions(db_path=db_path)
     ok = 0
     for s in subs:
-        ok += 1 if send(s, {"id": 0, "kind": "info", "title": "hermes-hq push works", "body": "You will get alerts here even when the app is closed.", "href": "/inbox", "tag": "hq-test"}, db_path=db_path) else 0
+        ok += 1 if send(s, {"id": 0, "kind": "info", "title": "hermes-hq push works", "body": "You will get alerts here even when the app is closed.", "href": "/inbox", "tag": "hq-test", "unread": _unread_count(db_path=db_path)}, db_path=db_path) else 0
     return {"subscriptions": len(subs), "delivered": ok}

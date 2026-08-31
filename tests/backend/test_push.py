@@ -78,3 +78,21 @@ def test_sync_returns_new_ids_and_dispatcher_hook_is_idempotent(env):
     rows, unread = store.list_notifications(db_path=db)
     assert unread == 1 and rows[0]["kind"] == "needs_you"
     assert push.sync_and_push(db_path=db, background=False) == 0 and store.list_notifications(db_path=db)[1] == 1
+
+
+def test_payload_carries_unread_for_badge(env, monkeypatch):
+    """9-2: pushes carry the live unread count so sw.js can badge the app icon while the app is closed."""
+    c, store, gw, root = env
+    from backend import push
+    db = store.DEFAULT_DB_PATH
+    h = login(c)
+    assert c.post("/api/push/subscribe", json={"endpoint": "http://127.0.0.1:9/dead", "keys": _browser_keys()}, headers=h).status_code == 200
+    sent = []
+    monkeypatch.setattr(push, "send", lambda s, p, db_path=None: sent.append(p) or True)
+    n1 = store.add_notification("info", "one", "b", "/tasks/1", source_key="u:1", db_path=db)
+    n2 = store.add_notification("needs_you", "two", "b", "/tasks/2", source_key="u:2", db_path=db)
+    assert push.push_notifications([n1, n2], db_path=db, background=False) == 2
+    expected = store.list_notifications(limit=1, db_path=db)[1]
+    assert expected >= 2 and [p["unread"] for p in sent] == [expected, expected]
+    # without a count the key is absent (send_test passes None only if the store read fails)
+    assert "unread" not in push.payload_for({"id": 1, "kind": "info", "title": "t"})

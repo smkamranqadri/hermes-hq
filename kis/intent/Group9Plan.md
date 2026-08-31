@@ -10,10 +10,10 @@ Facts that shape it: `sw.js` is push-only by design ("no offline caching — the
 3. [x] Confirmed `More.tsx` is static (theme picker, links, sign-out — no data fetch), so no skeleton is needed.
 Proof: Playwright on live :9010 — trigger a toast on a 390 px page with the tab bar visible → toast bottom edge above tab bar top edge (bounding boxes); desktop toast position unchanged; overscroll checked by hand on the phone (not automatable) + CSS asserted.
 
-## 9-2 App badge (Inbox unread on the home-screen icon)
-1. [ ] Frontend effect (App shell or `Bell.tsx`, guarded `('setAppBadge' in navigator)`): `setAppBadge(unread)` on every `useNotifications` result, `clearAppBadge()` at 0.
-2. [ ] `backend/push.py`: include current `unread` in the push payload; `sw.js` push handler applies `self.navigator.setAppBadge(unread)` when present — badge stays right while the app is closed.
-3. [ ] Backend test: payload carries `unread` (extend the existing push tests); suite stays green.
+## 9-2 App badge (Inbox unread on the home-screen icon) — DONE 2026-08-31
+1. [x] Frontend effect (App shell or `Bell.tsx`, guarded `('setAppBadge' in navigator)`): `setAppBadge(unread)` on every `useNotifications` result, `clearAppBadge()` at 0.
+2. [x] `backend/push.py`: include current `unread` in the push payload; `sw.js` push handler applies `self.navigator.setAppBadge(unread)` when present — badge stays right while the app is closed.
+3. [x] Backend test: payload carries `unread` (extend the existing push tests); suite stays green.
 Proof: pytest for the payload; live — mark-all-read → badge clears (effect path asserted via CDP or a `navigator.setAppBadge` stub in Playwright); iOS behavior noted as owner-checked on the phone.
 
 ## 9-3 Offline fallback page
