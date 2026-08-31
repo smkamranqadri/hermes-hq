@@ -7,10 +7,9 @@
 Task: none — **WM-fix Fast sweep shipped 2026-08-31** (mark_ready guard, notification auto-read, orphan-review finding + close path; proof below). Groups 1–10 all shipped; Group 10 needs-you loop proven live earlier the same day (run #228 "Owner chose Borealis"). Next: `/kis:plan` for the Standard owner-close pass.
 
 ## Next
-Standard — owner-close (`wm task close --by-owner`, audited transition that satisfies deps, + dep
-repoint/remove CLI); later: SSE stream shield, feedback-from-manual. `/kis:plan` first.
-Also pending owner decisions: abandon draft goal #15 (recommended); repoint task #89 deps when
-fresh GitHub/LinkedIn tasks are created.
+Standard — owner-close pass, PLANNED 2026-08-31 (`intent/OwnerClosePlan.md`; owner locked: manual-only
+gate, UI button, 12 live closes, delete goal #15). `/kis:act` to execute. Later: SSE stream shield,
+feedback-from-manual; repoint task #89 deps when fresh GitHub/LinkedIn tasks are created (undepend+depend).
 
 ## Blocker
 None.
