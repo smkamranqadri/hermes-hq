@@ -470,6 +470,21 @@ def cmd_task_close(args):
     return 0
 
 
+def cmd_task_edit(args):
+    try:
+        changed = store.edit_task(args.id, description=args.description,
+                                  definition_of_done=args.dod)
+    except ValueError as e:
+        _p("Refused: %s" % e)
+        return 1
+    if not changed:
+        _p("No change: the given text matches the current fields.")
+        return 0
+    _p("Task #%d edited (%s) — audited; the next run's brief carries the new "
+       "text." % (args.id, ", ".join(changed)))
+    return 0
+
+
 def cmd_goal_delete(args):
     try:
         title = store.delete_goal(args.id)
@@ -931,6 +946,14 @@ def build_parser():
                          "outside WM runs")
     tc.add_argument("--comment", "-c", dest="comment", default=None)
     tc.set_defaults(fn=cmd_task_close)
+    te = task_sub.add_parser("edit",
+                             help="audited edit of description/definition-of-"
+                                  "done (refused while running or done)")
+    te.add_argument("id", type=int)
+    te.add_argument("--description", dest="description", default=None)
+    te.add_argument("--dod", dest="dod", default=None,
+                    help="new definition of done")
+    te.set_defaults(fn=cmd_task_edit)
 
     sub.add_parser("status", help="Grouped text readout").set_defaults(
         fn=cmd_status)

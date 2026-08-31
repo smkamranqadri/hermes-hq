@@ -2288,7 +2288,7 @@ OWNER_FEEDBACK_MARKER = "owner feedback: "
 # (blocked) or died (failed/stalled) is exactly where owner words are most
 # useful — feedback re-queues it as rework with the answer in the next brief.
 OWNER_FEEDBACK_SOURCE_STATUSES = ("needs_review", "rework", "done",
-                                  "blocked", "failed", "stalled")
+                                  "blocked", "failed", "stalled", "manual")
 
 
 def owner_feedback(task_id, comment, db_path=None):
@@ -2499,6 +2499,47 @@ def mark_manual(task_id, note=None, db_path=None):
                  detail=note or ("old status=%s" % t["status"]),
                  db_path=db_path)
     return task_id
+
+
+def edit_task(task_id, description=None, definition_of_done=None, db_path=None):
+    """Audited owner edit of the two fields that shape the agent's brief.
+
+    Refused while 'running' (the brief was already rendered at claim) and on
+    'done' (historical record). No status change — the audit trail is a
+    `task_edited` activity row carrying each changed field's OLD value.
+    Returns the list of field names actually changed."""
+    if description is None and definition_of_done is None:
+        raise ValueError("nothing to edit: pass description and/or "
+                         "definition_of_done")
+    t = get_task(task_id, db_path=db_path)
+    if t is None:
+        raise ValueError("no task with id %s" % task_id)
+    if t["status"] in ("running", "done"):
+        raise ValueError("task %d is '%s' — edits are refused while running "
+                         "(brief already rendered) and on done tasks (history)"
+                         % (task_id, t["status"]))
+    updates, params, changed, audit = [], [], [], []
+    for field, new in (("description", description),
+                       ("definition_of_done", definition_of_done)):
+        if new is None or (t[field] or "") == new:
+            continue
+        updates.append("%s=?" % field); params.append(new); changed.append(field)
+        audit.append("%s was: %s" % (field, (t[field] or "")[:200]))
+    if not changed:
+        return []
+    conn = _connect(db_path)
+    try:
+        with conn:
+            conn.execute("UPDATE tasks SET %s, updated_at=? WHERE id=?"
+                         % ", ".join(updates),
+                         params + [time.time(), task_id])
+    finally:
+        conn.close()
+    log_activity(action="task_edited", task_id=task_id,
+                 detail="owner edited %s. %s" % (", ".join(changed),
+                                                 " | ".join(audit)),
+                 db_path=db_path)
+    return changed
 
 
 def close_by_owner(task_id, note=None, db_path=None):

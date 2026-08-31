@@ -1,10 +1,11 @@
 import { Link, useParams } from 'react-router-dom'
 import clsx from 'clsx'
-import { useTask, useSystem, ago, when, markNotificationsRead } from '../api'
+import { useTask, useSystem, useWrite, ApiError, ago, when, markNotificationsRead } from '../api'
 import { GlassCard } from '../components/GlassCard'
 import { StatusBadge } from '../components/StatusBadge'
 import { Empty, Loading, Chip, Crumbs, Label, Agent } from '../components/ui'
-import { Btn } from '../components/Modal'
+import { Btn, TextArea } from '../components/Modal'
+import { useToast } from '../components/Toast'
 import { usePageTitle } from '../usePageTitle'
 import { useState } from 'react'
 import { ActionBtn, FeedbackModal } from '../components/forms'
@@ -14,6 +15,34 @@ import { ScopedChat } from '../components/ScopedChat'
 
 function Block({ title, children }: { title: string; children: React.ReactNode }) {
   return <div><Label>{title}</Label><div className="mt-1 whitespace-pre-wrap break-words text-sm">{children}</div></div>
+}
+
+/** Description / definition-of-done with an audited owner edit (refused by the engine while running/done). */
+function EditBlock({ title, value, field, taskId, canEdit }: { title: string; value: string; field: 'description' | 'definition_of_done'; taskId: number; canEdit: boolean }) {
+  const toast = useToast()
+  const [editing, setEditing] = useState(false)
+  const [text, setText] = useState('')
+  const m = useWrite(`/api/task/${taskId}/edit`, { onSuccess: () => { toast(`${title} updated — audited; the next run's brief carries it`); setEditing(false) } })
+  if (!value && !canEdit) return null
+  return (
+    <div data-edit-block={field}>
+      <div className="flex items-center gap-2">
+        <Label>{title}</Label>
+        {canEdit && !editing && <button type="button" aria-label={`Edit ${title.toLowerCase()}`} className="text-xs leading-none text-muted hover:text-accent-2" onClick={() => { setText(value); setEditing(true) }}>✎</button>}
+      </div>
+      {editing ? (
+        <div className="mt-1 flex flex-col gap-2">
+          <TextArea autoFocus rows={Math.min(12, Math.max(4, text.split('\n').length + 1))} value={text} onChange={e => setText(e.target.value)} />
+          <div className="flex gap-2">
+            <Btn busy={m.isPending} disabled={text.trim() === (value || '').trim()} onClick={() => m.mutate({ [field]: text }, { onError: x => toast(x instanceof ApiError ? x.message : String(x), 'err') })}>Save</Btn>
+            <Btn kind="ghost" onClick={() => setEditing(false)}>Cancel</Btn>
+          </div>
+        </div>
+      ) : (
+        <div className="mt-1 whitespace-pre-wrap break-words text-sm">{value || <span className="text-muted">—</span>}</div>
+      )}
+    </div>
+  )
 }
 
 /** Phone-only collapsible section: tap-header under `sm`; plain label and always-open content on desktop. */
@@ -42,7 +71,8 @@ export function TaskDetail() {
   if (q.isError || !t) return <section className="mx-auto max-w-6xl p-6"><Empty error title={`Could not load /api/task/${id}`} note={String(q.error ?? '404')} /></section>
   const latest = t.runs[0]
   const st = t.status
-  const canFeedback = ['needs_review', 'rework', 'done', 'blocked', 'failed', 'stalled'].includes(st)
+  const canFeedback = ['needs_review', 'rework', 'done', 'blocked', 'failed', 'stalled', 'manual'].includes(st)
+  const canEdit = !['running', 'done'].includes(st)
   const canRetry = ['failed', 'stalled', 'blocked', 'rework', 'manual'].includes(st)
   const canManual = !['done', 'manual', 'running'].includes(st)
   return (
@@ -84,8 +114,8 @@ export function TaskDetail() {
       <div className="grid min-w-0 gap-4 lg:grid-cols-3">
         <div className="flex min-w-0 flex-col gap-4 lg:col-span-2">
           <GlassCard className="flex min-w-0 flex-col gap-4 overflow-hidden">
-            {t.description && <Block title="Description">{t.description}</Block>}
-            {t.definition_of_done && <Block title="Definition of done">{t.definition_of_done}</Block>}
+            <EditBlock title="Description" value={t.description || ''} field="description" taskId={t.id} canEdit={canEdit} />
+            <EditBlock title="Definition of done" value={t.definition_of_done || ''} field="definition_of_done" taskId={t.id} canEdit={canEdit} />
             {t.summary && <Block title="Summary">{t.summary}</Block>}
             {t.feedback && <Block title="Owner feedback">{t.feedback}</Block>}
             {t.result_paths.length > 0 && <Block title="Results">{t.result_paths.map(p => <p key={p} className="break-all font-mono text-xs">{p}</p>)}</Block>}
