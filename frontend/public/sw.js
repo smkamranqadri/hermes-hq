@@ -6,10 +6,13 @@ self.addEventListener('push', e => {
   let d = {}
   try { d = e.data ? e.data.json() : {} } catch { d = { title: e.data ? e.data.text() : 'hermes-hq' } }
   const title = d.title || 'hermes-hq'
-  e.waitUntil(self.registration.showNotification(title, {
+  const jobs = [self.registration.showNotification(title, {
     body: d.body || undefined, tag: d.tag || undefined, renotify: !!d.tag,
     icon: '/icon-192.png', badge: '/icon-192.png', data: { href: d.href || '/inbox', id: d.id },
-  }))
+  })]
+  if (typeof d.unread === 'number' && 'setAppBadge' in self.navigator)
+    jobs.push((d.unread > 0 ? self.navigator.setAppBadge(d.unread) : self.navigator.clearAppBadge()).catch(() => {}))
+  e.waitUntil(Promise.all(jobs))
 })
 
 self.addEventListener('notificationclick', e => {

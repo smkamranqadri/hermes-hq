@@ -11,7 +11,7 @@ import { LoginScreen } from './components/LoginScreen'
 import { ActionBtn } from './components/forms'
 import { Btn } from './components/Modal'
 import { Loading } from './components/ui'
-import { post, setCsrf, useSession } from './api'
+import { post, setCsrf, useNotifications, useSession } from './api'
 import { usePageTitle } from './usePageTitle'
 import { termStore, useTermStore } from './components/terminal/store'
 import { useLocation, useNavigate } from 'react-router-dom'
@@ -149,6 +149,7 @@ export default function App() {
         <TopBar />
         <TabBar />
         <SnapshotBanner />
+        <AppBadge />
         <main>
           {termMounted && <Suspense fallback={loc.pathname === '/terminal' ? <section className="mx-auto max-w-7xl p-4 sm:p-6"><Loading rows={8} /></section> : null}><TerminalHost /></Suspense>}
           <Routes>
@@ -178,4 +179,15 @@ export default function App() {
       </div>
     </ToastProvider>
   )
+}
+
+/** Keeps the installed-app icon badge in sync with Inbox unread (Badging API — iOS 16.4+ home-screen apps; silent no-op elsewhere). */
+function AppBadge() {
+  const unread = useNotifications().data?.unread
+  useEffect(() => {
+    const nav = navigator as Navigator & { setAppBadge?: (n?: number) => Promise<void>; clearAppBadge?: () => Promise<void> }
+    if (typeof unread !== 'number' || !nav.setAppBadge || !nav.clearAppBadge) return
+    void (unread > 0 ? nav.setAppBadge(unread) : nav.clearAppBadge()).catch(() => {})
+  }, [unread])
+  return null
 }
