@@ -437,6 +437,49 @@ def cmd_task_depend(args):
        % (args.id, args.depends_on_id))
 
 
+def cmd_task_undepend(args):
+    if not store.get_task(args.id):
+        sys.exit("error: no task with id %s" % args.id)
+    if not store.remove_task_dep(args.id, args.depends_on_id):
+        _p("No such dependency: task #%d does not depend on task #%d"
+           % (args.id, args.depends_on_id))
+        return 1
+    t = store.get_task(args.id)
+    _p("Removed dependency: task #%d no longer depends on task #%d%s"
+       % (args.id, args.depends_on_id,
+          " — task promoted to READY (released goal, all deps done)"
+          if t["status"] == "ready" else ""))
+    return 0
+
+
+def cmd_task_close(args):
+    if not args.by_owner:
+        sys.exit("error: only --by-owner closes exist (agent closes go "
+                 "through runs and reviews)")
+    t = store.get_task(args.id)
+    if not t:
+        sys.exit("error: no task with id %s" % args.id)
+    try:
+        promoted = store.close_by_owner(args.id, note=args.comment)
+    except ValueError as e:
+        _p("Refused: %s" % e)
+        return 1
+    _p("Task #%d ('%s') closed by owner -> done. Promoted dependents: %s"
+       % (args.id, t["title"] or "-",
+          ", ".join(str(p) for p in promoted) or "-"))
+    return 0
+
+
+def cmd_goal_delete(args):
+    try:
+        title = store.delete_goal(args.id)
+    except ValueError as e:
+        _p("Refused: %s" % e)
+        return 1
+    _p("Draft goal #%d ('%s') deleted (audited)." % (args.id, title or "-"))
+    return 0
+
+
 def cmd_dispatch(args):
     # T2: manual trigger runs the SAME dispatcher the cron auto-tick uses
     # (single-flight lock prevents overlap — see wm_dispatch.run_dispatch).
@@ -797,6 +840,12 @@ def build_parser():
                                   "text becomes editable again)")
     ga.add_argument("id", type=int)
     ga.set_defaults(fn=cmd_goal_abandon)
+    gdel = goal_sub.add_parser("delete",
+                               help="delete a DRAFT goal nothing references "
+                                    "(tasks/schedules must be repointed first; "
+                                    "audited)")
+    gdel.add_argument("id", type=int)
+    gdel.set_defaults(fn=cmd_goal_delete)
     gr = goal_sub.add_parser("release", help="approve/release a Goal plan "
                                              "(eligible child tasks may then run)")
     gr.add_argument("id", type=int)
@@ -866,6 +915,22 @@ def build_parser():
     td.add_argument("id", type=int)
     td.add_argument("depends_on_id", type=int)
     td.set_defaults(fn=cmd_task_depend)
+    tu = task_sub.add_parser("undepend",
+                             help="remove one dependency edge (repoint = "
+                                  "undepend + depend); re-checks the task's "
+                                  "release eligibility")
+    tu.add_argument("id", type=int)
+    tu.add_argument("depends_on_id", type=int)
+    tu.set_defaults(fn=cmd_task_undepend)
+    tc = task_sub.add_parser("close",
+                             help="owner-close a 'manual' task as done "
+                                  "(audited; satisfies dependents' deps)")
+    tc.add_argument("id", type=int)
+    tc.add_argument("--by-owner", action="store_true", dest="by_owner",
+                    help="required: the owner declares the work finished "
+                         "outside WM runs")
+    tc.add_argument("--comment", "-c", dest="comment", default=None)
+    tc.set_defaults(fn=cmd_task_close)
 
     sub.add_parser("status", help="Grouped text readout").set_defaults(
         fn=cmd_status)

@@ -77,6 +77,7 @@ export function TaskDetail() {
           {canFeedback && st !== 'blocked' && <Btn kind="ghost" onClick={() => setReply(true)}>{st === 'rework' ? 'Add feedback' : 'Feedback → rework'}</Btn>}
           {canRetry && !['failed', 'stalled', 'blocked'].includes(st) && <ActionBtn url={`/api/task/${t.id}/retry`} label="Re-queue" kind="ghost" confirm="Re-queue this task?" />}
           {canManual && <ActionBtn url={`/api/task/${t.id}/manual`} label="Take over" kind="warn" confirm="Take this task out of the queue (status manual)?" />}
+          {st === 'manual' && <ActionBtn url={`/api/task/${t.id}/close-owner`} label="Close as done" confirm="Declare this work finished outside WM runs? The task becomes done (audited) and may release dependent tasks." />}
         </div>
         {reply && <FeedbackModal taskId={t.id} onClose={() => setReply(false)} />}
       </div>
