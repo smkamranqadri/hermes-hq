@@ -6,7 +6,9 @@ teaches it the ```hq-options fence — see wm_store._ASK_OWNER_LINES). This modu
 is the other half: on every dispatcher tick, scan the transcripts of running
 runs for NEW assistant messages and turn questions into 'question' notifications
 (Inbox + the existing Web Push pipeline), so the owner's phone pings while the
-run is still alive and an answer can be steered into the session.
+run is still alive and an answer can be delivered via the answer file
+(wm_store.answer_path(run_id) — see writes.run_answer and the brief's
+ASKING THE OWNER section).
 
 Rules (owner decisions 2026-08-31):
 - an ```hq-options fenced block => one notification PER MESSAGE

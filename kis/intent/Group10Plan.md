@@ -1,4 +1,4 @@
-# Group 10 — "Needs you" for dispatched runs (approved 2026-08-31, Standard mode)
+# Group 10 — "Needs you" for dispatched runs (approved 2026-08-31, Standard mode) — COMPLETE 2026-08-31 (e2e proven live on attempt 5; suite 104 passed)
 
 Owner decisions 2026-08-31: **Q1 B** detection = ```hq-options fence in dispatched-run transcripts **plus** a trailing-"?" heuristic (heuristic bounded to one row per run, softer title); **Q2 A** reply = steer from the run-owned Chat session — **amended 2026-08-31 during 10-2 (owner: Hybrid)**: gateway steer cannot reach dispatched runs (steering is in-process `agent._pending_steer` inside the gateway; a `chat -Q` run is a separate OS process with no external channel — verified in /opt/hermes). Dispatched runs get a **file answer channel** (`<runs_dir>/<run_id>.answer.txt`, brief tells agents to check it between steps after asking); the composer on a run-owned session writes that file via a new API. The existing gateway steer for the owner's OWN live chat turns stays as-is. Closes the debt row "Dispatched task runs don't get the hq-options hint; a 'Needs you' prompt for a run that asks a question is not built."
 
@@ -17,9 +17,9 @@ Proof: pytest new file + full suite green.
 3. [x] `Chat.tsx` run-owned session (`liveRun` branch): keep the working-here banner, add an **answer composer** beneath — POSTs `/api/run/{id}/answer` (appends to `<runs_dir>/<run_id>.answer.txt`), labeled so the owner knows the agent reads it between steps and may already have moved on. Own-turn gateway steer untouched (hybrid). Phone 390 checked (16 px field, no overflow).
 Proof: Playwright 390 `isMobile` + 1440 on Task detail + Chat.
 
-## 10-3 Live end-to-end + sync
-1. [ ] Live proof on :9010: dispatch a deliberately cheap task on `writer` whose brief asks for a decision ("ask the owner via hq-options which of A/B to use, then finish done with the answer") → within a tick the Inbox shows the `question` row and the task banner; steer the answer from the run-owned session; run completes `done`; cleanup (task → deleted/manual, session deleted, notifications read/removed).
-2. [ ] Sync: Knowledge (question-scan mechanism under Notifications; steer composer note under Chat), State (drop the debt row, proof line, plan COMPLETE), commit per step, push at the end.
+## 10-3 Live end-to-end + sync — DONE 2026-08-31
+1. [x] (took 5 attempts — each taught a real lesson, recorded in State proof) Live proof on :9010: dispatch a deliberately cheap task on `writer` whose brief asks for a decision ("ask the owner via hq-options which of A/B to use, then finish done with the answer") → within a tick the Inbox shows the `question` row and the task banner; steer the answer from the run-owned session; run completes `done`; cleanup (task → deleted/manual, session deleted, notifications read/removed).
+2. [x] Sync: Knowledge (question-scan mechanism under Notifications; steer composer note under Chat), State (drop the debt row, proof line, plan COMPLETE), commit per step, push at the end.
 
 Out of scope: blocking two-way Q&A (pausing the agent until an answer arrives), rendering the options as tappable steer buttons (fast follow), reviewer-run special-casing, gateway-chat hq-options (already shipped 4b-4).
 Risks: heuristic noise (bounded to one row per run by design); steer is advisory — the blocked→feedback→rework path stays the guaranteed fallback; the scan reads a foreign `state.db` (read-only, bounded tail, wrapped so a tick never dies); a session may not exist yet in the first seconds of a run (marker lookup handles it; scan just skips when absent).
