@@ -72,6 +72,10 @@ def import_wm(src_dir, dest_home=None, force=False, copy_runs=True):
                 "UPDATE %s SET %s = REPLACE(%s, ?, ?) WHERE %s LIKE ?" % (table, col, col, col),
                 (old_prefix, new_prefix, "%" + old_prefix + "%"))
             rewritten += cur.rowcount
+        # drop path-valued meta imported from the legacy home: backup_dir would
+        # otherwise keep pointing auto-backups at the retired directory (seen
+        # 2026-08-31: hq wrote its daily backup into /opt/data/work-manager).
+        con.execute("DELETE FROM wm_meta WHERE key='backup_dir'")
         con.execute("INSERT OR REPLACE INTO wm_meta(key, value) VALUES('imported_from', ?)", (src_dir,))
         con.execute("INSERT OR REPLACE INTO wm_meta(key, value) VALUES('imported_at', ?)", (str(time.time()),))
     counts = {t: con.execute("SELECT COUNT(*) FROM %s" % t).fetchone()[0]

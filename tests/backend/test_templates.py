@@ -21,7 +21,7 @@ def test_every_assignee_has_a_template():
             front = open(p).read().split("---")[1]
             assert yaml.safe_load(front)["name"] == sk
         if name == store.ORCHESTRATOR_AGENT:
-            assert meta["overlay"] is True and meta["skills"] == []
+            assert meta["overlay"] is True and meta["skills"] == ["hermes-hq-ops"]
         else:
             assert meta["overlay"] is False and meta["skills"] == ["%s-specialist" % name]
 
