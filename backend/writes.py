@@ -215,6 +215,18 @@ def close_owner(tid: int, body: Note | None = None):
     _engine(store.close_by_owner, tid, note=(body.note if body else None)); return _after(tid)
 
 
+class TaskEdit(BaseModel):
+    description: str | None = None
+    definition_of_done: str | None = None
+
+
+@router.post("/task/{tid}/edit")
+def task_edit(tid: int, body: TaskEdit):
+    _engine(store.edit_task, tid, description=body.description,
+            definition_of_done=body.definition_of_done)
+    return _after(tid)
+
+
 @router.post("/task/{tid}/stop")
 def stop(tid: int, keep_in_queue: int = 0):
     res = _engine(stopmod.stop_task, tid, keep_in_queue=bool(keep_in_queue))

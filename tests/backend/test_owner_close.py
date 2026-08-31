@@ -133,3 +133,66 @@ def test_goal_delete_is_guarded_and_audited(env):
     finally:
         con.close()
     assert act is not None
+
+
+def test_owner_feedback_from_manual_requeues_with_brief_words(env):
+    c, store, gw, root = env
+    db = store.DEFAULT_DB_PATH
+    _setup(store, db)
+    tid = store.create_task("demo", "Wrong direction", "", "", db_path=db)
+    store.mark_manual(tid, note="taking over", db_path=db)
+    ts, comment, closed_review, demoted = store.owner_feedback(
+        tid, "actually: target the staging host, not prod", db_path=db)
+    assert ts == "rework"
+    assert store.get_task(tid, db_path=db)["status"] == "rework"
+    assert store.latest_owner_feedback(tid, db_path=db).startswith("actually: target the staging")
+    store.claim_task(tid, db_path=db)
+    rid = store.start_run(tid, "coder", db_path=db)
+    brief = store.render_brief(rid, db_path=db)
+    assert "OWNER FEEDBACK" in brief and "staging host" in brief
+
+
+def test_edit_task_audited_and_gated(env):
+    c, store, gw, root = env
+    db = store.DEFAULT_DB_PATH
+    _setup(store, db)
+    tid = store.create_task("demo", "Editable", "old description", "old dod", db_path=db)
+    with pytest.raises(ValueError, match="nothing to edit"):
+        store.edit_task(tid, db_path=db)
+    changed = store.edit_task(tid, description="new description",
+                              definition_of_done="new dod", db_path=db)
+    assert sorted(changed) == ["definition_of_done", "description"]
+    t = store.get_task(tid, db_path=db)
+    assert t["description"] == "new description" and t["definition_of_done"] == "new dod"
+    acts = _activity_actions(store, db, tid)
+    assert "task_edited" in acts
+    con = store._connect(db)
+    try:
+        d = con.execute("SELECT detail FROM activity WHERE task_id=? AND "
+                        "action='task_edited'", (tid,)).fetchone()["detail"]
+    finally:
+        con.close()
+    assert "old description" in d and "old dod" in d          # audit keeps old values
+    assert store.edit_task(tid, description="new description", db_path=db) == []   # no-op
+    store.mark_ready(tid, db_path=db); store.claim_task(tid, db_path=db)
+    with pytest.raises(ValueError, match="running"):
+        store.edit_task(tid, description="x", db_path=db)
+    store.mark_manual(tid, db_path=db); store.close_by_owner(tid, db_path=db)
+    with pytest.raises(ValueError, match="done"):
+        store.edit_task(tid, description="x", db_path=db)
+
+
+def test_edit_endpoint_and_manual_feedback_via_api(env):
+    c, store, gw, root = env
+    db = store.DEFAULT_DB_PATH
+    _setup(store, db)
+    from tests.backend.test_writes import login as _login
+    h = _login(c)
+    tid = store.create_task("demo", "Via API", "d0", "", db_path=db)
+    r = c.post("/api/task/%d/edit" % tid, json={"description": "d1"}, headers=h)
+    assert r.status_code == 200 and r.json()["task"]["description"] == "d1"
+    store.mark_ready(tid, db_path=db); store.claim_task(tid, db_path=db)
+    assert c.post("/api/task/%d/edit" % tid, json={"description": "d2"}, headers=h).status_code == 409
+    store.mark_manual(tid, db_path=db)
+    r = c.post("/api/task/%d/feedback" % tid, json={"comment": "go again, smaller"}, headers=h)
+    assert r.status_code == 200 and r.json()["task"]["status"] == "rework"
