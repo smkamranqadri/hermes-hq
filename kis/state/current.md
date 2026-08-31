@@ -4,10 +4,14 @@
 **hermes-hq is the live control plane since 2026-08-29 13:40 UTC** (branch `main`), running as the **s6 service `/run/service/hermes-hq`** since 2026-08-30 (dispatcher ON, `--host 0.0.0.0 --port 9010 --interval 20`). Restart after backend changes: `hermes-hq service restart` (if health then reads 000 and the log says "Waiting for connections to close", force with `s6-svc -k /run/service/hermes-hq`); logs `/var/log/hermes-hq/current`; auto-update daily 05:00 PKT (`service auto-update --show`). Password file `/opt/data/hermes-hq/password` is `test` for the owner's review (generated one kept in `password.prev`). Frontend builds go live without a restart. HTTPS for the phone: `tailscale serve` on the owner's Mac fronts this VM's `:9010` (Knowledge → Web Push). Legacy WM: fully deleted 2026-08-31 (`knowledge/technical.md` → Legacy WM).
 
 ## Now
-Task: none — **Group 10 ("Needs you" for dispatched runs) is complete as of 2026-08-31**: briefs teach the hq-options fence + answer file, the dispatcher tick scans running-run transcripts (incl. codex_message_items), question notifications push to the phone, Task detail banner + run-owned Chat answer box deliver <runs_dir>/<run>.answer.txt, and the full loop is proven live (run #228: asked → notified → answered → "Owner chose Borealis"). Groups 1–10 all shipped. Next session: `/kis:plan` for the owner's pick.
+Task: none — 2026-08-31 was spent operating the system for real (personal-brand website relaunched to production via BRAND.md staged process; WM state reconciled post-launch) — that dogfooding produced the WM-gap debt rows below. **Group 10 ("Needs you" for dispatched runs) is complete as of 2026-08-31**: briefs teach the hq-options fence + answer file, the dispatcher tick scans running-run transcripts (incl. codex_message_items), question notifications push to the phone, Task detail banner + run-owned Chat answer box deliver <runs_dir>/<run>.answer.txt, and the full loop is proven live (run #228: asked → notified → answered → "Owner chose Borealis"). Groups 1–10 all shipped. Next session: `/kis:plan` for the owner's pick.
 
 ## Next
-Owner's pick — plan first.
+Owner starts a NEW session for the WM-fix bundle (proposed 2026-08-31, owner accepted starting it):
+Fast sweep — mark_ready running-guard + notification auto-read + orphan-review check; then
+Standard — owner-close (`wm task close --by-owner`, satisfies deps) (+ later: SSE stream shield,
+feedback-from-manual). `/kis:plan` first. Also pending owner decisions: abandon draft goal #15
+(recommended); repoint task #89 deps when fresh GitHub/LinkedIn tasks are created.
 
 ## Blocker
 None.
