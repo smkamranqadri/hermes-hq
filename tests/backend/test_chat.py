@@ -11,6 +11,7 @@ KEY = "k-test"
 
 class FakeGateway(BaseHTTPRequestHandler):
     calls = []
+    finished = []       # session ids whose stream handler wrote every event
     slow = False
 
     def _auth(self):
@@ -54,6 +55,7 @@ class FakeGateway(BaseHTTPRequestHandler):
             text = msg if isinstance(msg, str) else " ".join(p.get("text", "[img]" if p.get("type") == "image_url" else "?") for p in msg)
             for d in ("Hel", "lo ", text[::-1]): ev("assistant.delta", {"delta": d})
             ev("assistant.completed", {"content": "Hello " + text[::-1]}); ev("run.completed", {}); ev("done", {})
+            FakeGateway.finished.append(sid)
             return
         self._json(404, {"error": {"message": "nope"}})
 
@@ -86,7 +88,7 @@ def env(tmp_path, monkeypatch):
     from core import wm_store as store
     from backend import gateways as gw
     os.makedirs(store.hq_home(), exist_ok=True); store.init_db(db_path=store.DEFAULT_DB_PATH)
-    FakeGateway.calls.clear(); FakeGateway.slow = False
+    FakeGateway.calls.clear(); FakeGateway.finished.clear(); FakeGateway.slow = False
     from fastapi.testclient import TestClient
     from backend.app import create_app
     with TestClient(create_app(dispatcher_enabled=False)) as c:
@@ -159,3 +161,32 @@ def test_history_from_state_db_without_gateway(env):
     assert c.get("/api/agent/coder/sessions").json() == {"sessions": []}     # no state.db yet -> empty, not 500
     assert c.get("/api/session/coder/nope").status_code == 404
     assert c.get("/api/agent/ghost/sessions").status_code == 404
+
+
+def test_sse_disconnect_shield_finishes_turn_and_notifies(env):
+    """A dropped browser stream must not kill the turn: the pump keeps consuming
+    the gateway to completion and the reply lands as a notification."""
+    c, store, gw, root = env
+    from backend import chat
+    db = store.DEFAULT_DB_PATH
+    FakeGateway.slow = True     # 0.4 s pause mid-stream: room to disconnect
+    try:
+        gen = chat.stream_turn("orchestrator", "api_1_shield", "ping", db_path=db)
+        for _ in range(4):      # watch the first lines (run.started etc.)
+            next(gen)
+        gen.close()             # browser dropped mid-turn (phone lock / nav)
+        deadline = time.time() + 5
+        while time.time() < deadline and "api_1_shield" not in FakeGateway.finished:
+            time.sleep(0.05)
+        assert "api_1_shield" in FakeGateway.finished    # gateway never saw a disconnect
+        rows = None
+        while time.time() < deadline:
+            rows = [r for r in store.list_notifications(db_path=db)[0]
+                    if r["source_key"] == "chat:api_1_shield:run_9"]
+            if rows:
+                break
+            time.sleep(0.05)
+        assert rows and rows[0]["kind"] == "chat" and rows[0]["body"] == "Hello gnip"
+        assert rows[0]["read_at"] is None                # nobody watched -> alerts
+    finally:
+        FakeGateway.slow = False

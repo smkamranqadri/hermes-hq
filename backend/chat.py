@@ -11,8 +11,10 @@ import http.client
 import json
 import logging
 import os
+import queue
 import re
 import socket
+import threading
 import time
 
 from backend import gateways, pricing, readers
@@ -380,34 +382,59 @@ def stream_turn(profile, session_id, message, db_path=None, model=None, effort=N
     store.log_activity(action="chat_message", agent_profile=profile, detail="session %s: %s" % (session_id, preview), db_path=db_path)
 
     def gen():
-        last_touch = 0.0
-        final = {"text": "", "run_id": None, "event": None}
+        # SSE shield: the gateway stream is consumed by a pump thread that
+        # outlives the browser connection. A client disconnect only stops
+        # DELIVERY (client_gone) — never consumption — so the gateway never
+        # sees its SSE client vanish and the turn always runs to completion,
+        # landing as a notification for the devices that missed it. The pump
+        # is bounded by TURN_TIMEOUT (socket read timeout on `r`).
+        out = queue.Queue()
+        state = {"client_gone": False}
+
+        def pump():
+            last_touch = 0.0
+            final = {"text": "", "run_id": None, "event": None}
+            try:
+                while True:
+                    chunk = r.readline()
+                    if not chunk:
+                        break
+                    if not state["client_gone"]:
+                        out.put(chunk)
+                    line = chunk.decode("utf-8", "replace").strip()
+                    if line.startswith("event: "):
+                        final["event"] = line[7:]
+                    elif line.startswith("data: ") and final["event"] in ("assistant.completed", "run.started"):
+                        try:
+                            d = json.loads(line[6:])
+                            final["run_id"] = d.get("run_id") or final["run_id"]
+                            if final["event"] == "assistant.completed" and isinstance(d.get("content"), str):
+                                final["text"] = d["content"]
+                        except ValueError:
+                            pass
+                    now = time.time()
+                    if now - last_touch > 30:   # keep the idle sweeper off a live turn
+                        gateways.touch(profile, db_path); last_touch = now
+            except (OSError, http.client.HTTPException, socket.timeout) as e:
+                if not state["client_gone"]:
+                    out.put(("event: error\ndata: %s\n\nevent: done\ndata: {}\n\n" % json.dumps({"message": "stream broke: %s" % e})).encode())
+            finally:
+                c.close()
+                gateways.touch(profile, db_path)
+                _notify_turn_done(profile, session_id, final["run_id"], final["text"], db_path)
+                out.put(None)
+
+        t = threading.Thread(target=pump, name="chat-pump-%s" % session_id, daemon=True)
+        t.start()
         try:
             while True:
-                chunk = r.readline()
-                if not chunk:
+                chunk = out.get()
+                if chunk is None:
                     break
                 yield chunk
-                line = chunk.decode("utf-8", "replace").strip()
-                if line.startswith("event: "):
-                    final["event"] = line[7:]
-                elif line.startswith("data: ") and final["event"] in ("assistant.completed", "run.started"):
-                    try:
-                        d = json.loads(line[6:])
-                        final["run_id"] = d.get("run_id") or final["run_id"]
-                        if final["event"] == "assistant.completed" and isinstance(d.get("content"), str):
-                            final["text"] = d["content"]
-                    except ValueError:
-                        pass
-                now = time.time()
-                if now - last_touch > 30:   # keep the idle sweeper off a live turn
-                    gateways.touch(profile, db_path); last_touch = now
-        except (OSError, http.client.HTTPException, socket.timeout) as e:
-            yield ("event: error\ndata: %s\n\nevent: done\ndata: {}\n\n" % json.dumps({"message": "stream broke: %s" % e})).encode()
-        finally:
-            c.close()
-            gateways.touch(profile, db_path)
-            _notify_turn_done(profile, session_id, final["run_id"], final["text"], db_path)
+        except GeneratorExit:
+            state["client_gone"] = True   # shield: pump keeps draining the gateway
+            raise
     return gen()
 
 
