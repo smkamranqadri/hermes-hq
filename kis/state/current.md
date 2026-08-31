@@ -7,7 +7,8 @@
 Task: none — **owner-close pass COMPLETE 2026-08-31** (`intent/OwnerClosePlan.md`; proof below). Both WM-fix sessions (Fast sweep + owner-close) shipped today. WM board is clean: only #82/#85/#86 remain `manual` (GitHub/Medium/LinkedIn — work genuinely not done), #89 parked behind them.
 
 ## Next
-`/kis:plan` for the owner's pick. Remaining debt: SSE stream shield, feedback-from-manual (rows below).
+SSE stream shield — Standard, PLANNED 2026-08-31 (`intent/SseShieldPlan.md`; owner approved backend-only
+scope). `/kis:act` to execute. Remaining debt after it: feedback-from-manual (row below).
 When fresh GitHub/LinkedIn/Medium tasks are created: repoint #89 via `wm task undepend 89 <old>` +
 `wm task depend 89 <new>`, and owner-close or supersede #82/#85/#86.
 
