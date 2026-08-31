@@ -144,3 +144,25 @@ def test_answer_endpoint_and_task_question_field(env):
         con.execute("UPDATE runs SET status='done' WHERE id=?", (rid,))
     con.close()
     assert c.post("/api/run/%d/answer" % rid, json={"message": "late"}, headers=h).status_code == 409
+
+
+def test_fence_in_codex_message_items(env):
+    """Codex-style models keep pre-tool reply text in codex_message_items with
+    content='' (observed live) — the fence must be detected there too."""
+    import sqlite3 as _sq
+    c, store, gw, root = env
+    from backend import questions
+    db = store.DEFAULT_DB_PATH
+    _seed_state_db(root, "coder", "qsc", "wm-run-c", [("user", "brief", None)])
+    scon = _sq.connect(root / "profiles" / "coder" / "state.db")
+    scon.execute("ALTER TABLE messages ADD COLUMN codex_message_items TEXT")
+    items = json.dumps([{"type": "message", "role": "assistant", "phase": "commentary",
+                         "content": [{"type": "output_text", "text": FENCE}]}])
+    scon.execute("INSERT INTO messages (session_id, role, content, timestamp, active, codex_message_items) "
+                 "VALUES ('qsc', 'assistant', '', 1, 1, ?)", (items,))
+    scon.commit(); scon.close()
+    _, rid = _mk_run(store, "coder", "demoqc", session_id="qsc")
+    assert questions.scan_running_runs(db_path=db) == 1
+    rows = _rows(store)
+    assert any(r["run_id"] == rid and r["body"] == "Deploy to staging or prod?" and
+               not r["source_key"].endswith("heuristic") for r in rows)

@@ -54,6 +54,24 @@ def _session_for(con, run):
     return row["id"] if row else None
 
 
+def _visible_texts(m):
+    """All VISIBLE assistant text of one message row. `content` is empty when a
+    message carries tool calls; codex-style models keep the pre-tool reply text
+    in `codex_message_items` output_text entries instead (observed live on the
+    coder profile) — both are the agent's deliberate reply text. Reasoning
+    channels are internal and deliberately NOT read."""
+    out = [(m["content"] or "")[:_MAX_MSG_CHARS]]
+    if "codex_message_items" in m.keys() and m["codex_message_items"]:
+        try:
+            for item in json.loads(m["codex_message_items"]):
+                for c in (item.get("content") or []):
+                    if c.get("type") == "output_text" and c.get("text"):
+                        out.append(c["text"][:_MAX_MSG_CHARS])
+        except Exception:
+            pass
+    return [t for t in out if t]
+
+
 def _fence_question(text):
     """The question string from an hq-options fence, or None (no/garbled fence
     is reported by the caller with a generic body — a fence is always intent)."""
@@ -82,7 +100,7 @@ def _scan_one(run, marks, db_path):
         if not sid:
             return last, []
         rows = con.execute(
-            "SELECT id, role, content FROM messages WHERE session_id=? AND id>? "
+            "SELECT * FROM messages WHERE session_id=? AND id>? "
             "AND (active IS NULL OR active=1) ORDER BY id ASC LIMIT ?",
             (sid, last, _MAX_MSGS_PER_SCAN)).fetchall()
     finally:
@@ -93,7 +111,7 @@ def _scan_one(run, marks, db_path):
         last = max(last, m["id"])
         if m["role"] != "assistant":
             continue
-        text = (m["content"] or "")[:_MAX_MSG_CHARS]
+        text = "\n".join(_visible_texts(m))[:_MAX_MSG_CHARS]
         fence = FENCE_RE.search(text)
         if fence:
             q = _fence_question(text) or "Question details are in the session."

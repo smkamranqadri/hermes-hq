@@ -2701,7 +2701,13 @@ def _ask_owner_lines(run_id):
         "your reply text tagged hq-options containing JSON {\"question\": str, "
         "\"mode\": \"single\"|\"multi\", \"options\": [{\"label\": str, "
         "\"detail\": str}]} (2-6 options, labels short, detail optional). The "
-        "owner is notified on their phone and can send an answer while you run.",
+        "owner is notified on their phone and can send an answer while you run. "
+        "Write the block as PLAIN REPLY TEXT in your message — never through a "
+        "tool, a terminal command, or a file (tool output is not scanned). "
+        "IMPORTANT: keep the same reply going — after the block, immediately "
+        "continue with tool calls (e.g. keep working, or poll the answer file "
+        "with `sleep 30` + `cat`). In this one-shot mode, a reply that ends "
+        "after the question ends your whole run before anyone can answer.",
         "After asking, keep working on everything that does not depend on the "
         "answer, and CHECK THE FILE %s between steps — it may not exist yet; "
         "when it appears, its contents are the owner's answer/guidance. Act on "
