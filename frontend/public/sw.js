@@ -1,6 +1,16 @@
-/* hermes-hq service worker: Web Push only (no offline caching — the app must never show stale state). */
-self.addEventListener('install', () => self.skipWaiting())
-self.addEventListener('activate', e => e.waitUntil(self.clients.claim()))
+/* hermes-hq service worker: Web Push + a static offline page. No app data is ever cached — the app must
+   never show stale state; the only cached asset is /offline.html, shown when a NAVIGATION fails. */
+const CACHE = 'hq-offline-v1'
+self.addEventListener('install', e => e.waitUntil(
+  caches.open(CACHE).then(c => c.addAll(['/offline.html'])).then(() => self.skipWaiting())))
+self.addEventListener('activate', e => e.waitUntil(Promise.all([
+  self.clients.claim(),
+  caches.keys().then(ks => Promise.all(ks.filter(k => k !== CACHE).map(k => caches.delete(k)))),
+])))
+self.addEventListener('fetch', e => {
+  if (e.request.mode !== 'navigate') return // API calls, assets, everything else: straight to the network
+  e.respondWith(fetch(e.request).catch(() => caches.match('/offline.html')))
+})
 
 self.addEventListener('push', e => {
   let d = {}

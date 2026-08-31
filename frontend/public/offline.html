@@ -1,0 +1,34 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover">
+<meta name="theme-color" content="#15151F">
+<title>Hermes HQ — offline</title>
+<style>
+  * { box-sizing: border-box; margin: 0 }
+  html, body { height: 100% }
+  body { display: grid; place-items: center; padding: 24px; background: #15151F; color: #F1F1F6;
+         font-family: "JetBrains Mono", ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+         overscroll-behavior-y: none }
+  .card { max-width: 420px; width: 100%; text-align: center; border: 1px solid rgba(255,255,255,.10);
+          border-radius: 16px; padding: 40px 28px; background: rgba(31,31,43,.82) }
+  .mark { font-size: 13px; letter-spacing: .3em; color: #9A9AB0; text-transform: uppercase }
+  h1 { margin: 18px 0 10px; font-size: 22px; font-weight: 600; letter-spacing: -.01em }
+  p { font-size: 13px; line-height: 1.6; color: #9A9AB0 }
+  button { margin-top: 24px; padding: 10px 22px; font: inherit; font-size: 14px; color: #15151F;
+           background: #A78BFA; border: 0; border-radius: 999px; cursor: pointer }
+  button:active { transform: scale(.97) }
+  .dot { display: inline-block; width: 8px; height: 8px; border-radius: 99px; background: #F5B544;
+         margin-right: 8px; vertical-align: 1px }
+</style>
+</head>
+<body>
+  <main class="card">
+    <div class="mark">Hermes // HQ</div>
+    <h1><span class="dot"></span>You're offline</h1>
+    <p>hermes-hq needs its server. Check your connection (or the Tailscale link) and try again — nothing here is cached, so what you see next will be live.</p>
+    <button onclick="location.reload()">Retry</button>
+  </main>
+</body>
+</html>

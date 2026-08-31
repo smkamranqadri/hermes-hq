@@ -16,9 +16,9 @@ Proof: Playwright on live :9010 — trigger a toast on a 390 px page with the ta
 3. [x] Backend test: payload carries `unread` (extend the existing push tests); suite stays green.
 Proof: pytest for the payload; live — mark-all-read → badge clears (effect path asserted via CDP or a `navigator.setAppBadge` stub in Playwright); iOS behavior noted as owner-checked on the phone.
 
-## 9-3 Offline fallback page
-1. [ ] `frontend/public/offline.html`: static branded "you're offline — hermes-hq needs the server" page (inline CSS, JetBrains Mono stack, retry button = reload). No app data, no API calls.
-2. [ ] `sw.js`: version-keyed cache precaching only `/offline.html` at install (old caches cleaned on activate); `fetch` handler **only** for `request.mode === 'navigate'` — network-first, catch → cached offline page. Never touches `/api/*`, assets, or non-navigation requests; the no-stale-state rule holds.
+## 9-3 Offline fallback page — DONE 2026-08-31
+1. [x] `frontend/public/offline.html`: static branded "you're offline — hermes-hq needs the server" page (inline CSS, JetBrains Mono stack, retry button = reload). No app data, no API calls.
+2. [x] `sw.js`: version-keyed cache precaching only `/offline.html` at install (old caches cleaned on activate); `fetch` handler **only** for `request.mode === 'navigate'` — network-first, catch → cached offline page. Never touches `/api/*`, assets, or non-navigation requests; the no-stale-state rule holds.
 Proof: Playwright/CDP offline emulation → navigation shows offline.html; back online → reload shows live data (nothing stale); `/api/*` requests bypass the sw (network entries confirm).
 
 ## 9-4 Phone debt items
