@@ -873,6 +873,41 @@ def set_goal_status(goal_id, new_status, detail=None, db_path=None, force=False)
         conn.close()
 
 
+def delete_goal(goal_id, db_path=None):
+    """Delete a goal row — ONLY a 'draft' goal nothing references. Tasks and
+    runs are never deleted (session markers re-attach on id reuse); goal ids
+    have no such external markers, so a guarded delete is safe. Audited via a
+    `goal_deleted` activity row carrying the title. Returns the deleted title."""
+    conn = _connect(db_path)
+    try:
+        row = conn.execute("SELECT * FROM goals WHERE id=?", (goal_id,)).fetchone()
+        if row is None:
+            raise ValueError("no goal with id %s" % goal_id)
+        if row["status"] != "draft":
+            raise ValueError("goal %d is '%s' — only 'draft' goals can be "
+                             "deleted" % (goal_id, row["status"]))
+        tasks = conn.execute("SELECT COUNT(*) FROM tasks WHERE goal_id=?",
+                             (goal_id,)).fetchone()[0]
+        scheds = conn.execute("SELECT COUNT(*) FROM schedules WHERE goal_id=?",
+                              (goal_id,)).fetchone()[0]
+        if tasks or scheds:
+            raise ValueError("goal %d is referenced (%d task(s), %d schedule(s))"
+                             " — repoint or close them first" % (goal_id, tasks, scheds))
+        with conn:
+            # activity FK-references goals; history rows stay (their detail
+            # text names the goal) but the linkage detaches with the row.
+            conn.execute("UPDATE activity SET goal_id=NULL WHERE goal_id=?",
+                         (goal_id,))
+            conn.execute("DELETE FROM goals WHERE id=?", (goal_id,))
+    finally:
+        conn.close()
+    log_activity(action="goal_deleted", project_id=row["project_id"],
+                 agent_profile="cli",
+                 detail="draft goal #%d deleted: %s" % (goal_id, row["title"] or ""),
+                 db_path=db_path)
+    return row["title"]
+
+
 # A planning task is the Orchestrator's decomposition work item for a goal. It
 # is identified by (goal, assignee, title prefix) — no schema change needed.
 PLANNING_TASK_PREFIX = "Plan goal #"
@@ -1222,6 +1257,29 @@ def add_task_dep(task_id, depends_on_task_id, db_path=None):
                 "UPDATE tasks SET updated_at=? WHERE id=?", (time.time(), task_id))
         log_activity(action="task_dep", task_id=task_id,
                      detail="depends_on=%d" % depends_on_task_id, db_path=db_path)
+    finally:
+        conn.close()
+
+
+def remove_task_dep(task_id, depends_on_task_id, db_path=None):
+    """Remove one dependency edge, then re-check the dependent's eligibility —
+    release-gate semantics unchanged (promotion only under a released goal with
+    every remaining dep done). Returns True when the edge existed."""
+    conn = _connect(db_path)
+    try:
+        with conn:
+            cur = conn.execute(
+                "DELETE FROM task_deps WHERE task_id=? AND depends_on_task_id=?",
+                (task_id, depends_on_task_id))
+            if cur.rowcount == 0:
+                return False
+            conn.execute(
+                "UPDATE tasks SET updated_at=? WHERE id=?", (time.time(), task_id))
+            _mark_ready_if_deps_done(conn, task_id)
+        log_activity(action="task_undep", task_id=task_id,
+                     detail="removed depends_on=%d" % depends_on_task_id,
+                     db_path=db_path)
+        return True
     finally:
         conn.close()
 
@@ -2441,6 +2499,41 @@ def mark_manual(task_id, note=None, db_path=None):
                  detail=note or ("old status=%s" % t["status"]),
                  db_path=db_path)
     return task_id
+
+
+def close_by_owner(task_id, note=None, db_path=None):
+    """The owner declares work finished outside WM runs. Only a 'manual' task
+    qualifies (Take over first) — the sanctioned two-step keeps the dispatcher
+    lifecycle and owner overrides apart. Records the done transition (so the
+    integrity audit passes), waives any open review (so it never orphans),
+    then promotes dependents. Returns the promoted task ids."""
+    t = get_task(task_id, db_path=db_path)
+    if t is None:
+        raise ValueError("no task with id %s" % task_id)
+    if t["status"] != "manual":
+        raise ValueError(
+            "task %d is '%s', not 'manual' — take it over first "
+            "(owner-close only applies to tasks out of the queue)"
+            % (task_id, t["status"]))
+    now = time.time()
+    conn = _connect(db_path)
+    try:
+        with conn:
+            conn.execute("UPDATE tasks SET status='done', updated_at=? WHERE id=?",
+                         (now, task_id))
+            _record_transition_conn(
+                conn, task_id, "done", from_status="manual",
+                detail=("closed by owner: %s" % note) if note else "closed by owner")
+            conn.execute(
+                "UPDATE reviews SET status='waived', verdict='waived', "
+                "comments=COALESCE(NULLIF(comments,''),'waived on owner-close'), "
+                "decided_at=? WHERE task_id=? AND status IN ('pending','running','reviewed')",
+                (now, task_id))
+    finally:
+        conn.close()
+    log_activity(action="task_closed_by_owner", task_id=task_id,
+                 detail=note or "", db_path=db_path)
+    return promote_dependents(task_id, db_path=db_path)
 
 
 def get_session_activity(agent, session_id, db_path=None):
