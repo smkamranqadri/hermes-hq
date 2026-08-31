@@ -1,4 +1,4 @@
-# Group 9 — PWA polish (approved 2026-08-31, Standard mode)
+# Group 9 — PWA polish (approved 2026-08-31, Standard mode) — COMPLETE 2026-08-31 (all four blocks shipped + proven live; suite 97 passed)
 
 Owner picked all four scope blocks from the 2026-08-31 planning round (phone-feel bundle, app badge, offline fallback, phone debt items), then approved as-is (**A**). Skeletons were dropped from scope after inspection: 15 of 16 pages already use `Skeleton`/`Loading` from `ui.tsx`; only static `More.tsx` lacks one (confirm during 9-1 that it fetches nothing — if so, it needs none).
 
@@ -26,9 +26,9 @@ Proof: Playwright/CDP offline emulation → navigation shows offline.html; back 
 2. [x] `TaskDetail.tsx`: collapsible sections on phones so the page isn't one long stack — headers with counts, primary block (status/actions) open by default, rest collapsed; desktop layout unchanged.
 Proof: Playwright 390 px — Activity paginates (row count grows on tap); Task detail initial height meaningfully shorter, sections expand/collapse, fields 16 px, `scrollWidth` 390; 1440 unchanged (screenshots).
 
-## 9-5 Sync
-1. [ ] State: drop shipped debt rows (toasts, Activity load-more, task-detail-length), add proof one-liner; Knowledge: Badging API + offline-page notes under Web Push; this plan marked COMPLETE.
-2. [ ] Commit per step, push at the end (owner rule).
+## 9-5 Sync — DONE 2026-08-31
+1. [x] State: drop shipped debt rows (toasts, Activity load-more, task-detail-length), add proof one-liner; Knowledge: Badging API + offline-page notes under Web Push; this plan marked COMPLETE.
+2. [x] Commit per step, push at the end (owner rule).
 
 Out of scope: skeletons (already everywhere they're needed), any data/API caching, Files artifact grouping, "Needs you" prompts for asking runs, per-profile API keys, iOS splash screens.
 Risks: `sw.js` is the only file with update-lifecycle risk (`skipWaiting` already on — clients pick the new sw next load; self-review the diff); Badging API absent outside installed PWAs / iOS < 16.4 (silent no-op by design); the offline fetch handler must never intercept non-navigation requests — scoped by `mode === 'navigate'` and covered by the proof.
