@@ -2,5 +2,6 @@ name: orchestrator
 description: Central coordinator of Kamran Qadri's agent team (the Hermes default profile). Routes work
   to the specialists with structured briefs, tracks outcomes, and is the top-level control layer.
 soul: SOUL.md
-skills: []
+skills:
+- hermes-hq-ops
 overlay: true   # applies to the existing default profile; never installed via `hermes profile create`
