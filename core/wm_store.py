@@ -2687,6 +2687,21 @@ def _render_orchestrator_planning_brief(run, task, project, primary_path,
 # completed parents (task_deps) — automatic handoff context (their result_path,
 # summary, and a --resume line for their latest sessioned run).
 # ---------------------------------------------------------------------------
+_ASK_OWNER_LINES = [
+    "ASKING THE OWNER",
+    "-" * 40,
+    "If you hit a decision only the owner can make, put ONE fenced block in "
+    "your reply text tagged hq-options containing JSON {\"question\": str, "
+    "\"mode\": \"single\"|\"multi\", \"options\": [{\"label\": str, "
+    "\"detail\": str}]} (2-6 options, labels short, detail optional). The "
+    "owner is notified on their phone and may steer an answer into this "
+    "session; if no answer arrives, continue with your best-judgment default "
+    "and note it in your summary. If you truly cannot proceed without the "
+    "answer, finish with completed=\"blocked\" and a precise blocker instead.",
+    "",
+]
+
+
 def render_brief(run_id, db_path=None):
     """Render the brief text an agent executes for a run.
 
@@ -2755,6 +2770,7 @@ def render_brief(run_id, db_path=None):
             "  (approved -> origin done + dependents fire; changes_requested -> "
             "origin rework + your comments feed the next run's brief.)",
             "",
+        ] + _ASK_OWNER_LINES + [
             "COMPLETION CONTRACT (REQUIRED — your LAST action):",
             "Write a JSON file to %s" % cpath,
             "with EXACTLY this structure:",
@@ -2818,6 +2834,7 @@ def render_brief(run_id, db_path=None):
     lines.append("-" * 40)
     lines.append("Work in the project's Working directory above. Complete the task.")
     lines.append("")
+    lines += _ASK_OWNER_LINES
     lines += _completion_contract_lines(cpath)
     if handoff:
         lines.append("")

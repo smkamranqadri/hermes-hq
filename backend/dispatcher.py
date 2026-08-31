@@ -49,6 +49,13 @@ class DispatcherLoop:
                 log.info("auto-update: %s", res)
         except Exception:
             log.exception("auto-update pass failed")
+        try:   # Group 10: surface questions asked inside running runs
+            from backend import questions
+            found = questions.scan_running_runs()
+            if found:
+                log.info("run questions surfaced: %s", found)
+        except Exception:
+            log.exception("question scan failed")
         self.last_tick = time.time()
         try:   # notifications + web push must not depend on a browser polling
             from backend import push
