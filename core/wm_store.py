@@ -1831,8 +1831,11 @@ def record_completion(run_id, task_id, completed, summary="", result_paths=None,
         conn.close()
 
 
-def mark_stalled(run_id, task_id, error, db_path=None):
-    """Dispatcher-side liveness verdict: run -> failed, task -> stalled."""
+def mark_stalled(run_id, task_id, error, db_path=None, label="liveness"):
+    """Run -> failed, task -> stalled. `label` names the verdict's origin in the
+    transition detail: "liveness" for the dispatcher's scan (default), "owner
+    stop" when the owner killed the run (backend/stop.py) — an owner stop is
+    not a liveness failure and must not read like one in Task history."""
     finish_run(run_id, status="failed", error=error, db_path=db_path)
     conn = _connect(db_path)
     try:
@@ -1843,7 +1846,7 @@ def mark_stalled(run_id, task_id, error, db_path=None):
             if cur.rowcount > 0:
                 _record_transition_conn(conn, task_id, "stalled",
                                         from_status="running",
-                                        detail="liveness: %s" % (error or ""))
+                                        detail="%s: %s" % (label, error or ""))
         log_activity(action="task_stalled", task_id=task_id, run_id=run_id,
                      detail=error, db_path=db_path)
     finally:
