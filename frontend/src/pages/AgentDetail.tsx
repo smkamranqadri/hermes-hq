@@ -5,14 +5,15 @@ import { GlassCard } from '../components/GlassCard'
 import { StatusBadge } from '../components/StatusBadge'
 import { Empty, Loading, Chip, Crumbs, Label } from '../components/ui'
 import { ActionBtn } from '../components/forms'
+import { Btn } from '../components/Modal'
 import { usePageTitle } from '../usePageTitle'
 import { GatewayDot } from './Agents'
 
 export function AgentDetail() {
   const name = useParams().name ?? ''
-  const q = useAgent(name)
-  const a = q.data
   const [shown, setShown] = useState(30)
+  const q = useAgent(name, Math.max(120, shown))   // Show more past 120 refetches a deeper history
+  const a = q.data
   usePageTitle(a ? `Agent ${a.name}` : 'Agent')
   if (q.isLoading) return <section className="mx-auto max-w-6xl p-4 sm:p-6"><Loading rows={1} /><div className="mt-4 grid gap-4 lg:grid-cols-2"><Loading rows={3} /><Loading rows={3} /></div></section>
   if (q.isError || !a) return <section className="mx-auto max-w-6xl p-6"><Empty error title={`Could not load /api/agent/${name}`} note={String(q.error ?? '404')} /></section>
@@ -67,6 +68,11 @@ export function AgentDetail() {
             )
           })}
         </ul>
+        {(() => {
+          const rows = a.history.filter(h => !(h.run && h.run.status === 'running'))
+          const more = rows.length > shown || (a.history.length >= Math.max(120, shown) && shown < 1000)
+          return more && <div className="mt-3 text-center"><Btn kind="ghost" busy={q.isFetching} onClick={() => setShown(s => s + 40)} data-history-more>Show more</Btn></div>
+        })()}
         {a.last_active_at && <p className="mt-2 text-[11px] text-muted">last active {when(a.last_active_at)}</p>}
       </GlassCard>
     </section>
