@@ -48,7 +48,7 @@ export type Run = { id: number; task_id: number; agent_profile: string; session_
 export type Task = {
   id: number; title: string; description: string; definition_of_done: string; status: string; assignee_profile: string | null
   project_slug: string; project_name?: string; goal_id: number | null; goal_title: string | null; goal_status?: string | null
-  review_policy: string; is_code: number; summary: string | null; feedback: string | null; result_paths: string[]
+  review_policy: string; is_code: number; owner_approval?: number; summary: string | null; feedback: string | null; result_paths: string[]
   created_at: number; updated_at: number | null; human: Human; schedule_id?: number | null
   deps: { id: number; status: string; title: string }[]; last_run?: Run | null
 }
@@ -58,7 +58,10 @@ export type TaskDetail = Task & {
   runs: Run[]
   reviews: { id: number; status: string; verdict: string | null; comments: string | null; reviewer_profile: string; requested_at: number; decided_at: number | null }[]
   question: { id: number; title: string; body: string | null; href: string | null; run_id: number } | null
+  artifacts?: TaskArtifact[]
 }
+/** A result_path resolved to its files-API address (absent fields = outside every root). */
+export type TaskArtifact = { path: string; root?: string; rel?: string; kind?: 'text' | 'image' | 'pdf' | 'binary'; exists?: boolean }
 export type TasksEnvelope = { tasks: Task[]; total: number; stateCounts: Record<string, number>; stateOptions: string[]; limit: number | null; offset: number }
 export type ProjectDetail = Project & { goals: Goal[]; tasks: Task[]; runs: Run[]; activity: { id: number; ts: number; action: string; detail: string; agent_profile: string | null; task_id: number | null }[]; reviews: unknown[]; agents: { name: string; runs_total?: number; status?: string }[] }
 

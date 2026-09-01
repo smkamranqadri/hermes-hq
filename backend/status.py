@@ -16,6 +16,14 @@ LABEL = {"needsyou": "Needs you", "working": "Working", "queued": "Queued",
          "backlog": "Backlog", "done": "Done"}
 
 
+def _get(row, key):
+    """Field access that works for both dicts and sqlite3.Row."""
+    try:
+        return row[key]
+    except (KeyError, IndexError):
+        return None
+
+
 def classify(task, deps=(), goal_status=None, last_run=None):
     """Return {state, reason, action}.
 
@@ -49,7 +57,13 @@ def classify(task, deps=(), goal_status=None, last_run=None):
     elif st == "manual":
         # Grouped/sorted under done, but the chip must not claim "Done": the
         # owner took it out of the queue — a distinct display label only.
-        label = "Handed over"
+        # An owner_approval task that landed here is DIFFERENT: it is waiting
+        # on the owner's decision, so it surfaces under needsyou instead.
+        if _get(task, "owner_approval"):
+            state, reason, label = "needsyou", "awaiting your approval", \
+                "Awaiting approval"
+        else:
+            label = "Handed over"
     elif st not in HUMAN_STATE:
         reason = st
     out = {"state": state, "reason": reason, "action": action}

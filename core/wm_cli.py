@@ -294,7 +294,8 @@ def cmd_task_create(args):
     tid = store.create_task(
         args.project_slug, args.title, args.description or "",
         args.definition_of_done or "", assignee_profile=args.assignee,
-        goal_id=args.goal, review_policy=args.review_policy, is_code=args.is_code)
+        goal_id=args.goal, review_policy=args.review_policy,
+        is_code=args.is_code, owner_approval=args.owner_approval)
     t = store.get_task(tid)
     _p("Created task #%d in project '%s'  [status=%s]"
        % (tid, args.project_slug, t["status"]))
@@ -473,7 +474,8 @@ def cmd_task_close(args):
 def cmd_task_edit(args):
     try:
         changed = store.edit_task(args.id, description=args.description,
-                                  definition_of_done=args.dod)
+                                  definition_of_done=args.dod,
+                                  owner_approval=args.owner_approval)
     except ValueError as e:
         _p("Refused: %s" % e)
         return 1
@@ -896,6 +898,10 @@ def build_parser():
                          "worktree/branch so retries never clobber other runs")
     tc.add_argument("--review-policy", dest="review_policy", default="none",
                     choices=store.REVIEW_POLICIES)
+    tc.add_argument("--owner-approval", dest="owner_approval",
+                    action="store_true",
+                    help="approval gate: completions land on 'manual' "
+                         "(Awaiting approval) for the owner instead of done")
     tc.set_defaults(fn=cmd_task_create)
     tl = task_sub.add_parser("list")
     tl.add_argument("--project", default=None)
@@ -953,6 +959,9 @@ def build_parser():
     te.add_argument("--description", dest="description", default=None)
     te.add_argument("--dod", dest="dod", default=None,
                     help="new definition of done")
+    te.add_argument("--owner-approval", dest="owner_approval", default=None,
+                    type=int, choices=(0, 1),
+                    help="set (1) or clear (0) the owner-approval gate")
     te.set_defaults(fn=cmd_task_edit)
 
     sub.add_parser("status", help="Grouped text readout").set_defaults(

@@ -97,6 +97,41 @@ def _rel(root_real: str, abs_path: str) -> str:
     return "" if r == "." else r.replace(os.sep, "/")
 
 
+def resolve_artifact(abs_path: str):
+    """Map an absolute result_path to its files-API address, or None.
+
+    Returns {"root", "rel", "kind", "exists"} when the path lives inside a
+    project's primary_path (preferred, deepest match) or the projects root —
+    the same containment the browse/read endpoints enforce, so a resolved
+    address is always fetchable. Anything outside stays unresolved (None)."""
+    if not abs_path or not os.path.isabs(abs_path):
+        return None
+    rp = os.path.realpath(abs_path)
+    candidates = []
+    for p in _projects():
+        if p["primary_path"]:
+            proot = os.path.realpath(p["primary_path"])
+            if _inside(proot, rp):
+                candidates.append(("project:%s" % p["slug"], proot))
+    if not candidates:
+        proot = os.path.realpath(projects_root())
+        if _inside(proot, rp):
+            candidates.append(("projects", proot))
+    if not candidates:
+        return None
+    root, root_real = max(candidates, key=lambda c: len(c[1]))
+    exists = os.path.isfile(rp)
+    if exists:
+        with open(rp, "rb") as f:
+            head = f.read(8192)
+        kind = _kind(rp, head)
+    else:
+        ext = os.path.splitext(rp)[1].lower()
+        kind = "image" if ext in IMAGE_EXT else ("pdf" if ext == ".pdf" else "text")
+    return {"root": root, "rel": _rel(root_real, rp), "kind": kind,
+            "exists": exists}
+
+
 def _is_primary_path(abs_path: str) -> bool:
     """True when abs_path is, or contains, some project's primary_path."""
     rp = os.path.realpath(abs_path)

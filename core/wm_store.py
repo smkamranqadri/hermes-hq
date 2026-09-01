@@ -310,6 +310,7 @@ CREATE TABLE IF NOT EXISTS tasks (
     assignee_profile   TEXT,
     status             TEXT DEFAULT 'planned',
     review_policy      TEXT DEFAULT 'none',
+    owner_approval     INTEGER DEFAULT 0,
     is_code            INTEGER DEFAULT 0,
     result_path        TEXT,
     result_paths       TEXT,
@@ -503,6 +504,10 @@ def _migrate(conn):
     # Group 7: tasks spawned by a schedule keep the link for the list chip / detail back-link.
     if "schedule_id" not in _table_columns(conn, "tasks"):
         conn.execute("ALTER TABLE tasks ADD COLUMN schedule_id INTEGER REFERENCES schedules(id)")
+    # Approval gate: a task flagged owner_approval lands on `manual`
+    # ("Awaiting approval") instead of `done` — the owner closes or redirects.
+    if "owner_approval" not in _table_columns(conn, "tasks"):
+        conn.execute("ALTER TABLE tasks ADD COLUMN owner_approval INTEGER DEFAULT 0")
 
 
 def init_db(db_path=None):
@@ -1141,7 +1146,7 @@ def release_goal(goal_id, db_path=None):
 # ---------------------------------------------------------------------------
 def create_task(project_slug, title, description="", definition_of_done="",
                 assignee_profile=None, goal_id=None, review_policy="none",
-                is_code=False, db_path=None):
+                is_code=False, owner_approval=False, db_path=None):
     if review_policy not in REVIEW_POLICIES:
         raise ValueError("review_policy must be one of %s" % (REVIEW_POLICIES,))
     if not project_slug or not str(project_slug).strip():
@@ -1173,10 +1178,11 @@ def create_task(project_slug, title, description="", definition_of_done="",
             cur = conn.execute(
                 "INSERT INTO tasks(project_id, goal_id, title, description, "
                 "definition_of_done, assignee_profile, status, review_policy, "
-                "is_code, created_at, updated_at) VALUES(?,?,?,?,?,?,?,?,?,?,?)",
+                "owner_approval, is_code, created_at, updated_at) "
+                "VALUES(?,?,?,?,?,?,?,?,?,?,?,?)",
                 (proj["id"], goal_id, title, description, definition_of_done,
                  assignee_profile, init_status, review_policy,
-                 1 if is_code else 0, now, now),
+                 1 if owner_approval else 0, 1 if is_code else 0, now, now),
             )
             tid = cur.lastrowid
             conn.execute(
@@ -1850,9 +1856,11 @@ def record_completion(run_id, task_id, completed, summary="", result_paths=None,
     """Apply the Completion contract for a finished run.
 
     Only a valid `completed == 'done'` marks the run+task done. `blocked` /
-    `failed` map 1:1; anything else (missing/invalid) -> run+task failed.
-    Returns the resulting (task_status, run_status); raises ValueError on an
-    unrecognized task id so the wrapper can record an error."""
+    `failed` map 1:1; `manual` (agent-initiated hand-over) and a 'done' on an
+    `owner_approval` task land the task on 'manual' — "Awaiting approval" —
+    for the owner to close or redirect; anything else (missing/invalid) ->
+    run+task failed. Returns the resulting (task_status, run_status); raises
+    ValueError on an unrecognized task id so the wrapper can record an error."""
     result_paths = result_paths or []
     if not isinstance(result_paths, list):
         result_paths = [result_paths]
@@ -1869,8 +1877,19 @@ def record_completion(run_id, task_id, completed, summary="", result_paths=None,
         if task["review_policy"] in ("required", "optional"):
             task_status = "needs_review"
             routed_to_review = True
+        elif task["owner_approval"]:
+            # Approval gate: engine-enforced, regardless of the agent's own
+            # verdict. With a review policy the gate fires at the verdict
+            # instead (review_verdict), so review still precedes the owner.
+            task_status = "manual"
         else:
             task_status = "done"
+    elif completed == "manual":
+        # Agent-initiated hand-over: the run finished its stage cleanly, but
+        # the task needs the owner's decision to continue. Never routes to
+        # review — the reviewer's turn comes after the owner's, on real done.
+        run_status = "done"
+        task_status = "manual"
     elif completed == "blocked":
         run_status = task_status = "blocked"
     elif completed == "failed":
@@ -1887,6 +1906,12 @@ def record_completion(run_id, task_id, completed, summary="", result_paths=None,
                          summary=summary or None, error=blocker,
                          session_id=session_id, result_paths=result_paths,
                          db_path=db_path, _conn=conn)
+            if completed == "manual":
+                # The agent declared an approval gate: make it the task's
+                # truth so the landing reads "Awaiting approval" and the
+                # continuation stays gated until the owner untoggles it.
+                conn.execute("UPDATE tasks SET owner_approval=1 WHERE id=?",
+                             (task_id,))
             if routed_to_review:
                 # Create the review inside the same transaction so a watcher can
                 # never observe run=done while the review row is still missing.
@@ -2177,11 +2202,15 @@ def review_verdict(task_id, verdict, comment=None, db_path=None):
                 "WHERE id=?",
                 (reviews_status, verdict, comment or "", now, review["id"]))
             if verdict == "approved":
-                conn.execute("UPDATE tasks SET status='done', updated_at=? "
-                             "WHERE id=?", (now, task_id))
-                _record_transition_conn(conn, task_id, "done",
-                                        from_status="needs_review",
-                                        detail="review approved")
+                # Approval gate: an approved review on an owner_approval task
+                # stops one step short of done — the OWNER closes or redirects.
+                final = "manual" if t["owner_approval"] else "done"
+                conn.execute("UPDATE tasks SET status=?, updated_at=? "
+                             "WHERE id=?", (final, now, task_id))
+                _record_transition_conn(
+                    conn, task_id, final, from_status="needs_review",
+                    detail="review approved" if final == "done"
+                    else "review approved — awaiting owner approval")
             else:
                 conn.execute("UPDATE tasks SET status='rework', feedback=?, "
                              "updated_at=? WHERE id=?", (comment or "", now, task_id))
@@ -2191,13 +2220,15 @@ def review_verdict(task_id, verdict, comment=None, db_path=None):
     finally:
         conn.close()
     review_status = reviews_status
-    if verdict == "approved":
+    if verdict == "approved" and not t["owner_approval"]:
+        # Gated tasks promote nothing yet — close_by_owner does, on approval.
         promoted = promote_dependents(task_id, db_path=db_path)
     log_activity(action="review_%s" % review_status, task_id=task_id,
                  agent_profile="reviewer",
                  detail="review #%d %s: %s" % (review["id"], verdict, comment or ""),
                  db_path=db_path)
-    return (("done" if verdict == "approved" else "rework"), review_status, promoted)
+    return ((("manual" if t["owner_approval"] else "done")
+             if verdict == "approved" else "rework"), review_status, promoted)
 
 
 def waive_review(task_id, comment=None, db_path=None):
@@ -2501,16 +2532,18 @@ def mark_manual(task_id, note=None, db_path=None):
     return task_id
 
 
-def edit_task(task_id, description=None, definition_of_done=None, db_path=None):
-    """Audited owner edit of the two fields that shape the agent's brief.
+def edit_task(task_id, description=None, definition_of_done=None,
+              owner_approval=None, db_path=None):
+    """Audited owner edit of the fields that shape the agent's brief/gating.
 
     Refused while 'running' (the brief was already rendered at claim) and on
     'done' (historical record). No status change — the audit trail is a
     `task_edited` activity row carrying each changed field's OLD value.
     Returns the list of field names actually changed."""
-    if description is None and definition_of_done is None:
-        raise ValueError("nothing to edit: pass description and/or "
-                         "definition_of_done")
+    if description is None and definition_of_done is None \
+            and owner_approval is None:
+        raise ValueError("nothing to edit: pass description, "
+                         "definition_of_done and/or owner_approval")
     t = get_task(task_id, db_path=db_path)
     if t is None:
         raise ValueError("no task with id %s" % task_id)
@@ -2525,6 +2558,12 @@ def edit_task(task_id, description=None, definition_of_done=None, db_path=None):
             continue
         updates.append("%s=?" % field); params.append(new); changed.append(field)
         audit.append("%s was: %s" % (field, (t[field] or "")[:200]))
+    if owner_approval is not None:
+        new_flag = 1 if owner_approval else 0
+        if int(t["owner_approval"] or 0) != new_flag:
+            updates.append("owner_approval=?"); params.append(new_flag)
+            changed.append("owner_approval")
+            audit.append("owner_approval was: %s" % int(t["owner_approval"] or 0))
     if not changed:
         return []
     conn = _connect(db_path)
@@ -2726,12 +2765,15 @@ def _completion_contract_lines(cpath):
         "COMPLETION CONTRACT (REQUIRED — your LAST action):",
         "Write a JSON file to %s" % cpath,
         "with EXACTLY this structure:",
-        '{"completed": "done|blocked|failed", "summary": "...", '
+        '{"completed": "done|blocked|failed|manual", "summary": "...", '
         '"result_paths": ["..."], "blocker": "...", '
         '"session_id": "<optional>"}',
         "  - completed: 'done' if you fully finished the task; "
         "'blocked' if you hit an external blocker; 'failed' if you "
-        "could not finish.",
+        "could not finish; 'manual' ONLY when the task explicitly "
+        "requires the OWNER's decision before work can continue (e.g. "
+        "a plan awaiting approval) — the task is handed to the owner, "
+        "and blocker must say exactly what you need decided.",
         "  - summary: a prose summary of what you did / the result.",
         "  - result_paths: ABSOLUTE paths to each artifact/file you "
         "actually produced (empty list if none).",
@@ -3016,6 +3058,11 @@ def render_brief(run_id, db_path=None):
         lines.append("Description: %s" % task["description"])
     if task["definition_of_done"]:
         lines.append("Definition of done: %s" % task["definition_of_done"])
+    if task["owner_approval"]:
+        lines.append("OWNER APPROVAL GATE: this task ends at the OWNER, not "
+                     "at you — after your work (and any review) it lands on "
+                     "the owner's desk for approval instead of closing. Do "
+                     "not treat your completion as final sign-off.")
     lines.append("Assignee profile: %s" % (run["agent_profile"] or "-"))
     lines.append("Working directory: %s" % (run["workdir"] or primary_path))
     if run["branch"]:

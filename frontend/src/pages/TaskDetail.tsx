@@ -1,6 +1,8 @@
 import { Link, useParams } from 'react-router-dom'
 import clsx from 'clsx'
-import { useTask, useSystem, useWrite, ApiError, ago, when, markNotificationsRead } from '../api'
+import { useQuery } from '@tanstack/react-query'
+import { get, useTask, useSystem, useWrite, ApiError, ago, when, markNotificationsRead, type TaskArtifact } from '../api'
+import { Markdown } from '../components/chat/Markdown'
 import { GlassCard } from '../components/GlassCard'
 import { StatusBadge } from '../components/StatusBadge'
 import { Empty, Loading, Chip, Crumbs, Label, Agent } from '../components/ui'
@@ -45,6 +47,63 @@ function EditBlock({ title, value, field, taskId, canEdit }: { title: string; va
   )
 }
 
+/** The owner-approval gate chip: shows the gate, and (when editable) toggles it via the audited edit path. */
+function GateChip({ taskId, on, canEdit }: { taskId: number; on: boolean; canEdit: boolean }) {
+  const toast = useToast()
+  const m = useWrite(`/api/task/${taskId}/edit`, { onSuccess: () => toast(on ? 'Owner-approval gate removed' : 'Owner-approval gate set — completions land on your desk') })
+  if (!canEdit && !on) return null
+  return (
+    <button type="button" data-gate-chip disabled={!canEdit || m.isPending} title={canEdit ? 'Toggle the owner-approval gate (audited)' : undefined}
+      onClick={() => m.mutate({ owner_approval: !on }, { onError: x => toast(x instanceof ApiError ? x.message : String(x), 'err') })}
+      className={clsx('inline-flex items-center gap-1 rounded-full border px-2.5 py-0.5 font-mono text-[10px] uppercase tracking-wider',
+        on ? 'border-needsyou/60 text-needsyou' : 'border-line text-muted',
+        canEdit ? 'hover:bg-raised' : 'cursor-default')}>
+      {on ? '✓ owner gate' : 'owner gate off'}
+    </button>
+  )
+}
+
+type FileRead = { kind: 'text' | 'image' | 'pdf' | 'binary'; content?: string; too_large?: boolean; name: string }
+
+/** One result_path row: readable inline when it resolves into a files root. */
+function ArtifactRow({ a }: { a: TaskArtifact }) {
+  const [open, setOpen] = useState(false)
+  const addressed = !!a.root && !!a.exists
+  const fileUrl = addressed ? `/files?root=${encodeURIComponent(a.root!)}&path=${encodeURIComponent(a.rel!)}` : null
+  const q = useQuery({
+    queryKey: ['task-artifact', a.root, a.rel],
+    queryFn: () => get<FileRead>(`/api/files/read?root=${encodeURIComponent(a.root!)}&path=${encodeURIComponent(a.rel!)}`),
+    enabled: open && addressed && a.kind === 'text',
+  })
+  if (!addressed) {
+    return <p className="break-all font-mono text-xs">{a.path}{a.root && !a.exists && <span className="ml-2 text-muted">— missing on disk</span>}</p>
+  }
+  return (
+    <div data-artifact={a.rel} className="min-w-0">
+      <div className="flex min-w-0 items-center gap-2">
+        {a.kind === 'text' ? (
+          <button type="button" aria-expanded={open} onClick={() => setOpen(o => !o)} className="flex min-w-0 items-center gap-1.5 text-left font-mono text-xs text-accent-2 hover:underline">
+            <span aria-hidden="true" className={clsx('shrink-0 transition-transform', open && 'rotate-90')}>{'›'}</span>
+            <span className="truncate">{a.path}</span>
+          </button>
+        ) : (
+          <span className="min-w-0 truncate font-mono text-xs">{a.path}</span>
+        )}
+        {fileUrl && <Link to={fileUrl} className="shrink-0 rounded-full border border-line px-2 py-0.5 font-mono text-[10px] uppercase tracking-wider text-muted hover:bg-raised hover:text-fg">Open in Files</Link>}
+      </div>
+      {open && a.kind === 'text' && (
+        <div className="mt-2 max-h-[28rem] overflow-y-auto rounded-lg border border-line-subtle bg-raised/40 p-3 text-sm">
+          {q.isLoading && <Loading rows={2} />}
+          {q.isError && <p className="text-error">{String(q.error)}</p>}
+          {q.data?.too_large && <p className="text-muted">File too large to preview — open it in Files.</p>}
+          {q.data?.content != null && (a.rel!.endsWith('.md') ? <Markdown text={q.data.content} /> : <pre className="whitespace-pre-wrap break-words font-mono text-xs">{q.data.content}</pre>)}
+        </div>
+      )}
+      {a.kind === 'image' && <img src={`/api/files/raw?root=${encodeURIComponent(a.root!)}&path=${encodeURIComponent(a.rel!)}`} alt={a.path} className="mt-2 max-h-64 max-w-full rounded-lg border border-line-subtle" loading="lazy" />}
+    </div>
+  )
+}
+
 /** Phone-only collapsible section: tap-header under `sm`; plain label and always-open content on desktop. */
 function Fold({ title, children, desk = true }: { title: string; children: React.ReactNode; desk?: boolean }) {
   const [open, setOpen] = useState(false)
@@ -84,6 +143,7 @@ export function TaskDetail() {
           <div className="mt-2 flex flex-wrap items-center gap-2 text-xs text-muted">
             <StatusBadge human={{ state: t.human.state, reason: t.human.reason?.split(':')[0], label: t.human.label }} live={st === 'running'} /><span className="font-mono">engine: {t.status}</span>{sys.data && (st === 'running' || st === 'ready') && <span className={`font-mono ${st === 'ready' && sys.data.running >= sys.data.cap ? 'text-needsyou' : ''}`}>· slots {sys.data.running}/{sys.data.cap} busy{st === 'ready' && !sys.data.paused && sys.data.running >= sys.data.cap ? ' — waiting for a free slot' : ''}{st === 'ready' && sys.data.paused ? ' — dispatcher paused' : ''}</span>}
             <Agent name={t.assignee_profile} />{!!t.is_code && <Chip>code</Chip>}<Chip>review {t.review_policy}</Chip>
+            <GateChip taskId={t.id} on={!!t.owner_approval} canEdit={canEdit} />
             {t.goal_title && <span>· goal #{t.goal_id} {t.goal_title}</span>}
             {t.schedule_id != null && <Link to="/schedules" className="text-accent-2 hover:underline">· ⟳ created by a schedule</Link>}
           </div>
@@ -107,7 +167,7 @@ export function TaskDetail() {
           {canFeedback && st !== 'blocked' && <Btn kind="ghost" onClick={() => setReply(true)}>{st === 'rework' ? 'Add feedback' : 'Feedback → rework'}</Btn>}
           {canRetry && !['failed', 'stalled', 'blocked'].includes(st) && <ActionBtn url={`/api/task/${t.id}/retry`} label="Re-queue" kind="ghost" confirm="Re-queue this task?" />}
           {canManual && <ActionBtn url={`/api/task/${t.id}/manual`} label="Take over" kind="warn" confirm="Take this task out of the queue (status manual)?" />}
-          {st === 'manual' && <ActionBtn url={`/api/task/${t.id}/close-owner`} label="Close as done" confirm="Declare this work finished outside WM runs? The task becomes done (audited) and may release dependent tasks." />}
+          {st === 'manual' && <ActionBtn url={`/api/task/${t.id}/close-owner`} label={t.owner_approval ? 'Approve → done' : 'Close as done'} confirm={t.owner_approval ? 'Approve this work? The task becomes done (audited) and may release dependent tasks.' : 'Declare this work finished outside WM runs? The task becomes done (audited) and may release dependent tasks.'} />}
         </div>
         {reply && <FeedbackModal taskId={t.id} onClose={() => setReply(false)} />}
       </div>
@@ -118,7 +178,13 @@ export function TaskDetail() {
             <EditBlock title="Definition of done" value={t.definition_of_done || ''} field="definition_of_done" taskId={t.id} canEdit={canEdit} />
             {t.summary && <Block title="Summary">{t.summary}</Block>}
             {t.feedback && <Block title="Owner feedback">{t.feedback}</Block>}
-            {t.result_paths.length > 0 && <Block title="Results">{t.result_paths.map(p => <p key={p} className="break-all font-mono text-xs">{p}</p>)}</Block>}
+            {t.result_paths.length > 0 && (
+              <Block title="Results">
+                <div className="flex flex-col gap-2">
+                  {(t.artifacts?.length ? t.artifacts : t.result_paths.map(p => ({ path: p }))).map(a => <ArtifactRow key={a.path} a={a} />)}
+                </div>
+              </Block>
+            )}
           </GlassCard>
           {latest && <RunLog key={latest.id} runId={latest.id} active={latest.status === 'running'} />}
           <div>

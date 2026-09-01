@@ -63,4 +63,7 @@ editing in TaskDetail; question-fence changes.
 
 ## Status
 
-PLANNED — awaiting the owner's go to implement.
+COMPLETE 2026-09-01 — all four slices shipped same day; proof in
+`kis/state/current.md`. One deviation, an improvement: the `manual` verdict
+also SETS `owner_approval=1` (sticky gate) so the landing and the
+continuation both read/behave as awaiting approval.
