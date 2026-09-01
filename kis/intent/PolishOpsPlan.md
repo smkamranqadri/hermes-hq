@@ -40,4 +40,4 @@ D. **Brand board (ops, owner-gated)**: draft description/DoD edits for
 
 ## Status
 
-PLANNED — awaiting `/kis:act`.
+COMPLETE 2026-09-01 — all four slices shipped; proof in `kis/state/current.md`.
