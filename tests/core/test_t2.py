@@ -63,6 +63,7 @@ g2 = store.create_goal("t2", "T2 plan", db_path=DB)
 a = store.create_task("t2", "alpha", assignee_profile="writer", goal_id=g2, db_path=DB)
 b = store.create_task("t2", "beta-dependent", assignee_profile="writer", goal_id=g2, db_path=DB)
 store.add_task_dep(b, a, db_path=DB)
+store.set_goal_status(g2, "planning", db_path=DB); store.set_goal_status(g2, "planned", db_path=DB)
 store.release_goal(g2, db_path=DB)      # approve the plan -> b is waiting_approval
 store.mark_ready(a, db_path=DB)
 os.environ["WM_FAKE_MODE"] = "done"

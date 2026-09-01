@@ -386,21 +386,6 @@ def list_goals(db_path, project=None):
         con.close()
 
 
-def goal_detail(db_path, goal_id):
-    con = connect_ro(db_path)
-    try:
-        g = _fetchone(con,
-            "SELECT g.*, p.slug AS project_slug, p.name AS project_name "
-            "FROM goals g LEFT JOIN projects p ON p.id = g.project_id "
-            "WHERE g.id=?", (goal_id,))
-        if g is None:
-            return None
-        g["tasks"] = _task_rows(con, goal_id=goal_id)
-        return g
-    finally:
-        con.close()
-
-
 # ---------------------------------------------------------------------------
 # tasks
 # ---------------------------------------------------------------------------
@@ -553,20 +538,6 @@ def list_activity(db_path, since_id=None, agent=None, project=None, limit=100):
         limit = max(1, min(int(limit or 100), 500))
         sql += " ORDER BY a.id DESC LIMIT ?"; params.append(limit)
         return [_curated(dict(r), ACTIVITY_KEYS) for r in con.execute(sql, params)]
-    finally:
-        con.close()
-
-
-def list_transitions(db_path, task_id=None, limit=100):
-    con = connect_ro(db_path)
-    try:
-        limit = max(1, min(int(limit or 100), 1000))
-        if task_id is not None:
-            return _fetchall(con,
-                "SELECT * FROM state_transitions WHERE task_id=? "
-                "ORDER BY id DESC LIMIT ?", (task_id, limit))
-        return _fetchall(con,
-            "SELECT * FROM state_transitions ORDER BY id DESC LIMIT ?", (limit,))
     finally:
         con.close()
 
