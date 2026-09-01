@@ -103,6 +103,7 @@ r = dispatch.run_dispatch(db_path=DB)
 check("unreleased goal: NOTHING dispatches (both planned)", len(r["dispatched"]) == 0
       and store.get_task(pa, db_path=DB)["status"] == "planned"
       and store.get_task(ch, db_path=DB)["status"] == "planned")
+store.set_goal_status(g, "planning", db_path=DB); store.set_goal_status(g, "planned", db_path=DB)
 store.release_goal(g, db_path=DB)
 check("goal release -> parent (deps done) ready, child waiting_approval",
       store.get_task(pa, db_path=DB)["status"] == "ready"
@@ -129,6 +130,7 @@ unreleased = store.create_goal("p", "held", db_path=DB)
 a1 = store.create_task("p", "go1", assignee_profile="writer", goal_id=g2, db_path=DB)
 a2 = store.create_task("p", "go2", assignee_profile="writer", goal_id=g2, db_path=DB)
 store.add_task_dep(a2, a1, db_path=DB)
+store.set_goal_status(g2, "planning", db_path=DB); store.set_goal_status(g2, "planned", db_path=DB)
 store.release_goal(g2, db_path=DB)
 release_eligible = store.release_goal(g2, db_path=DB)
 h = store.create_task("p", "held-task", assignee_profile="writer", goal_id=unreleased, db_path=DB)

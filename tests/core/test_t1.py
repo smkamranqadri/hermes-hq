@@ -21,6 +21,9 @@ import wm_store as store  # noqa: E402
 
 DB = os.environ.get("WORK_MANAGER_TEST_DB") or os.path.join(
     tempfile.gettempdir(), "wm_test_t1.db")
+# wm_cli imports its own `core.wm_store` instance (installed package), which
+# ignores this module's DEFAULT_DB_PATH patch — WM_DB is read by both.
+os.environ["WM_DB"] = DB
 
 
 def _wipe():
