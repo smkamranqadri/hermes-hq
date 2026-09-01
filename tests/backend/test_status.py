@@ -14,6 +14,7 @@ def test_plain_mapping():
     assert t("running")["state"] == "working"
     assert t("needs_review") == {"state": "working", "reason": "reviewer checking", "action": None}
     assert t("done")["state"] == "done" and t("manual")["state"] == "done"
+    assert t("manual")["label"] == "Handed over" and "label" not in t("done")
 
 
 def test_waiting_approval_is_queued_or_needs_you():
@@ -36,3 +37,5 @@ def test_ui_mirror_agrees():
         m = re.search(r"case '%s'[^\n]*state: '([a-z]+)'" % eng, ts)
         assert m, "status.ts has no case for %s" % eng
         assert m.group(1) == human, "%s: ts=%s py=%s" % (eng, m.group(1), human)
+    # display-label parity: manual carries the distinct chip text in both layers
+    assert re.search(r"case 'manual'[^\n]*label: 'Handed over'", ts)

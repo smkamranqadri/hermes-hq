@@ -2,7 +2,7 @@
 // The server sends `human: {state, reason, action}` on every task; this file
 // only supplies labels/colors and a fallback when a raw engine status is shown.
 export type HumanState = 'backlog' | 'queued' | 'working' | 'needsyou' | 'done'
-export type Human = { state: HumanState; reason?: string | null; action?: string | null }
+export type Human = { state: HumanState; reason?: string | null; action?: string | null; label?: string | null }
 
 export const ORDER: HumanState[] = ['needsyou', 'working', 'queued', 'backlog', 'done']
 export const HUMAN_LABEL: Record<HumanState, string> = {
@@ -22,7 +22,7 @@ export function toHuman(engineStatus: string): Human {
     case 'failed': return { state: 'needsyou', reason: 'failed' }
     case 'stalled': return { state: 'needsyou', reason: 'stalled' }
     case 'done': return { state: 'done' }
-    case 'manual': return { state: 'done' }
+    case 'manual': return { state: 'done', label: 'Handed over' }
     default: return { state: 'backlog', reason: engineStatus }
   }
 }

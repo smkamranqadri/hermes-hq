@@ -25,7 +25,7 @@ def classify(task, deps=(), goal_status=None, last_run=None):
     """
     st = task["status"]
     state = HUMAN_STATE.get(st, "backlog")
-    reason, action = None, None
+    reason, action, label = None, None, None
     if st == "waiting_approval":
         unmet = [d for d in deps if d["status"] != "done"]
         if unmet:
@@ -46,6 +46,13 @@ def classify(task, deps=(), goal_status=None, last_run=None):
         if err:
             reason += ": " + err.strip().splitlines()[0][:120]
         action = "retry" if st in ("failed", "stalled") else "unblock"
+    elif st == "manual":
+        # Grouped/sorted under done, but the chip must not claim "Done": the
+        # owner took it out of the queue — a distinct display label only.
+        label = "Handed over"
     elif st not in HUMAN_STATE:
         reason = st
-    return {"state": state, "reason": reason, "action": action}
+    out = {"state": state, "reason": reason, "action": action}
+    if label:
+        out["label"] = label
+    return out

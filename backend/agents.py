@@ -148,22 +148,25 @@ def _profile_description(home, name):
         return ""
 
 
-def agent_detail(name, db_path=None):
+def agent_detail(name, db_path=None, history=120):
     """Summary + ONE unified history: every Hermes session (chat, CLI, dispatched
     run) with its hq run/task attached when it came from the dispatcher, plus
-    runs that never got a session (died before the agent started)."""
+    runs that never got a session (died before the agent started).
+    `history` bounds the returned rows (the UI's Show more raises it)."""
     if name not in store.ASSIGNEE_PROFILES:
         raise ValueError("unknown agent %r" % name)
+    history = max(1, min(int(history or 120), 1000))
     a = next(x for x in list_agents(db_path) if x["name"] == name)
     conn = store._connect(db_path or store.DEFAULT_DB_PATH)
     try:
         runs = [dict(r) for r in conn.execute(
             "SELECT r.id, r.task_id, r.status, r.started_at, r.finished_at, r.error, r.session_id, r.review_id, t.title AS task_title "
-            "FROM runs r LEFT JOIN tasks t ON t.id=r.task_id WHERE r.agent_profile=? ORDER BY r.id DESC LIMIT 200", (name,))]
+            "FROM runs r LEFT JOIN tasks t ON t.id=r.task_id WHERE r.agent_profile=? ORDER BY r.id DESC LIMIT ?",
+            (name, max(200, history)))]
     finally:
         conn.close()
     try:
-        sessions = readers.agent_sessions(store.resolve_profiles_dir(), name, limit=100)
+        sessions = readers.agent_sessions(store.resolve_profiles_dir(), name, limit=max(100, history))
     except (ValueError, FileNotFoundError):
         sessions = []
     by_session = {r["session_id"]: r for r in runs if r["session_id"]}
@@ -180,7 +183,7 @@ def agent_detail(name, db_path=None):
         if (not r["session_id"] and id(r) in matched) or (r["session_id"] and r["session_id"] in by_session):   # unmatched: no session, or session outside the recent window
             items.append({"session": None, "run": _run_brief(r), "ts": r["finished_at"] or r["started_at"] or 0, "kind": "run"})
     items.sort(key=lambda x: x["ts"] or 0, reverse=True)
-    a["history"] = items[:120]
+    a["history"] = items[:history]
     return a
 
 

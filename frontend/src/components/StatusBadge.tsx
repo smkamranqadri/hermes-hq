@@ -16,7 +16,7 @@ export function StatusBadge({ status, human, reason, compact, live }: { status?:
   return (
     <span className={clsx('inline-flex max-w-full items-center gap-1.5 whitespace-nowrap rounded-full border px-2.5 py-0.5 text-xs font-medium', COLOR[state])}>
       <span className={clsx('size-1.5 rounded-full bg-current', (live || status === 'running') && 'hq-dot-live')} />
-      {HUMAN_LABEL[state]}
+      {h.label ?? HUMAN_LABEL[state]}
       {note && <span className="max-w-[14rem] truncate opacity-70" title={note}>· {note}</span>}
     </span>
   )

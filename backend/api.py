@@ -80,9 +80,9 @@ def agent_templates():
 
 
 @router.get("/agent/{name}")
-def agent(name: str):
+def agent(name: str, history: int = Query(120, ge=1, le=1000)):
     try:
-        return ag.agent_detail(name, _db())
+        return ag.agent_detail(name, _db(), history=history)
     except ValueError:
         raise HTTPException(404, "no such agent")
 

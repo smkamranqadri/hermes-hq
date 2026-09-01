@@ -114,7 +114,7 @@ export type AgentRunBrief = { id: number; task_id: number | null; task_title: st
 export type AgentHistoryItem = { session: AgentSession | null; run: AgentRunBrief | null; ts: number; kind: 'run' | 'chat' | 'cli' }
 export type AgentDetail = AgentSummary & { history: AgentHistoryItem[] }
 export const useAgents = () => useQuery({ queryKey: ['agents'], queryFn: () => get<{ agents: AgentSummary[]; templates: AgentTemplate[] }>('/api/agents'), refetchInterval: 15000 })
-export const useAgent = (name: string) => useQuery({ queryKey: ['agent', name], queryFn: () => get<AgentDetail>(`/api/agent/${name}`), refetchInterval: 15000 })
+export const useAgent = (name: string, history = 120) => useQuery({ queryKey: ['agent', name, history], queryFn: () => get<AgentDetail>(`/api/agent/${name}?history=${history}`), refetchInterval: 15000, placeholderData: (prev: AgentDetail | undefined) => prev })
 
 // ---- chat ---------------------------------------------------------------
 export type ToolCall = { id: string | null; name: string; arguments: string }

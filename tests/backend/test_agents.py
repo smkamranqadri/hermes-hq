@@ -101,3 +101,23 @@ def test_cli_failure_is_a_refusal(env, monkeypatch):
     r = c.post("/api/agents/install", json={"template": "uiux"}, headers=h)
     assert r.status_code == 409 and "failed" in r.json()["detail"]
     assert not (root / "profiles" / "uiux").exists()
+
+
+def test_history_paging_param(env):
+    c, store, root = env
+    login(c)
+    db = store.DEFAULT_DB_PATH
+    tid = store.create_task("alpha", "Bulk", "", "", db_path=db)
+    con = store._connect(db)
+    try:
+        with con:
+            for i in range(150):
+                con.execute("INSERT INTO runs(task_id, agent_profile, status, "
+                            "started_at, finished_at) VALUES (?,?,?,?,?)",
+                            (tid, "coder", "failed", 1000.0 + i, 1001.0 + i))
+    finally:
+        con.close()
+    assert len(c.get("/api/agent/coder").json()["history"]) == 120          # default cap
+    assert len(c.get("/api/agent/coder?history=150").json()["history"]) == 150
+    assert len(c.get("/api/agent/coder?history=10").json()["history"]) == 10
+    assert c.get("/api/agent/coder?history=5000").status_code == 422        # bounded
