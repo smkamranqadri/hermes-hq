@@ -4,10 +4,10 @@
 **hermes-hq is the live control plane since 2026-08-29 13:40 UTC** (branch `main`), running as the **s6 service `/run/service/hermes-hq`** since 2026-08-30 (dispatcher ON, `--host 0.0.0.0 --port 9010 --interval 20`). Restart after backend changes: `hermes-hq service restart` (if health then reads 000 and the log says "Waiting for connections to close", force with `s6-svc -k /run/service/hermes-hq`); logs `/var/log/hermes-hq/current`; auto-update daily 05:00 PKT (`service auto-update --show`). Password file `/opt/data/hermes-hq/password` is `test` for the owner's review (generated one kept in `password.prev`). Frontend builds go live without a restart. HTTPS for the phone: `tailscale serve` on the owner's Mac fronts this VM's `:9010` (Knowledge → Web Push). Legacy WM: fully deleted 2026-08-31 (`knowledge/technical.md` → Legacy WM).
 
 ## Now
-Task: none — **known-limits cleanup sweep COMPLETE 2026-09-01** (Fast; proof below). Board unchanged: #82/#85/#86 `manual` with FINAL-positioning briefs, #89 waits behind them with its original deps.
+Task: **approval-gate bundle PLANNED 2026-09-01** (`intent/ApprovalGatePlan.md`, Standard; scope owner-approved, awaiting go to implement) — A) `owner_approval` task field landing gated completions on `manual` + "Awaiting approval" + needs_you, B) `completed:"manual"` contract verdict, C) readable results on TaskDetail, D) retrofit onto #122/#123/#124/#127. Origin: #130 closed done past a prose approval gate (coder planned-only correctly, agent reviewer approved the plan, no owner checkpoint exists between run and done). Board: #82/#85/#86 still `manual`; #89 parked; goal #29 running its course (#128–130).
 
 ## Next
-`/kis:plan` for whatever comes next — no queued work. The brand board is release-ready: when the
+Owner's go starts `intent/ApprovalGatePlan.md` (Standard, slices A→D). The brand board is release-ready: when the
 owner wants the agents to run #82/#85/#86, "Feedback → rework" (or `wm task feedback`) re-queues
 each with any final words; #89 auto-releases when all three finish. Known-limits live in
 Knowledge; no open debt rows.
