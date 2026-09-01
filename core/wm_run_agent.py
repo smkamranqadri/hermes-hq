@@ -267,9 +267,9 @@ def _read_completion(cpath):
     if not isinstance(data, dict):
         return None, "completion JSON is not an object"
     completed = data.get("completed")
-    if completed not in ("done", "blocked", "failed"):
+    if completed not in ("done", "blocked", "failed", "manual"):
         return None, ("completion completed=%r invalid (must be "
-                      "done|blocked|failed)" % (completed,))
+                      "done|blocked|failed|manual)" % (completed,))
     return data, None
 
 
@@ -282,6 +282,11 @@ def _finalize(run_id, task_id, proc_exit, db_path, review_id=None,
     """
     cpath = store.completion_path(run_id)
     data, err = _read_completion(cpath)
+    if err is None and review_id is not None \
+            and data.get("completed") == "manual":
+        # A review run never hands over — its whole job is the verdict.
+        data, err = None, ("completion completed='manual' invalid for a "
+                           "REVIEW run (must be done|blocked|failed)")
     # Deterministic session capture: prefer the session_id the agent
     # self-reported (via the --pass-session-id 'Session ID:' system-prompt
     # line it was asked to copy into the completion JSON), cross-checked

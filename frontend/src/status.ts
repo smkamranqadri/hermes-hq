@@ -22,6 +22,9 @@ export function toHuman(engineStatus: string): Human {
     case 'failed': return { state: 'needsyou', reason: 'failed' }
     case 'stalled': return { state: 'needsyou', reason: 'stalled' }
     case 'done': return { state: 'done' }
+    // owner_approval tasks that land on manual arrive from the server as
+    // {state:'needsyou', label:'Awaiting approval'} — this raw-status fallback
+    // only covers the flagless takeover case.
     case 'manual': return { state: 'done', label: 'Handed over' }
     default: return { state: 'backlog', reason: engineStatus }
   }

@@ -91,4 +91,9 @@ def task_detail(db_path, task_id):
     t["deps"] = [{"id": d["task_id"], "status": d["status"], "title": d["title"]} for d in t["deps"]]
     t["dependents"] = [{"id": d["task_id"], "status": d["status"], "title": d["title"]} for d in t["dependents"]]
     t["human"] = hs.classify(t, t["deps"], g["status"] if g else None, t["runs"][0] if t["runs"] else None)
+    # Readable results: each result_path that lives inside a files root gets
+    # its browsable address so the UI can preview it inline / link into Files.
+    from backend.files import resolve_artifact
+    t["artifacts"] = [dict(path=p, **(resolve_artifact(p) or {}))
+                      for p in (t.get("result_paths") or [])]
     return t

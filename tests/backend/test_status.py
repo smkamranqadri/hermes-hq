@@ -17,6 +17,18 @@ def test_plain_mapping():
     assert t("manual")["label"] == "Handed over" and "label" not in t("done")
 
 
+def test_owner_approval_manual_is_awaiting_approval():
+    gated = hs.classify({"status": "manual", "owner_approval": 1}, [], None, None)
+    assert gated["state"] == "needsyou"
+    assert gated["label"] == "Awaiting approval"
+    assert gated["reason"] == "awaiting your approval"
+    plain = hs.classify({"status": "manual", "owner_approval": 0}, [], None, None)
+    assert plain["state"] == "done" and plain["label"] == "Handed over"
+    # only manual is affected: a gated task in any other status is unchanged
+    assert hs.classify({"status": "running", "owner_approval": 1}, [], None,
+                       None)["state"] == "working"
+
+
 def test_waiting_approval_is_queued_or_needs_you():
     unmet = t("waiting_approval", deps=[{"id": 81, "status": "done"}, {"id": 83, "status": "running"}], goal="released")
     assert unmet == {"state": "queued", "reason": "waiting on #83", "action": None}

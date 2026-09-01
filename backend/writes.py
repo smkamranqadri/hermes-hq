@@ -218,12 +218,14 @@ def close_owner(tid: int, body: Note | None = None):
 class TaskEdit(BaseModel):
     description: str | None = None
     definition_of_done: str | None = None
+    owner_approval: bool | None = None
 
 
 @router.post("/task/{tid}/edit")
 def task_edit(tid: int, body: TaskEdit):
     _engine(store.edit_task, tid, description=body.description,
-            definition_of_done=body.definition_of_done)
+            definition_of_done=body.definition_of_done,
+            owner_approval=body.owner_approval)
     return _after(tid)
 
 
