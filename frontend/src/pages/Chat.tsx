@@ -10,7 +10,7 @@ import { Btn, TextArea } from '../components/Modal'
 import { useToast } from '../components/Toast'
 import { usePageTitle } from '../usePageTitle'
 import { GatewayDot } from './Agents'
-import { Markdown } from '../components/chat/Markdown'
+import { copyText, Markdown } from '../components/chat/Markdown'
 import { ToolCard, Thinking, fmtTokens, type ToolView } from '../components/chat/Blocks'
 import { SessionMenu, RenameDialog, SearchModal, FindBar } from '../components/chat/SessionTools'
 import { loadPrefs, chime } from '../components/notify'
@@ -22,11 +22,19 @@ const emptyLive = (): Live => ({ text: '', tools: [], thinking: '', runId: null,
 function Bubble({ role, children, ts, tokens }: { role: string; children: React.ReactNode; ts?: number | null; tokens?: number | null }) {
   const mine = role === 'user'
   return (
-    <div className={clsx('group/msg flex min-w-0 flex-col', mine ? 'items-end' : 'items-start')}>
+    <div className={clsx('flex min-w-0 flex-col', mine ? 'items-end' : 'items-start')}>
       <div className={clsx('min-w-0 max-w-[92%] rounded-2xl px-3.5 py-2 text-sm sm:max-w-[80%]', mine ? 'bg-accent/20 text-fg' : 'bg-raised text-fg')}>{children}</div>
       {(ts || tokens) ? <span className="mt-0.5 px-1 font-mono text-[10px] text-muted opacity-0 transition group-hover/msg:opacity-100">{ts ? when(ts) : ''}{tokens ? ` · ${fmtTokens(tokens)} tok` : ''}</span> : null}
     </div>
   )
+}
+
+function MessageCopyButton({ text }: { text: string }) {
+  const [copied, setCopied] = useState(false)
+  const label = copied ? 'Message copied' : 'Copy message'
+  return <button type="button" aria-label={label} title={label} onClick={() => { void copyText(text).then(ok => { if (ok) { setCopied(true); setTimeout(() => setCopied(false), 1200) } }) }} className="mt-0.5 self-end rounded p-1 text-muted opacity-0 transition-opacity hover:bg-inset hover:text-fg group-hover/msg:opacity-100 focus-visible:opacity-100 focus-visible:outline focus-visible:outline-1 focus-visible:outline-accent">
+    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" className="size-3.5" aria-hidden="true">{copied ? <path d="m5 12 4 4L19 6" /> : <><rect x="9" y="9" width="11" height="11" rx="2" /><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1" /></>}</svg>
+  </button>
 }
 
 /** Stored transcript → bubbles; an assistant row's tool_calls become cards, fed by the tool rows that follow. */
@@ -50,7 +58,7 @@ function Transcript({ rows, onChoose }: { rows: ChatMessage[]; onChoose?: (t: st
           pending.push(t); out.push(<ToolCard key={t.key} t={t} />)
         }
       }
-      if (m.content && m.content.trim()) out.push(<Bubble key={m.id} role={m.role} ts={m.timestamp} tokens={m.token_count}>{m.role === 'assistant' ? <Markdown text={m.content} onChoose={onChoose} optionsDisabled={m.id !== lastAssistant} /> : <div className="whitespace-pre-wrap break-words">{m.content}</div>}</Bubble>)
+      if (m.content && m.content.trim()) out.push(<div key={m.id} className={clsx('group/msg flex w-full min-w-0 flex-col', m.role === 'user' ? 'items-end' : 'items-start')}><Bubble role={m.role} ts={m.timestamp} tokens={m.token_count}>{m.role === 'assistant' ? <Markdown text={m.content} onChoose={onChoose} optionsDisabled={m.id !== lastAssistant} /> : <div className="whitespace-pre-wrap break-words">{m.content}</div>}</Bubble><MessageCopyButton text={m.content} /></div>)
     }
     return out
   }, [rows, onChoose, lastAssistant])
@@ -428,10 +436,10 @@ export function Chat() {
                   <div className="flex flex-wrap justify-center gap-2">{starters.map(s => <button key={s} type="button" onClick={() => void send(s)} disabled={!agentKnown || chatDisabled} className="rounded-full border border-line bg-glass px-3 py-1 text-xs text-fg hover:bg-raised disabled:opacity-50">{s}</button>)}</div>
                 </div>
               )}
-              {pendingUser && <Bubble role="user"><div className="whitespace-pre-wrap break-words">{pendingUser}</div></Bubble>}
+              {pendingUser && <div className="group/msg flex min-w-0 flex-col items-end"><Bubble role="user"><div className="whitespace-pre-wrap break-words">{pendingUser}</div></Bubble><MessageCopyButton text={pendingUser} /></div>}
               {live && live.thinking && <Thinking text={live.thinking} live />}
               {live && live.tools.map(t => <ToolCard key={t.key} t={t} />)}
-              {live && (live.text || waitingFirstToken) && <Bubble role="assistant">{live.text ? <Markdown text={live.text} /> : <span className="inline-flex items-center gap-1 text-muted"><span className="hq-dot-live inline-block size-1.5 rounded-full bg-current" />thinking…</span>}</Bubble>}
+              {live && (live.text || waitingFirstToken) && <div className="group/msg flex w-full min-w-0 flex-col items-start"><Bubble role="assistant">{live.text ? <Markdown text={live.text} /> : <span className="inline-flex items-center gap-1 text-muted"><span className="hq-dot-live inline-block size-1.5 rounded-full bg-current" />thinking…</span>}</Bubble>{live.text && <MessageCopyButton text={live.text} />}</div>}
               {live?.error && <p className="text-xs text-needsyou">{live.error}</p>}
             </div>
             {!atBottom && <button type="button" onClick={scrollDown} className="absolute bottom-24 left-1/2 z-10 -translate-x-1/2 rounded-full border border-line bg-glass-strong px-3 py-1 font-mono text-[10px] uppercase tracking-wider text-fg shadow-lg hover:bg-raised">↓ {unread > 0 ? `${unread} new` : 'latest'}</button>}

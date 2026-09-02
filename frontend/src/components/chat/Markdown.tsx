@@ -2,9 +2,27 @@ import { useState, type ReactNode } from 'react'
 import ReactMarkdown from 'react-markdown'
 import remarkGfm from 'remark-gfm'
 
+export async function copyText(text: string): Promise<boolean> {
+  try {
+    if (navigator.clipboard?.writeText) {
+      await navigator.clipboard.writeText(text)
+      return true
+    }
+  } catch { /* try the legacy fallback below */ }
+  const area = document.createElement('textarea')
+  area.value = text
+  area.setAttribute('readonly', '')
+  area.style.position = 'fixed'
+  area.style.opacity = '0'
+  document.body.appendChild(area)
+  area.select()
+  area.setSelectionRange(0, area.value.length)
+  try { return document.execCommand('copy') } catch { return false } finally { area.remove() }
+}
+
 function CopyBtn({ text }: { text: string }) {
   const [ok, setOk] = useState(false)
-  return <button type="button" onClick={() => { void navigator.clipboard?.writeText(text).then(() => { setOk(true); setTimeout(() => setOk(false), 1200) }) }}
+  return <button type="button" onClick={() => { void copyText(text).then(copied => { if (copied) { setOk(true); setTimeout(() => setOk(false), 1200) } }) }}
     className="absolute right-1.5 top-1.5 rounded-md border border-line bg-glass px-1.5 py-0.5 font-mono text-[10px] uppercase tracking-wider text-muted opacity-0 transition hover:text-fg group-hover/code:opacity-100 focus:opacity-100">{ok ? 'copied' : 'copy'}</button>
 }
 
