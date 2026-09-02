@@ -13,7 +13,7 @@ Task: none — **phase-gate workflow bundle COMPLETE 2026-09-02** (`intent/Phase
 None.
 
 ## Known debt (open items only; accepted limits live in Knowledge → Known limits)
-None.
+- **Worktree lifecycle has no cleanup owner — investigate + strengthen the workflow.** Found 2026-09-02: the engine creates a worktree+branch per `is_code` run but NOTHING ever removes them — 5 stale registered worktrees (#136's three dirty attempts + #139/#143's merged ones), 2 empty orphan dirs, and 49 dangling symlinks (2026-08-29 importer linked legacy `/opt/data/work-manager` worktrees; the 08-31 legacy purge deleted the targets but never swept the hq side) accumulated silently until a manual sweep (dirty diffs parachuted: `/opt/data/worktree-diffs-2026-09-02.tar.gz`). Also: done-task `result_paths` point INTO worktrees, so cleanup breaks old artifact links (#136/#139/#143 now show "missing on disk"). Fix candidates for an intake interview: engine-side GC (remove worktree+branch when the task is done AND its branch is merged — or a `wm gc` command with a parachute), briefs already demand merge but not self-cleanup, importer/purge procedures must sweep symlinks, and completions should prefer main-checkout paths in `result_paths` after merging.
 
 ## How to run
 `README.md`. Dev: `.venv/bin/hermes-hq serve --no-dispatcher` + `cd frontend && npm run dev`. Owner drops reference images in `screenshots/` (git-ignored). Playwright: settings in memory `hermes-hq-ops` (browser path, 390×844 + `isMobile` for phones); scripts are per-session.
