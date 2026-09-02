@@ -60,6 +60,44 @@ def test_task_lifecycle_writes(env):
         assert "task_retry" in acts
 
 
+def test_phased_task_creation_and_owner_approval_promotes_build(env):
+    c, store, db = env
+    h = login(c)
+    goal_id = store.create_goal("alpha", "Feature goal", db_path=db)
+    store.request_goal_planning(goal_id, db_path=db)
+    store.set_goal_status(goal_id, "planned", db_path=db)
+    store.release_goal(goal_id, db_path=db)
+    r = c.post("/api/tasks", json={
+        "project": "alpha", "title": "Ship feature", "description": "brief",
+        "definition_of_done": "verified", "assignee": "coder",
+        "goal_id": goal_id, "owner_approval": True, "phased": True,
+    }, headers=h)
+    assert r.status_code == 200
+    plan_id = r.json()["id"]
+    plan = store.get_task(plan_id, db_path=db)
+    dependents = store.list_deps(plan_id, db_path=db)
+    assert plan["title"] == "Ship feature — plan"
+    assert plan["assignee_profile"] == "coder"
+    assert plan["review_policy"] == "none" and plan["owner_approval"] == 1
+    assert plan["is_code"] == 0
+    assert len(dependents) == 1
+    build_id = dependents[0]["task_id"]
+    build = store.get_task(build_id, db_path=db)
+    assert build["title"] == "Ship feature — build"
+    assert build["is_code"] == 1 and build["review_policy"] == "required"
+    assert build["owner_approval"] == 1
+
+    # Released goals make newly created tasks eligible; owner approval closes
+    # the plan and the existing dependency handoff promotes the build.
+    import sqlite3
+    con = sqlite3.connect(db)
+    con.execute("UPDATE tasks SET status='manual' WHERE id=?", (plan_id,))
+    con.commit(); con.close()
+    promoted = store.close_by_owner(plan_id, note="approved", db_path=db)
+    assert build_id in promoted
+    assert store.get_task(build_id, db_path=db)["status"] == "ready"
+
+
 def test_feedback_requires_comment_and_reworks(env):
     c, store, db = env
     h = login(c)
