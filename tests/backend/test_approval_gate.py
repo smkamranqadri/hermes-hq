@@ -3,8 +3,8 @@
 A gated task never closes itself: completions (and approved reviews) land on
 'manual' — "Awaiting approval" — and only the owner's close/feedback moves it.
 """
-import json
-import os, sys
+import json, os, sys
+import pytest
 ROOT = os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "..")
 sys.path.insert(0, ROOT)
 from tests.backend.test_chat import env, login  # noqa: F401
@@ -93,6 +93,71 @@ def test_gate_fires_after_review_approval(env):
     # feedback path from the gate: manual -> rework with the owner's words
     store.owner_feedback(tid, "tighten the caching slice", db_path=db)
     assert store.get_task(tid, db_path=db)["status"] == "rework"
+
+
+def test_approve_plan_releases_goal_and_promotes_coding_task(env):
+    c, store, gw, root = env
+    db = store.DEFAULT_DB_PATH
+    _setup(store, db)
+    g = store.create_goal("demo", "Plan handoff", db_path=db)
+    gid = g if isinstance(g, int) else g["id"]
+    store.set_goal_status(gid, "planning", db_path=db)
+    store.set_goal_status(gid, "planned", db_path=db)
+    plan = store.create_task("demo", "Plan goal #%d" % gid, "", "",
+                             assignee_profile="orchestrator", goal_id=gid,
+                             db_path=db)
+    code = store.create_task("demo", "Implement the plan", "", "",
+                             assignee_profile="coder", goal_id=gid,
+                             is_code=True, db_path=db)
+    store.add_task_dep(code, plan, db_path=db)
+    # Reproduce the task-130 landing: the planning run handed the plan to the owner.
+    store.mark_manual(plan, note="plan ready for owner", db_path=db)
+    assert store.get_task(code, db_path=db)["status"] == "planned"
+
+    response = c.post("/api/task/%d/approve-plan" % plan,
+                      json={"note": "plan approved"}, headers=login(c))
+    assert response.status_code == 200, response.text
+    promoted = response.json()["promoted"]
+
+    assert promoted == [code]
+    assert store.get_goal(gid, db_path=db)["status"] == "released"
+    approved = store.get_task(plan, db_path=db)
+    assert approved["status"] == "done" and approved["owner_approval"] == 0
+    assert store.get_task(code, db_path=db)["status"] == "ready"
+    con = store._connect(db)
+    try:
+        transition = con.execute(
+            "SELECT * FROM state_transitions WHERE task_id=? AND to_status='done' "
+            "ORDER BY id DESC LIMIT 1", (plan,)).fetchone()
+        activity = con.execute(
+            "SELECT 1 FROM activity WHERE task_id=? AND action='plan_approved'",
+            (plan,)).fetchone()
+    finally:
+        con.close()
+    assert transition and transition["from_status"] == "manual"
+    assert activity is not None
+
+
+def test_approve_plan_rejects_stale_or_non_plan_approval(env):
+    c, store, gw, root = env
+    db = store.DEFAULT_DB_PATH
+    _setup(store, db)
+    g = store.create_goal("demo", "Stale plan", db_path=db)
+    gid = g if isinstance(g, int) else g["id"]
+    store.set_goal_status(gid, "planning", db_path=db)
+    store.set_goal_status(gid, "planned", db_path=db)
+    plan = store.create_task("demo", "Plan goal #%d" % gid, "", "",
+                             assignee_profile="orchestrator", goal_id=gid,
+                             db_path=db)
+    store.mark_manual(plan, db_path=db)
+    store.approve_plan(plan, db_path=db)
+    with pytest.raises(ValueError, match="already released|not 'manual'"):
+        store.approve_plan(plan, db_path=db)
+
+    other = store.create_task("demo", "Not a plan", "", "", db_path=db)
+    store.mark_manual(other, db_path=db)
+    with pytest.raises(ValueError, match="planning task"):
+        store.approve_plan(other, db_path=db)
 
 
 def test_manual_verdict_hands_over_without_review(env):

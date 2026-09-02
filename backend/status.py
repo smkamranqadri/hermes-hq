@@ -59,7 +59,13 @@ def classify(task, deps=(), goal_status=None, last_run=None):
         # owner took it out of the queue — a distinct display label only.
         # An owner_approval task that landed here is DIFFERENT: it is waiting
         # on the owner's decision, so it surfaces under needsyou instead.
-        if _get(task, "owner_approval"):
+        is_plan = (_get(task, "assignee_profile") == "orchestrator" and
+                   (_get(task, "title") or "").startswith("Plan goal #") and
+                   _get(task, "goal_id") and goal_status == "planned")
+        if is_plan:
+            state, reason, action = "needsyou", "plan awaiting your approval", \
+                "approve_plan"
+        elif _get(task, "owner_approval"):
             state, reason, label = "needsyou", "awaiting your approval", \
                 "Awaiting approval"
         else:

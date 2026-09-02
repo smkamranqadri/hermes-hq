@@ -24,6 +24,15 @@ def test_owner_approval_manual_is_awaiting_approval():
     assert gated["reason"] == "awaiting your approval"
     plain = hs.classify({"status": "manual", "owner_approval": 0}, [], None, None)
     assert plain["state"] == "done" and plain["label"] == "Handed over"
+
+
+def test_manual_plan_has_distinct_approve_plan_action():
+    plan = hs.classify({"status": "manual", "owner_approval": 1,
+                        "assignee_profile": "orchestrator",
+                        "title": "Plan goal #29", "goal_id": 29},
+                       [], "planned", None)
+    assert plan["state"] == "needsyou"
+    assert plan["action"] == "approve_plan"
     # only manual is affected: a gated task in any other status is unchanged
     assert hs.classify({"status": "running", "owner_approval": 1}, [], None,
                        None)["state"] == "working"

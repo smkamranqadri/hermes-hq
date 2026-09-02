@@ -215,6 +215,13 @@ def close_owner(tid: int, body: Note | None = None):
     _engine(store.close_by_owner, tid, note=(body.note if body else None)); return _after(tid)
 
 
+@router.post("/task/{tid}/approve-plan")
+def approve_plan(tid: int, body: Note | None = None):
+    """Approve a completed planning task's plan and release its goal."""
+    promoted = _engine(store.approve_plan, tid, note=(body.note if body else None))
+    out = _after(tid); out["promoted"] = promoted; return out
+
+
 class TaskEdit(BaseModel):
     description: str | None = None
     definition_of_done: str | None = None
