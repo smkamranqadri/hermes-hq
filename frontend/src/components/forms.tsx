@@ -78,12 +78,14 @@ export function NewGoalModal({ project, onClose }: { project: string; onClose: (
 export function FeedbackModal({ taskId, onClose }: { taskId: number; onClose: () => void }) {
   const toast = useToast()
   const [comment, setComment] = useState('')
+  const looksLikeApproval = /\b(?:approved|ok(?:ay)?|yes|go ahead|proceed)\b/i.test(comment)
   const m = useWrite(`/api/task/${taskId}/feedback`, { onSuccess: () => { toast(`Reply sent — task #${taskId} goes back to the agent as rework`); onClose() } })
   return (
     <Modal title={`Reply to task #${taskId}`} onClose={onClose}>
       <p className="mb-3 text-xs text-muted">Your comment is threaded into the next run's brief as OWNER FEEDBACK; the task becomes rework and is re-queued.</p>
       <form className="flex flex-col gap-3" onSubmit={e => { e.preventDefault(); m.mutate({ comment }, { onError: x => toast(errText(x), 'err') }) }}>
         <TextArea autoFocus rows={5} required value={comment} onChange={e => setComment(e.target.value)} placeholder="Answer the agent's question, or say what to change…" />
+        {looksLikeApproval && <p role="alert" className="text-xs text-needsyou">Feedback sends this task BACK for rework — to approve, use the Approve button.</p>}
         <div className="flex justify-end gap-2"><Btn kind="ghost" type="button" onClick={onClose}>Cancel</Btn><Btn type="submit" busy={m.isPending} disabled={!comment.trim()}>Send & rework</Btn></div>
       </form>
     </Modal>
