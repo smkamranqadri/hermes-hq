@@ -25,6 +25,12 @@ The engine keeps its precise state machine (`planned, waiting_approval, ready, r
 | **Needs you** | owner approval, blocked, failed, stalled — each with the one action that unblocks it |
 | **Done** | done, manual |
 
+## Workflow
+
+New users follow the interview-first phase-gate workflow from idea through
+planning, build, review, owner acceptance, and owner-only integration proof:
+see [docs/workflow.md](docs/workflow.md).
+
 ## Install
 
 Requires Python ≥ 3.11 with [`uv`](https://github.com/astral-sh/uv), Node ≥ 22, and `hermes` on `PATH`.
