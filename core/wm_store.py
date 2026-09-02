@@ -1874,11 +1874,12 @@ def record_completion(run_id, task_id, completed, summary="", result_paths=None,
     """Apply the Completion contract for a finished run.
 
     Only a valid `completed == 'done'` marks the run+task done. `blocked` /
-    `failed` map 1:1; `manual` (agent-initiated hand-over) and a 'done' on an
-    `owner_approval` task land the task on 'manual' — "Awaiting approval" —
-    for the owner to close or redirect; anything else (missing/invalid) ->
-    run+task failed. Returns the resulting (task_status, run_status); raises
-    ValueError on an unrecognized task id so the wrapper can record an error."""
+    `failed` map 1:1; `manual` (agent-initiated hand-over) lands directly on
+    'manual' except for a required review, which must resolve first. A 'done'
+    on an `owner_approval` task lands on 'manual' — "Awaiting approval" — for
+    the owner to close or redirect; anything else (missing/invalid) -> run+task
+    failed. Returns the resulting (task_status, run_status); raises ValueError
+    on an unrecognized task id so the wrapper can record an error."""
     result_paths = result_paths or []
     if not isinstance(result_paths, list):
         result_paths = [result_paths]
@@ -1903,11 +1904,16 @@ def record_completion(run_id, task_id, completed, summary="", result_paths=None,
         else:
             task_status = "done"
     elif completed == "manual":
-        # Agent-initiated hand-over: the run finished its stage cleanly, but
-        # the task needs the owner's decision to continue. Never routes to
-        # review — the reviewer's turn comes after the owner's, on real done.
+        # A required review is still a mandatory gate even when the agent
+        # hands over. Optional review keeps its established direct-to-manual
+        # behavior; it is explicitly non-blocking unless a clean done verdict
+        # requests the normal optional review path above.
         run_status = "done"
-        task_status = "manual"
+        if task["review_policy"] == "required":
+            task_status = "needs_review"
+            routed_to_review = True
+        else:
+            task_status = "manual"
     elif completed == "blocked":
         run_status = task_status = "blocked"
     elif completed == "failed":
@@ -1924,7 +1930,7 @@ def record_completion(run_id, task_id, completed, summary="", result_paths=None,
                          summary=summary or None, error=blocker,
                          session_id=session_id, result_paths=result_paths,
                          db_path=db_path, _conn=conn)
-            if completed == "manual":
+            if completed == "manual" and not routed_to_review:
                 # The agent declared an approval gate: make it the task's
                 # truth so the landing reads "Awaiting approval" and the
                 # continuation stays gated until the owner untoggles it.
