@@ -23,6 +23,7 @@ def test_project_start_links_and_seeds(env):
     assert d["scope"]["project_slug"] == "demo" and d["scope"]["task_id"] is None
     assert "PROJECT CHAT — Demo" in d["brief"] and "#1 Ship v1 [draft]" in d["brief"] and "#%d Write docs" % tid in d["brief"]
     assert "NOT a dispatched task" in d["brief"]
+    assert "New work you bring in chat — bug reports, change requests, or feature ideas — must go through the `orchestrator-intake` skill's grilling interview and become a managed task through the Hermes HQ wm pipeline; never use ad-hoc `hermes --profile <agent>` specialist dispatch." in d["brief"]
     assert [p for p, _ in FakeGateway.calls] == ["/api/sessions"]
     assert FakeGateway.calls[0][1]["title"].startswith("Project: Demo · ")
     # second start must not reuse the title (gateway rejects duplicates per profile)
@@ -45,6 +46,7 @@ def test_task_start_uses_task_brief_and_inherits_project(env):
     d = r.json()
     assert d["scope"] == {"project_id": 1, "project_slug": "demo", "project_name": "Demo", "task_id": tid, "task_title": "Write docs"}
     assert d["brief"].startswith("TASK CHAT — #%d Write docs" % tid) and "Definition of done: README updated" in d["brief"]
+    assert "New work you bring in chat — bug reports, change requests, or feature ideas — must go through the `orchestrator-intake` skill's grilling interview and become a managed task through the Hermes HQ wm pipeline; never use ad-hoc `hermes --profile <agent>` specialist dispatch." in d["brief"]
     assert c.get("/api/task/%d/chat-sessions" % tid).json()["sessions"][0]["task_id"] == tid
     assert c.get("/api/project/demo/chat-sessions").json()["sessions"][0]["task_title"] == "Write docs"
     # task status untouched — a chat is not a run
