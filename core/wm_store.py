@@ -2616,6 +2616,61 @@ def close_by_owner(task_id, note=None, db_path=None):
     return promote_dependents(task_id, db_path=db_path)
 
 
+def approve_plan(task_id, note=None, db_path=None):
+    """Approve a completed goal plan and hand its released work to the dispatcher.
+
+    This is deliberately separate from ``close_by_owner``: a stranded planning
+    task is an approval surface for the goal, not an arbitrary manual task. The
+    goal must still be ``planned`` and the task must still be ``manual``; these
+    guards make an old approval action harmless after feedback, re-planning, or
+    an earlier approval. The goal release is the durable approval record.
+    """
+    t = get_task(task_id, db_path=db_path)
+    if t is None:
+        raise ValueError("no task with id %s" % task_id)
+    if (t["assignee_profile"] != PLANNING_TASK_PROFILE or
+            not (t["title"] or "").startswith(PLANNING_TASK_PREFIX) or
+            not t["goal_id"]):
+        raise ValueError("task %d is not a planning task" % task_id)
+    if t["status"] != "manual":
+        raise ValueError("task %d is '%s', not 'manual' — plan approval is stale"
+                         % (task_id, t["status"]))
+    goal = get_goal(t["goal_id"], db_path=db_path)
+    if goal is None:
+        raise ValueError("no goal with id %s" % t["goal_id"])
+    if goal["status"] != "planned":
+        raise ValueError("goal %d is '%s', not 'planned' — plan approval is stale"
+                         % (goal["id"], goal["status"]))
+
+    # release_goal owns the full released-goal eligibility policy and its audit.
+    # It runs before the planning row is closed so dependents can see the
+    # planning work as the dependency that is being approved.
+    release_goal(goal["id"], db_path=db_path)
+    now = time.time()
+    conn = _connect(db_path)
+    try:
+        with conn:
+            cur = conn.execute(
+                "UPDATE tasks SET status='done', owner_approval=0, updated_at=? "
+                "WHERE id=? AND status='manual'", (now, task_id))
+            if cur.rowcount != 1:
+                raise ValueError("task %d approval is stale" % task_id)
+            _record_transition_conn(
+                conn, task_id, "done", from_status="manual",
+                detail=("plan approved: goal #%d released%s" %
+                        (goal["id"], (" — " + str(note).strip()) if note else "")))
+    finally:
+        conn.close()
+    log_activity(action="plan_approved", project_id=t["project_id"],
+                 goal_id=goal["id"], task_id=task_id,
+                 agent_profile="orchestrator",
+                 detail=note or "goal plan approved and released",
+                 db_path=db_path)
+    # The planning row became the dependency only after the goal release was
+    # evaluated, so re-check its direct children now that it is done.
+    return promote_dependents(task_id, db_path=db_path)
+
+
 def get_session_activity(agent, session_id, db_path=None):
     """Read a session's last_activity_at from a Hermes profile state.db.
 
