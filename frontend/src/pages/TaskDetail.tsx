@@ -134,6 +134,22 @@ export function TaskDetail() {
   const canEdit = !['running', 'done'].includes(st)
   const canRetry = ['failed', 'stalled', 'blocked', 'rework', 'manual'].includes(st)
   const canManual = !['done', 'manual', 'running'].includes(st)
+  const dependentIds = t.dependents.map(d => `#${d.id}`).join(', ')
+  const hasDependents = t.dependents.length > 0
+  const approvalLabel = t.human.action === 'approve_plan'
+    ? hasDependents ? `Approve plan → start build (${dependentIds})` : 'Approve plan → start coding'
+    : t.owner_approval
+      ? hasDependents ? `Approve → release (${dependentIds})` : 'Approve → done'
+      : 'Close as done'
+  const approvalConfirm = t.human.action === 'approve_plan'
+    ? hasDependents
+      ? `Approve this plan? Dependents ${dependentIds} will be released.`
+      : 'Approve this plan? The goal will be released and eligible dependent tasks will enter the dispatcher queue.'
+    : t.owner_approval
+      ? hasDependents
+        ? `Approve this work? Dependents ${dependentIds} will be released.`
+        : 'Approve this work? The task becomes done (audited) and may release dependent tasks.'
+      : 'Declare this work finished outside WM runs? The task becomes done (audited) and may release dependent tasks.'
   return (
     <section className="mx-auto max-w-6xl p-4 sm:p-6">
       <Crumbs items={[['Projects', '/projects'], [t.project_slug, `/projects/${t.project_slug}`], [`Task #${t.id}`]]} />
@@ -167,8 +183,8 @@ export function TaskDetail() {
           {canFeedback && st !== 'blocked' && <Btn kind="ghost" onClick={() => setReply(true)}>{st === 'rework' ? 'Add feedback' : 'Feedback → rework'}</Btn>}
           {canRetry && !['failed', 'stalled', 'blocked'].includes(st) && <ActionBtn url={`/api/task/${t.id}/retry`} label="Re-queue" kind="ghost" confirm="Re-queue this task?" />}
           {canManual && <ActionBtn url={`/api/task/${t.id}/manual`} label="Take over" kind="warn" confirm="Take this task out of the queue (status manual)?" />}
-          {st === 'manual' && t.human.action === 'approve_plan' && <ActionBtn url={`/api/task/${t.id}/approve-plan`} label="Approve plan → start coding" confirm="Approve this plan? The goal will be released and eligible dependent tasks will enter the dispatcher queue." />}
-          {st === 'manual' && t.human.action !== 'approve_plan' && <ActionBtn url={`/api/task/${t.id}/close-owner`} label={t.owner_approval ? 'Approve → done' : 'Close as done'} confirm={t.owner_approval ? 'Approve this work? The task becomes done (audited) and may release dependent tasks.' : 'Declare this work finished outside WM runs? The task becomes done (audited) and may release dependent tasks.'} />}
+          {st === 'manual' && t.human.action === 'approve_plan' && <ActionBtn url={`/api/task/${t.id}/approve-plan`} label={approvalLabel} confirm={approvalConfirm} />}
+          {st === 'manual' && t.human.action !== 'approve_plan' && <ActionBtn url={`/api/task/${t.id}/close-owner`} label={approvalLabel} confirm={approvalConfirm} />}
         </div>
         {reply && <FeedbackModal taskId={t.id} onClose={() => setReply(false)} />}
       </div>
