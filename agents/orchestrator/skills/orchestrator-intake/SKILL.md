@@ -7,7 +7,7 @@ license: MIT
 metadata:
   hermes:
     tags: [hermes-hq, intake, planning, owner, definition-of-done]
-    related_skills: [hermes-hq-ops]
+    related_skills: [hermes-hq-ops, grilling]
 ---
 
 # Orchestrator Intake
@@ -16,18 +16,7 @@ metadata:
 Use whenever the owner brings a new piece of work in chat and it may become a Hermes HQ task or goal. Do not create a task, goal, dispatch, or delegation before this intake is complete. For registration, release, dispatch, and review mechanics, use `hermes-hq-ops`.
 
 ## Interview first
-Run a tight, conversational interview with the owner before creating any task or goal. Use a **design tree** in rounds: every decision branches into the decisions that hang off it. In each round, ask the whole current **frontier** — every decision question whose prerequisites are settled — as a numbered list, then wait for the owner's answers before the next round. A question that depends on another question still open in the same round belongs to a later round.
-
-Each frontier item must use this format, with a recommendation:
-
-```text
-❓ Q<n> — <title>: <decision question>
-→ Recommended: <recommended answer and why>
-```
-
-This replaces the old one-question-per-turn pattern: never ask a wall of unrelated questions, but do ask all independent questions in the current round. Ask only decisions. Facts discoverable from the repo, filesystem, or HQ store are the agent's job: look them up or delegate the lookup rather than asking the owner.
-
-The frontier must cover the goal, scope, constraints, definition of done, and proof. The proof question is mandatory even when the request sounds clear: **what is the proof this is done, and who can produce it?** Restate the refined goal, scope, constraints, DoD, proof, and producer to the owner. The interview ends only when the frontier is empty and the owner confirms shared understanding; never silently assume a missing decision or register premature work.
+Before creating any task or goal, conduct the interview according to the `grilling` skill: work the design tree in frontier rounds, ask numbered questions with a recommended answer, look up facts rather than asking the owner, and wait for the owner's decisions. Cover goal, scope, constraints, definition of done, and proof — specifically what proves completion and who can produce it. The interview is done only when the frontier is empty and the owner confirms shared understanding; only then create the tasks or goal.
 
 ## Proof and DoD rule
 An agent task's `definition_of_done` may contain only proof that the assigned agent can produce and verify from its environment. Do not put owner-only evidence in an agent task DoD. Examples of owner-only proof include deploying or merging to a protected/live system, live Lighthouse or production checks, signing into external accounts, or approving an external action.
@@ -65,7 +54,7 @@ Before reporting that intake created work, verify all of the following:
 - Dependencies are visible with `hermes-hq wm task show` or `hermes-hq wm status`, and newly created work remains planned until release.
 
 ## Pitfalls
-- Do not revert to a wall of unrelated questions or the old one-question-per-turn pattern: ask the complete settled frontier in rounds and defer dependent questions.
+- Do not bypass the `grilling` interview protocol or create work before the frontier is empty and the owner confirms shared understanding.
 - Do not treat "approved" as proof of implementation or as release authorization.
 - Do not let an agent task promise deployment, live metrics, external-account actions, or owner sign-off.
 - Do not create a goal merely because a request has several bullets; use the more-than-one-build threshold and obtain confirmation.
