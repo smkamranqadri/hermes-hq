@@ -160,7 +160,7 @@ def test_approve_plan_rejects_stale_or_non_plan_approval(env):
         store.approve_plan(other, db_path=db)
 
 
-def test_manual_verdict_hands_over_without_review(env):
+def test_manual_verdict_required_routes_through_review_before_handover(env):
     c, store, gw, root = env
     db = store.DEFAULT_DB_PATH
     _setup(store, db)
@@ -170,13 +170,59 @@ def test_manual_verdict_hands_over_without_review(env):
     ts, rs = store.record_completion(rid, tid, "manual",
                                      blocker="need owner to pick option A/B",
                                      db_path=db)
-    assert (ts, rs) == ("manual", "done")
+    assert (ts, rs) == ("needs_review", "done")
     t = store.get_task(tid, db_path=db)
-    assert t["status"] == "manual"
-    # the hand-over sets the gate: the landing reads "Awaiting approval" and
-    # the continuation stays gated until the owner untoggles it
-    assert t["owner_approval"] == 1
-    # never routes to review — the reviewer's turn comes on real done
+    assert t["status"] == "needs_review"
+    assert t["owner_approval"] == 0
+    review = store.get_open_review(tid, db_path=db)
+    assert review and review["review_policy"] == "required"
+    con = store._connect(db)
+    try:
+        transitions = con.execute(
+            "SELECT to_status FROM state_transitions WHERE task_id=? ORDER BY id",
+            (tid,)).fetchall()
+    finally:
+        con.close()
+    assert "manual" not in [row["to_status"] for row in transitions]
+
+    ts2, review_status, promoted = store.review_verdict(
+        tid, "approved", comment="LGTM", db_path=db)
+    assert (ts2, review_status, promoted) == ("done", "done", [])
+    assert store.get_task(tid, db_path=db)["status"] == "done"
+
+
+def test_manual_verdict_required_with_owner_gate_lands_manual_after_review(env):
+    c, store, gw, root = env
+    db = store.DEFAULT_DB_PATH
+    _setup(store, db)
+    tid = store.create_task("demo", "Gated hand-over", "", "",
+                            review_policy="required", owner_approval=True,
+                            db_path=db)
+    rid = _run(store, db, tid)
+    ts, rs = store.record_completion(rid, tid, "manual",
+                                     blocker="need owner to pick option A/B",
+                                     db_path=db)
+    assert (ts, rs) == ("needs_review", "done")
+    assert store.get_task(tid, db_path=db)["status"] == "needs_review"
+    review = store.get_open_review(tid, db_path=db)
+    assert review is not None
+    ts2, review_status, promoted = store.review_verdict(
+        tid, "approved", comment="LGTM", db_path=db)
+    assert (ts2, review_status, promoted) == ("manual", "done", [])
+    assert store.get_task(tid, db_path=db)["status"] == "manual"
+
+
+def test_manual_verdict_none_still_hands_over_directly(env):
+    c, store, gw, root = env
+    db = store.DEFAULT_DB_PATH
+    _setup(store, db)
+    tid = store.create_task("demo", "Undeclared hand-over", "", "", db_path=db)
+    rid = _run(store, db, tid)
+    ts, rs = store.record_completion(rid, tid, "manual",
+                                     blocker="need owner to pick option A/B",
+                                     db_path=db)
+    assert (ts, rs) == ("manual", "done")
+    assert store.get_task(tid, db_path=db)["status"] == "manual"
     assert store.list_reviews(task_id=tid, db_path=db) == []
 
 
