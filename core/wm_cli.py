@@ -291,6 +291,14 @@ def cmd_task_create(args):
     except ValueError as e:
         _p("error: %s" % e)
         return 1
+    if args.phased:
+        plan_id, build_id = store.create_phased_tasks(
+            args.project_slug, args.title, args.description or "",
+            args.definition_of_done or "", assignee_profile=args.assignee,
+            goal_id=args.goal, owner_approval=args.owner_approval)
+        _p("Created phased tasks #%d (plan) and #%d (build) in project '%s'"
+           % (plan_id, build_id, args.project_slug))
+        return 0
     tid = store.create_task(
         args.project_slug, args.title, args.description or "",
         args.definition_of_done or "", assignee_profile=args.assignee,
@@ -902,6 +910,8 @@ def build_parser():
                     action="store_true",
                     help="approval gate: completions land on 'manual' "
                          "(Awaiting approval) for the owner instead of done")
+    tc.add_argument("--phased", action="store_true",
+                    help="create linked plan and build tasks in one action")
     tc.set_defaults(fn=cmd_task_create)
     tl = task_sub.add_parser("list")
     tl.add_argument("--project", default=None)

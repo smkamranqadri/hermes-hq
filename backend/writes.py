@@ -136,6 +136,8 @@ class TaskIn(BaseModel):
     goal_id: int | None = None
     review_policy: str = "none"
     is_code: bool = False
+    owner_approval: bool = False
+    phased: bool = False
     deps: list[int] = Field(default_factory=list)
 
 
@@ -157,9 +159,19 @@ class Assign(BaseModel):
 
 @router.post("/tasks")
 def create_task(body: TaskIn):
+    if body.phased:
+        plan_id, build_id = _engine(
+            store.create_phased_tasks, body.project, body.title,
+            body.description, body.definition_of_done,
+            assignee_profile=body.assignee or None, goal_id=body.goal_id,
+            owner_approval=body.owner_approval)
+        return {"id": plan_id, "build_id": build_id,
+                "task": tq.task_detail(_db(), plan_id),
+                "build": tq.task_detail(_db(), build_id)}
     tid = _engine(store.create_task, body.project, body.title, body.description, body.definition_of_done,
                   assignee_profile=body.assignee or None, goal_id=body.goal_id,
-                  review_policy=body.review_policy, is_code=body.is_code)
+                  review_policy=body.review_policy, is_code=body.is_code,
+                  owner_approval=body.owner_approval)
     for d in body.deps:
         _engine(store.add_task_dep, tid, d)
     return {"id": tid, "task": tq.task_detail(_db(), tid)}

@@ -1267,6 +1267,24 @@ def add_task_dep(task_id, depends_on_task_id, db_path=None):
         conn.close()
 
 
+def create_phased_tasks(project_slug, title, description="", definition_of_done="",
+                        assignee_profile=None, goal_id=None, owner_approval=False,
+                        db_path=None):
+    """Create a plan/build pair using the normal task and dependency writes."""
+    plan_id = create_task(
+        project_slug, "%s — plan" % title, description, definition_of_done,
+        assignee_profile=assignee_profile, goal_id=goal_id,
+        review_policy="none", is_code=False, owner_approval=True,
+        db_path=db_path)
+    build_id = create_task(
+        project_slug, "%s — build" % title, description, definition_of_done,
+        assignee_profile=assignee_profile, goal_id=goal_id,
+        review_policy="required", is_code=True, owner_approval=owner_approval,
+        db_path=db_path)
+    add_task_dep(build_id, plan_id, db_path=db_path)
+    return plan_id, build_id
+
+
 def remove_task_dep(task_id, depends_on_task_id, db_path=None):
     """Remove one dependency edge, then re-check the dependent's eligibility —
     release-gate semantics unchanged (promotion only under a released goal with
