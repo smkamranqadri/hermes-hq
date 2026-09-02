@@ -27,10 +27,10 @@ export function NewProjectModal({ onClose }: { onClose: () => void }) {
 export function NewTaskModal({ project, onClose }: { project?: string; onClose: () => void }) {
   const toast = useToast(); const nav = useNavigate()
   const projects = useProjects(); const roster = useRoster()
-  const [f, setF] = useState({ project: project ?? '', title: '', description: '', definition_of_done: '', assignee: '', goal_id: '', review_policy: 'none', is_code: false, deps: '' })
+  const [f, setF] = useState({ project: project ?? '', title: '', description: '', definition_of_done: '', assignee: '', goal_id: '', review_policy: 'none', is_code: false, owner_approval: false, phased: false, deps: '' })
   const goals = useGoals(f.project || undefined)
   const candidates = useTasks({ project: f.project || undefined, limit: 200 })
-  const m = useWrite('/api/tasks', { onSuccess: (d) => { toast(`Task #${(d as { id: number }).id} created (backlog — mark ready to queue it)`); onClose(); nav(`/tasks/${(d as { id: number }).id}`) } })
+  const m = useWrite('/api/tasks', { onSuccess: (d) => { const x = d as { id: number; build_id?: number }; toast(x.build_id ? `Phased tasks #${x.id} and #${x.build_id} created` : `Task #${x.id} created (backlog — mark ready to queue it)`); onClose(); nav(`/tasks/${x.id}`) } })
   const submit = (e: React.FormEvent) => {
     e.preventDefault()
     m.mutate({ ...f, assignee: f.assignee || null, goal_id: f.goal_id ? Number(f.goal_id) : null,
@@ -51,6 +51,8 @@ export function NewTaskModal({ project, onClose }: { project?: string; onClose: 
           <Field label="Depends on" hint="task ids, e.g. 81, 83"><TextInput value={f.deps} onChange={e => setF({ ...f, deps: e.target.value })} list="hq-tasks" /><datalist id="hq-tasks">{(candidates.data?.tasks ?? []).map(t => <option key={t.id} value={t.id}>{t.title}</option>)}</datalist></Field>
         </div>
         <label className="flex items-center gap-2 text-sm"><input type="checkbox" checked={f.is_code} onChange={e => setF({ ...f, is_code: e.target.checked })} /> Code task (runs in an isolated git worktree)</label>
+        <label className="flex items-center gap-2 text-sm"><input type="checkbox" checked={f.owner_approval} onChange={e => setF({ ...f, owner_approval: e.target.checked })} /> Owner approval required</label>
+        <label className="flex items-center gap-2 text-sm"><input type="checkbox" checked={f.phased} onChange={e => setF({ ...f, phased: e.target.checked })} /> Phased (plan then build)</label>
         <div className="mt-2 flex justify-end gap-2"><Btn kind="ghost" type="button" onClick={onClose}>Cancel</Btn><Btn type="submit" busy={m.isPending}>Create</Btn></div>
       </form>
     </Modal>
