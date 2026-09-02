@@ -10,7 +10,7 @@ rough idea
    |
    v
 Orchestrator interview in chat
-(one question at a time)
+(grilling: frontier rounds)
    |
    +--> PLAN task / breakdown task
    |       |
@@ -46,8 +46,10 @@ receives the requested owner-approval setting. [core/wm_store.py:1270-1285]
 
 ### 1. Start with the rough idea
 
-Tell the Orchestrator what you want in chat. It interviews you one question at
-a time until the request is clear enough to plan. Do not skip the interview by
+Tell the Orchestrator what you want in chat. It interviews you per the
+`grilling` skill: rounds of numbered questions (every question whose
+prerequisites are settled), each with a recommended answer, until the frontier
+is empty and you confirm shared understanding. Do not skip the interview by
 trying to write an implementation brief yourself: the purpose of this gate is
 to turn an ambiguous idea into an agreed plan and testable task boundary. The
 intake skill requires this interview before creating a task or goal, and covers
