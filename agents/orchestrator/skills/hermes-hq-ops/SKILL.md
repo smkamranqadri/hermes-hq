@@ -7,13 +7,13 @@ license: MIT
 metadata:
   hermes:
     tags: [hermes-hq, orchestration, dispatch, release-gate, review, tasks]
-    related_skills: [specialist-dispatch, orchestrator-router, hermes-multiagent-coordination]
+    related_skills: [hermes-multiagent-coordination]
 ---
 
 # Hermes HQ Ops
 
 ## When to Use
-Use whenever work is planned, registered, approved, released, dispatched, or reviewed through Hermes HQ managed projects — "register a project", "release/approve a goal or task", "set up a task graph", "why is task #N blocked", or reading status from the store. For new owner work, load `orchestrator-intake` first so the owner is interviewed before any task or goal is created. Not for generic one-off single-agent delegation (that is `specialist-dispatch` / `orchestrator-router`).
+Use whenever work is planned, registered, approved, released, dispatched, or reviewed through Hermes HQ managed projects — "register a project", "release/approve a goal or task", "set up a task graph", "why is task #N blocked", or reading status from the store. For new owner work, load `orchestrator-intake` first so the owner is interviewed before any task or goal is created.
 
 ## What Hermes HQ is
 Hermes HQ is the control plane for a Hermes multi-agent team: one SQLite store + a web UI/API + a built-in single-flight dispatcher + an independent Reviewer gate, all in one supervised service.

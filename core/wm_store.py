@@ -3473,6 +3473,7 @@ _CHAT_BRIEF_FOOTER = [
     "",
     "This is a conversation with the owner, NOT a dispatched task: do not start work, "
     "change task status or write completion files unless the owner asks in this chat.",
+    "New work you bring in chat — bug reports, change requests, or feature ideas — must go through the `orchestrator-intake` skill's grilling interview and become a managed task through the Hermes HQ wm pipeline; never use ad-hoc `hermes --profile <agent>` specialist dispatch.",
     "Acknowledge in one short line and wait for the owner's question.",
 ]
 

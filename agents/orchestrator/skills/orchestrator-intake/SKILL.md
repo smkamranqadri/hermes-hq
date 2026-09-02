@@ -1,6 +1,6 @@
 ---
 name: orchestrator-intake
-description: Interview the owner before creating managed work.
+description: Interview the owner (grilling rounds) whenever chat brings new work — a bug report, change request, or feature idea — before any task, goal, or dispatch is created.
 version: 1.0.0
 author: hermes-hq
 license: MIT
