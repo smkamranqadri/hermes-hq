@@ -1,7 +1,7 @@
 import { useState } from 'react'
 import { useNavigate } from 'react-router-dom'
 import { useGoals, useProjects, useRoster, useTasks, useWrite, ApiError } from '../api'
-import { Modal, Field, TextInput, TextArea, SelectInput, Btn } from './Modal'
+import { Modal, ConfirmModal, Field, TextInput, TextArea, SelectInput, Btn } from './Modal'
 import { useToast } from './Toast'
 
 const errText = (e: unknown) => e instanceof ApiError ? e.message : String(e)
@@ -95,6 +95,11 @@ export function FeedbackModal({ taskId, onClose }: { taskId: number; onClose: ()
 /** Confirmed one-shot action button. */
 export function ActionBtn({ url, label, confirm, kind = 'primary', onDone, body }: { url: string; label: string; confirm?: string; kind?: 'primary' | 'ghost' | 'warn'; onDone?: (d: unknown) => void; body?: unknown }) {
   const toast = useToast()
-  const m = useWrite(url, { onSuccess: (d) => { toast(`${label}: done`); onDone?.(d) } })
-  return <Btn kind={kind} busy={m.isPending} onClick={() => { if (!confirm || window.confirm(confirm)) m.mutate(body, { onError: x => toast(errText(x), 'err') }) }}>{label}</Btn>
+  const [confirmOpen, setConfirmOpen] = useState(false)
+  const m = useWrite(url, { onSuccess: (d) => { toast(`${label}: done`); onDone?.(d); setConfirmOpen(false) } })
+  const execute = () => m.mutate(body, { onError: x => toast(errText(x), 'err') })
+  return <>
+    <Btn kind={kind} busy={m.isPending} onClick={() => { if (confirm) setConfirmOpen(true); else execute() }}>{label}</Btn>
+    {confirmOpen && <ConfirmModal title={`Confirm ${label}`} message={confirm} confirmLabel={label} busy={m.isPending} onClose={() => setConfirmOpen(false)} onConfirm={execute} />}
+  </>
 }

@@ -3,7 +3,7 @@ import { useNavigate } from 'react-router-dom'
 import { useQueryClient } from '@tanstack/react-query'
 import clsx from 'clsx'
 import { updateSession, deleteSession, useChatSearch, ago, ApiError, type AgentSession } from '../../api'
-import { Modal, TextInput, Btn } from '../Modal'
+import { Modal, ConfirmModal, TextInput, Btn } from '../Modal'
 import { useToast } from '../Toast'
 import { Loading } from '../ui'
 
@@ -12,14 +12,15 @@ const errText = (e: unknown) => e instanceof ApiError ? e.message : String(e)
 /** ⋯ menu per session: pin, rename, export, delete. Rename/delete/pin go through the agent's gateway. */
 export function SessionMenu({ profile, s, current, onRename }: { profile: string; s: AgentSession; current: boolean; onRename: () => void }) {
   const [open, setOpen] = useState(false)
+  const [confirmOpen, setConfirmOpen] = useState(false)
   const [busy, setBusy] = useState(false)
   const qc = useQueryClient(); const toast = useToast(); const nav = useNavigate()
   const ref = useRef<HTMLDivElement>(null)
   useEffect(() => { if (!open) return; const h = (e: MouseEvent) => { if (!ref.current?.contains(e.target as Node)) setOpen(false) }; document.addEventListener('mousedown', h); return () => document.removeEventListener('mousedown', h) }, [open])
   const refresh = () => { qc.invalidateQueries({ queryKey: ['agent-sessions', profile] }); qc.invalidateQueries({ queryKey: ['session', profile, s.id] }); qc.invalidateQueries({ queryKey: ['chat-scoped'] }) }
-  async function run(fn: () => Promise<unknown>, done?: string) {
+  async function run(fn: () => Promise<unknown>, done?: string): Promise<boolean> {
     setBusy(true)
-    try { await fn(); refresh(); if (done) toast(done) } catch (e) { toast(errText(e), 'err') } finally { setBusy(false); setOpen(false) }
+    try { await fn(); refresh(); if (done) toast(done); return true } catch (e) { toast(errText(e), 'err'); return false } finally { setBusy(false); setOpen(false) }
   }
   const pinned = !!s.pinned
   return (
@@ -30,9 +31,10 @@ export function SessionMenu({ profile, s, current, onRename }: { profile: string
           <button type="button" disabled={busy} onClick={() => void run(() => updateSession(profile, s.id, { pinned: !pinned }))} className="block w-full rounded px-2 py-1 text-left hover:bg-raised">{pinned ? 'Unpin' : 'Pin'}</button>
           <button type="button" disabled={busy} onClick={() => { setOpen(false); onRename() }} className="block w-full rounded px-2 py-1 text-left hover:bg-raised">Rename</button>
           <a href={`/api/session/${profile}/${s.id}/export.md`} download className="block w-full rounded px-2 py-1 text-left hover:bg-raised" onClick={() => setOpen(false)}>Export Markdown</a>
-          <button type="button" disabled={busy} onClick={() => { if (window.confirm(`Delete "${s.title || s.id}"? The transcript is removed from ${profile}'s Hermes history.`)) void run(async () => { await deleteSession(profile, s.id); if (current) nav(`/chat/${profile}`) }, 'Session deleted') }} className="block w-full rounded px-2 py-1 text-left text-needsyou hover:bg-raised">Delete</button>
+          <button type="button" disabled={busy} onClick={() => { setOpen(false); setConfirmOpen(true) }} className="block w-full rounded px-2 py-1 text-left text-needsyou hover:bg-raised">Delete</button>
         </div>
       )}
+      {confirmOpen && <ConfirmModal title="Delete session" message={`Delete "${s.title || s.id}"? The transcript is removed from ${profile}'s Hermes history.`} confirmLabel="Delete" busy={busy} onClose={() => setConfirmOpen(false)} onConfirm={() => { void run(async () => { await deleteSession(profile, s.id); if (current) nav(`/chat/${profile}`) }, 'Session deleted').then(ok => { if (ok) setConfirmOpen(false) }) }} />}
     </div>
   )
 }
