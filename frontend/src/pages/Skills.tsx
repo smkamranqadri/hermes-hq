@@ -8,7 +8,7 @@ import { cmTheme, cmHighlight, useLanguage } from '../components/editor'
 import { get, post } from '../api'
 import { GlassCard, PageHeader } from '../components/GlassCard'
 import { Empty, Skeleton, Chip, Spinner } from '../components/ui'
-import { Modal, Field, TextInput, TextArea, Btn } from '../components/Modal'
+import { Modal, ConfirmModal, Field, TextInput, TextArea, Btn } from '../components/Modal'
 import { Menu, MenuItem } from '../components/Menu'
 import { Markdown } from '../components/chat/Markdown'
 import { useToast } from '../components/Toast'
@@ -152,13 +152,14 @@ function JobCard({ job, onClose }: { job: Job; onClose: () => void }) {
 function SkillDetail({ profile, skill, onClose, onJob }: { profile: string; skill: Skill; onClose: () => void; onJob: (j: Job) => void }) {
   const qc = useQueryClient(); const toast = useToast()
   const f = useQuery({ queryKey: ['skill-read', profile, skill.name], queryFn: () => get<{ content: string; path: string }>(`/api/skills/read?${q({ profile, name: skill.name })}`) })
-  const [edit, setEdit] = useState(false); const [text, setText] = useState<string | null>(null); const [saving, setSaving] = useState(false)
+  const [edit, setEdit] = useState(false); const [text, setText] = useState<string | null>(null); const [saving, setSaving] = useState(false); const [uninstallOpen, setUninstallOpen] = useState(false); const [actionBusy, setActionBusy] = useState(false)
   const lang = useLanguage('SKILL.md')
   const ext = useMemo(() => [cmTheme, cmHighlight, EditorView.lineWrapping, ...(lang ? [lang] : [])], [lang])
   const save = async () => { if (text === null) return; setSaving(true); try { await post('/api/skills/write', { profile, name: skill.name, content: text }); qc.setQueryData(['skill-read', profile, skill.name], (o: { content: string; path: string } | undefined) => o ? { ...o, content: text } : o); qc.invalidateQueries({ queryKey: ['skills', profile] }); setEdit(false); toast('SKILL.md saved') } catch (e) { toast(e instanceof Error ? e.message : String(e), 'err') } finally { setSaving(false) } }
-  const act = async (url: string, body: object) => { try { const r = await post<{ job: Job }>(url, body); onJob({ ...r.job, log: '', result: null }); onClose() } catch (e) { toast(e instanceof Error ? e.message : String(e), 'err') } }
+  const act = async (url: string, body: object) => { setActionBusy(true); try { const r = await post<{ job: Job }>(url, body); onJob({ ...r.job, log: '', result: null }); onClose() } catch (e) { toast(e instanceof Error ? e.message : String(e), 'err') } finally { setActionBusy(false) } }
   return (
-    <Modal title={`${icon(skill)} ${skill.name}`} onClose={onClose}>
+    <>
+      <Modal title={`${icon(skill)} ${skill.name}`} onClose={onClose}>
       <div className="flex flex-wrap items-center gap-1 font-mono text-[10px]">
         <span className={clsx('rounded-full border px-1.5 py-0.5', ORIGIN[skill.provenance].cls)}>{ORIGIN[skill.provenance].label}</span><span className="rounded-full border border-line px-1.5 py-0.5 text-muted">{skill.category}</span>{skill.version && <span className="text-muted">v{skill.version}</span>}<span className="text-muted">· {skill.usage}× used</span>{skill.homepage && <a href={skill.homepage} target="_blank" rel="noreferrer" className="text-accent-2 hover:underline">homepage ↗</a>}
       </div>
@@ -172,12 +173,14 @@ function SkillDetail({ profile, skill, onClose, onJob }: { profile: string; skil
       <div className="mt-3 flex flex-wrap justify-end gap-2">
         {edit ? <><Btn kind="ghost" onClick={() => { setEdit(false); setText(null) }}>Cancel</Btn><Btn busy={saving} disabled={text === null || text === f.data?.content} onClick={save}>Save</Btn></>
           : <>
-            {skill.provenance === 'hub' && <><Btn kind="ghost" onClick={() => act('/api/skills/hub/update', { profile, name: skill.name })}>Update</Btn><Btn kind="warn" onClick={() => { if (window.confirm(`Uninstall ${skill.name} from ${profile}?`)) void act('/api/skills/hub/uninstall', { profile, name: skill.name }) }}>Uninstall</Btn></>}
+            {skill.provenance === 'hub' && <><Btn kind="ghost" onClick={() => void act('/api/skills/hub/update', { profile, name: skill.name })}>Update</Btn><Btn kind="warn" onClick={() => setUninstallOpen(true)} disabled={actionBusy}>Uninstall</Btn></>}
             {f.data && <Btn kind="ghost" onClick={() => { setText(f.data!.content); setEdit(true) }}>Edit SKILL.md</Btn>}
             <Btn onClick={onClose}>Close</Btn>
           </>}
       </div>
-    </Modal>
+      </Modal>
+    {uninstallOpen && <ConfirmModal title="Uninstall skill" message={`Uninstall ${skill.name} from ${profile}?`} confirmLabel="Uninstall" busy={actionBusy} onClose={() => setUninstallOpen(false)} onConfirm={() => act('/api/skills/hub/uninstall', { profile, name: skill.name })} />}
+    </>
   )
 }
 
