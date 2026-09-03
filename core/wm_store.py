@@ -1118,12 +1118,13 @@ def release_goal(goal_id, db_path=None):
                 (goal_id,)).fetchall()
             out = []
             for c in children:
-                row = conn.execute("SELECT status FROM tasks WHERE id=?",
+                row = conn.execute("SELECT status, owner_approval FROM tasks WHERE id=?",
                                    (c["id"],)).fetchone()
                 cur_st = row["status"] if row else None
                 new_st = cur_st
                 if cur_st in ("planned", "waiting_approval"):
-                    ns = ("ready" if deps_done(c["id"], db_path=db_path)
+                    ns = ("ready" if not row["owner_approval"]
+                          and deps_done(c["id"], db_path=db_path)
                           else "waiting_approval")
                     _set_task_status(c["id"], ns, db_path=db_path, run_id=None,
                                      detail="goal %d released" % goal_id,
@@ -1397,7 +1398,8 @@ def claim_task(task_id, db_path=None):
         with conn:
             cur = conn.execute(
                 "UPDATE tasks SET status='running', claimed_at=?, heartbeat_at=? "
-                "WHERE id=? AND status IN ('ready','rework')",
+                "WHERE id=? AND status IN ('ready','rework') "
+                "AND owner_approval=0",
                 (now, now, task_id))
             rowcount = cur.rowcount
             if rowcount == 1:
@@ -1414,6 +1416,7 @@ def next_ready_tasks(cap, db_path=None):
     try:
         return conn.execute(
             "SELECT * FROM tasks WHERE status IN ('ready','rework') "
+            "AND owner_approval=0 "
             "ORDER BY COALESCE(claimed_at, created_at), created_at ASC LIMIT ?",
             (cap,)).fetchall()
     finally:
@@ -1806,8 +1809,11 @@ def _mark_ready_if_deps_done(conn, task_id):
         and their dependents.
     """
     row = conn.execute(
-        "SELECT goal_id, status FROM tasks WHERE id=?", (task_id,)).fetchone()
+        "SELECT goal_id, status, owner_approval FROM tasks WHERE id=?",
+        (task_id,)).fetchone()
     if row is None or row["status"] != "waiting_approval":
+        return False
+    if row["owner_approval"]:
         return False
     g = conn.execute("SELECT status FROM goals WHERE id=?",
                      (row["goal_id"],)).fetchone() if row["goal_id"] else None
@@ -2602,6 +2608,16 @@ def edit_task(task_id, description=None, definition_of_done=None,
                  detail="owner edited %s. %s" % (", ".join(changed),
                                                  " | ".join(audit)),
                  db_path=db_path)
+    # Removing the owner gate is an approval event. If the task was waiting
+    # on completed dependencies under a released goal, make it ready now so
+    # the next dispatcher tick can pick it up without another manual action.
+    if owner_approval is False and "owner_approval" in changed:
+        _promote_after_approval = _connect(db_path)
+        try:
+            with _promote_after_approval:
+                _mark_ready_if_deps_done(_promote_after_approval, task_id)
+        finally:
+            _promote_after_approval.close()
     return changed
 
 

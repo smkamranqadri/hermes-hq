@@ -87,14 +87,13 @@ def test_phased_task_creation_and_owner_approval_promotes_build(env):
     assert build["is_code"] == 1 and build["review_policy"] == "required"
     assert build["owner_approval"] == 1
 
-    # Released goals make newly created tasks eligible; owner approval closes
-    # the plan and the existing dependency handoff promotes the build.
-    import sqlite3
-    con = sqlite3.connect(db)
-    con.execute("UPDATE tasks SET status='manual' WHERE id=?", (plan_id,))
-    con.commit(); con.close()
+    # Releasing the goal satisfies dependencies, but the build remains gated
+    # until the owner explicitly approves that task.
+    store.mark_manual(plan_id, note="plan ready for owner", db_path=db)
     promoted = store.close_by_owner(plan_id, note="approved", db_path=db)
-    assert build_id in promoted
+    assert build_id not in promoted
+    assert store.get_task(build_id, db_path=db)["status"] == "waiting_approval"
+    store.edit_task(build_id, owner_approval=False, db_path=db)
     assert store.get_task(build_id, db_path=db)["status"] == "ready"
 
 

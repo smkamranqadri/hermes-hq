@@ -268,3 +268,68 @@ def test_edit_task_toggles_gate_with_audit(env):
                headers=s)
     assert r.status_code == 200
     assert store.get_task(tid, db_path=db)["owner_approval"] == 0
+
+
+def test_owner_gate_blocks_ready_until_owner_approval_then_dispatches(env, monkeypatch):
+    c, store, gw, root = env
+    db = store.DEFAULT_DB_PATH
+    _setup(store, db)
+    os.makedirs("/tmp/demo", exist_ok=True)
+    tid = store.create_task("demo", "Gated ready", "", "",
+                            owner_approval=True, db_path=db)
+    store.mark_ready(tid, db_path=db)
+
+    launched = []
+    monkeypatch.setattr(
+        "core.wm_dispatch._launch",
+        lambda run_id, *args, **kwargs: launched.append(run_id) or True)
+    monkeypatch.setattr("core.wm_dispatch.check_stall", lambda *args, **kwargs: None)
+    before = __import__("core.wm_dispatch", fromlist=["run_dispatch"]).run_dispatch(db_path=db)
+    assert before["dispatched"] == []
+    assert store.get_task(tid, db_path=db)["status"] == "ready"
+    assert store.claim_task(tid, db_path=db) is False
+
+    store.edit_task(tid, owner_approval=False, db_path=db)
+    after = __import__("core.wm_dispatch", fromlist=["run_dispatch"]).run_dispatch(db_path=db)
+    assert len(after["dispatched"]) == 1 and launched == after["dispatched"]
+    assert store.get_task(tid, db_path=db)["status"] == "running"
+
+
+def test_owner_gate_blocks_rework_until_owner_approval(env, monkeypatch):
+    c, store, gw, root = env
+    db = store.DEFAULT_DB_PATH
+    _setup(store, db)
+    os.makedirs("/tmp/demo", exist_ok=True)
+    tid = store.create_task("demo", "Gated rework", "", "",
+                            owner_approval=True, db_path=db)
+    store.mark_manual(tid, db_path=db)
+    store.owner_feedback(tid, "revise it", db_path=db)
+    assert store.get_task(tid, db_path=db)["status"] == "rework"
+    monkeypatch.setattr("core.wm_dispatch._launch", lambda *args, **kwargs: True)
+    assert __import__("core.wm_dispatch", fromlist=["run_dispatch"]).run_dispatch(
+        db_path=db)["dispatched"] == []
+
+    store.edit_task(tid, owner_approval=False, db_path=db)
+    assert len(__import__("core.wm_dispatch", fromlist=["run_dispatch"]).run_dispatch(
+        db_path=db)["dispatched"]) == 1
+
+
+def test_owner_gate_blocks_dependency_promotion_until_approval(env):
+    c, store, gw, root = env
+    db = store.DEFAULT_DB_PATH
+    _setup(store, db)
+    goal_id = store.create_goal("demo", "Released goal", db_path=db)
+    store.set_goal_status(goal_id, "planned", force=True, db_path=db)
+    store.release_goal(goal_id, db_path=db)
+    parent = store.create_task("demo", "Parent", "", "", goal_id=goal_id,
+                               db_path=db)
+    child = store.create_task("demo", "Gated child", "", "", goal_id=goal_id,
+                              owner_approval=True, db_path=db)
+    store.add_task_dep(child, parent, db_path=db)
+    rid = _run(store, db, parent)
+    store.record_completion(rid, parent, "done", db_path=db)
+    assert store.promote_dependents(parent, db_path=db) == []
+    assert store.get_task(child, db_path=db)["status"] == "waiting_approval"
+
+    store.edit_task(child, owner_approval=False, db_path=db)
+    assert store.get_task(child, db_path=db)["status"] == "ready"
