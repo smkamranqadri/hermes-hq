@@ -8,7 +8,7 @@ const errText = (e: unknown) => e instanceof ApiError ? e.message : String(e)
 
 export function NewProjectModal({ onClose }: { onClose: () => void }) {
   const toast = useToast(); const nav = useNavigate()
-  const [f, setF] = useState({ slug: '', name: '', description: '', primary_path: '' })
+  const [f, setF] = useState({ slug: '', name: '', description: '', primary_path: '', initialize_kis: false })
   const m = useWrite('/api/projects', { onSuccess: (d) => { toast(`Project created: ${(d as { slug: string }).slug}`); onClose(); nav(`/projects/${(d as { slug: string }).slug}`) } })
   const slugify = (v: string) => v.toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-+|-+$/g, '')
   return (
@@ -18,6 +18,7 @@ export function NewProjectModal({ onClose }: { onClose: () => void }) {
         <Field label="Slug" hint="lowercase, dashes; becomes the folder name"><TextInput required pattern="[a-z0-9][a-z0-9-]*" value={f.slug} onChange={e => setF({ ...f, slug: e.target.value })} /></Field>
         <Field label="Description"><TextArea value={f.description} onChange={e => setF({ ...f, description: e.target.value })} /></Field>
         <Field label="Path" hint="leave empty to create <projects root>/<slug>"><TextInput value={f.primary_path} onChange={e => setF({ ...f, primary_path: e.target.value })} placeholder="/opt/data/projects/…" /></Field>
+        <label className="flex items-center gap-2 text-sm"><input type="checkbox" checked={f.initialize_kis} onChange={e => setF({ ...f, initialize_kis: e.target.checked })} /> Initialize KIS skill</label>
         <div className="mt-2 flex justify-end gap-2"><Btn kind="ghost" type="button" onClick={onClose}>Cancel</Btn><Btn type="submit" busy={m.isPending}>Create</Btn></div>
       </form>
     </Modal>

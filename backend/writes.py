@@ -1,6 +1,10 @@
 """Write API. Every route is a thin call into core.wm_store — the engine owns
 all policy (release gate, rework path, refusals). ValueError from the engine
 becomes a 409 with the engine's own message, never a fabricated success."""
+import subprocess
+import urllib.error
+import urllib.request
+
 from fastapi import APIRouter, HTTPException, Request, Response
 from fastapi.responses import StreamingResponse
 from pydantic import BaseModel, Field
@@ -10,6 +14,8 @@ from backend import agents as ag, chat, gateways as gw, stop as stopmod, tasks a
 from core import wm_dispatch, wm_store as store
 
 router = APIRouter(prefix="/api")
+KIS_REPO_URL = "https://github.com/smkamranqadri/kis-skill.git"
+KIS_BOOTSTRAP_URL = "https://raw.githubusercontent.com/smkamranqadri/kis-skill/main/bootstrap.sh"
 
 
 def _db():
@@ -58,6 +64,7 @@ class ProjectIn(BaseModel):
     name: str
     description: str = ""
     primary_path: str = ""
+    initialize_kis: bool = False
 
 
 class ProjectPatch(BaseModel):
@@ -73,8 +80,31 @@ def create_project(body: ProjectIn):
         root = store.resolve_projects_root() or os.path.join(os.path.dirname(store.hq_home()), "projects")
         path = os.path.join(root, body.slug)
     os.makedirs(path, exist_ok=True)
+    if body.initialize_kis:
+        try:
+            initialize_kis(path)
+        except (OSError, subprocess.SubprocessError, ValueError) as e:
+            raise HTTPException(502, "KIS initialization failed: %s" % e)
     pid = _engine(store.create_project, body.slug, body.name, body.description, path)
     return {"id": pid, "slug": body.slug}
+
+
+def initialize_kis(path: str) -> None:
+    """Install KIS with its canonical bootstrap script into ``path``."""
+    try:
+        with urllib.request.urlopen(KIS_BOOTSTRAP_URL, timeout=30) as response:
+            bootstrap = response.read()
+    except (OSError, urllib.error.URLError) as e:
+        raise ValueError("could not download KIS bootstrap: %s" % e) from e
+    result = subprocess.run(
+        ["bash", "-s", "--", "install", "--repo", KIS_REPO_URL, "--target", path],
+        input=bootstrap,
+        capture_output=True,
+        timeout=120,
+    )
+    if result.returncode:
+        detail = (result.stderr or result.stdout or b"KIS bootstrap exited unsuccessfully").decode(errors="replace").strip()
+        raise ValueError("bootstrap exited with status %s: %s" % (result.returncode, detail[-500:]))
 
 
 @router.post("/project/{slug}")

@@ -113,6 +113,46 @@ def test_feedback_requires_comment_and_reworks(env):
     assert r.json()["task"]["human"]["state"] == "queued" and "yes, go ahead" in (r.json()["task"]["feedback"] or "")
 
 
+def test_create_project_initializes_kis_when_requested(env, monkeypatch, tmp_path):
+    c, store, db = env
+    h = login(c)
+    from backend import writes
+    calls = []
+
+    def fake_initialize_kis(path):
+        calls.append(path)
+        (tmp_path / "kis-marker").write_text(path)
+
+    monkeypatch.setattr(writes, "initialize_kis", fake_initialize_kis)
+    project_path = tmp_path / "kis-project"
+    r = c.post("/api/projects", json={
+        "slug": "kis-project", "name": "KIS Project",
+        "primary_path": str(project_path), "initialize_kis": True,
+    }, headers=h)
+    assert r.status_code == 200
+    assert calls == [str(project_path)]
+    assert store.get_project(slug="kis-project", db_path=db)["primary_path"] == str(project_path)
+
+
+def test_create_project_reports_kis_failure_without_creating_project(env, monkeypatch, tmp_path):
+    c, store, db = env
+    h = login(c)
+    from backend import writes
+
+    def fail_initialize_kis(path):
+        raise ValueError("bootstrap failed")
+
+    monkeypatch.setattr(writes, "initialize_kis", fail_initialize_kis)
+    project_path = tmp_path / "failed-kis-project"
+    r = c.post("/api/projects", json={
+        "slug": "failed-kis-project", "name": "Failed KIS",
+        "primary_path": str(project_path), "initialize_kis": True,
+    }, headers=h)
+    assert r.status_code == 502
+    assert "KIS initialization failed" in r.json()["detail"]
+    assert store.get_project(slug="failed-kis-project", db_path=db) is None
+
+
 def test_goal_and_project_writes(env):
     c, store, db = env
     h = login(c)
