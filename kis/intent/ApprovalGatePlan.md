@@ -1,4 +1,4 @@
-# Approval Gate Bundle (Standard) — planned 2026-09-01
+# Approval Gate Bundle (Standard) — planned 2026-09-01 — COMPLETE 2026-09-01 (proof in State git history)
 
 Origin: task #130 ("plan and get my approval before coding") went straight to
 done — the coder honored the prose gate (wrote a plan, no code) but the

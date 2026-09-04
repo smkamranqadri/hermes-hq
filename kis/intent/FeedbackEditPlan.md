@@ -1,4 +1,4 @@
-# Feedback-from-manual + Task Edit (Standard) — planned 2026-08-31
+# Feedback-from-manual + Task Edit (Standard) — planned 2026-08-31 — COMPLETE 2026-08-31 (proof in State git history)
 
 Goal: owner context reaches a brief without superseding the task. Owner locked
 (interview 2026-08-31): scope C — feedback from `manual` PLUS an audited

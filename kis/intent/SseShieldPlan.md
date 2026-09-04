@@ -1,4 +1,4 @@
-# SSE Stream Shield (Standard) — planned 2026-08-31
+# SSE Stream Shield (Standard) — planned 2026-08-31 — COMPLETE 2026-08-31 (proof in State git history)
 
 Goal: a browser dropping the chat stream (phone lock, tab switch, nav) must not
 kill the running turn. Today `stream_turn`'s generator closes the gateway

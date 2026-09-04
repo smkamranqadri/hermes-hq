@@ -1,4 +1,4 @@
-# Owner-Close Pass (Standard) — planned 2026-08-31
+# Owner-Close Pass (Standard) — planned 2026-08-31 — COMPLETE 2026-08-31 (proof in State git history)
 
 Goal: work finished outside WM runs can become `done` through a sanctioned, audited
 path; dep edges can be removed/repointed; the stale draft goal #15 is deleted.
