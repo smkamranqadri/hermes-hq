@@ -137,7 +137,14 @@ Hermes v0.20.5 at `/opt/hermes`, `HERMES_HOME=/opt/data`, profiles under `/opt/d
 - Rename/delete refuse (409) anything that is or contains a project's `primary_path`. `raw` serves html/xhtml/svg as attachment with `nosniff` + `CSP: sandbox` (no active content on the app origin); `raw?preview=1` serves html inline under `sandbox allow-scripts; connect-src 'none'` for the Files page's iframe preview (opaque origin: no cookies, no calls back to the app).
 - `GET /api/project/{slug}/artifacts` = `result_paths` of the project's runs/tasks that exist on disk, with `inside_primary`/`rel` for the Files page. The old RO tree/preview readers were removed.
 
+## Second Brain (decided 2026-09-04, `intent/SecondBrainPlan.md`)
+- DB-native (`notes`/`areas`/`note_entries`/`proposals` in `hq.db`), no notes repo; portability = markdown Export from the Library. Three types: **note** (owner-written), **playbook** (owner note, librarian-structured via proposal, linked to original), **wiki** (librarian-compiled from notes with citations, on-demand). Notes carry body + dated entries; `authored_by` (owner/librarian/import) is permanent provenance.
+- **Librarian writes nothing directly — enforced in the API, not the prompt.** Agent sessions get `propose-*` endpoints only; every change (split/file/wiki-update/contradiction/new-task) is an owner-approved proposal, classified routine vs needs_attention. Contradictions are never silently reconciled (`disputed` + keep both). Note content is untrusted data in briefs. Agent Memory never auto-feeds the second brain.
+- Graduation is **create-and-link, never convert**: "New task" / "New reminder" (owner word for a schedule that mints an owner task). Reserved `owner` assignee is skipped by dispatcher claim/candidate predicates.
+- Closed tag taxonomy (extend schema first, then use — code-validated). Origin is a plain tag; source sha256 kept internally for dedupe/drift. Areas are two-level, seeded from kamran-focus; project→area mappings are individually owner-decided.
+
 ## Known limits (accepted for now)
+- Second Brain private vault: encrypted at rest with a server-held key and agent-denied by authorization — root on the box can still decrypt. Password-manager convenience, not a cryptographic guarantee (owner accepted 2026-09-04; E2E passphrase declined for searchability/recoverability).
 - `runs/<id>.log` holds only the wrapper's lines; the agent transcript is the Hermes session (readable via Chat).
 - Playwright harness flakes (not app bugs): taps on fixed-bottom-sheet rows under `isMobile` intermittently "intercepted" while `elementFromPoint` shows no overlap; during the login transition, locators can briefly resolve duplicate DOM matches — filter with `:visible`.
 - `IdleSweeper` (gateway idle-stop) runs only when the dispatcher is enabled; `--no-dispatcher` dev mode never idle-stops gateways.

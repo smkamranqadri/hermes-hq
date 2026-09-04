@@ -7,7 +7,8 @@
 Task: **gated-ready fix SHIPPED 2026-09-04** (`intent/GatedReadyFixPlan.md`, commit `16d349c`, deployed live; proof below) — pipeline verification pending: **#183 is re-specced as INTEGRATE/VERIFY** (audited edit; independently verify the deployed fix) and awaits the owner's Approve → queue click. Board: #175 gated-ready (legacy row — approving dispatches it), #176/#177 gated `waiting_approval` (now visible as "Awaiting approval" in Needs-you), **#156 `failed`** (namazee APK — arm64 box can't run the x86_64 NDK/AAPT2 toolchain; Knowledge → Known limits; owner decision: park or move to x86_64 CI). Earlier 2026-09-03: safeguard chain #178–#182 complete (`6a0d02f`), #174 recovered, #82/#85/#86/#89/#130 done.
 
 ## Next
-**Owner clicks "Approve → queue" on #183** (launches the independent verify run through the pipeline, review required), then decides #175 (starts LinkedIn/Medium file review) and #176/#177. Still uninterviewed candidates: persist login sessions across restarts, task-first intake variant.
+**Second Brain — planned 2026-09-04, Phase 1 ready to kick off** (`intent/SecondBrainPlan.md`; design locked via owner interview + mockup v3.1 https://claude.ai/code/artifact/28097e1a-2343-442f-a21e-ed014e507eb3; durable rules in Knowledge → Second Brain; foundation-first order approved; next action: file the Phase 1 goal + tasks through intake).
+Also: **Owner clicks "Approve → queue" on #183** (launches the independent verify run through the pipeline, review required), then decides #175 (starts LinkedIn/Medium file review) and #176/#177. Still uninterviewed candidates: persist login sessions across restarts, task-first intake variant.
 
 ## Blocker
 None.
