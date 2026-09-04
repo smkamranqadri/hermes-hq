@@ -172,6 +172,10 @@ export function TaskDetail() {
           </div>
         )}
         <div className="flex basis-full flex-wrap gap-2">
+          {!!t.owner_approval && ['waiting_approval', 'ready', 'rework'].includes(st) && (
+            <ActionBtn url={`/api/task/${t.id}/edit`} body={{ owner_approval: false }} label="Approve → queue"
+              confirm="Approve this task? The owner gate clears (audited) and the dispatcher takes it — next tick if its dependencies are done, otherwise as soon as they finish." />
+          )}
           {st === 'planned' && <ActionBtn url={`/api/task/${t.id}/mark-ready`} label="Mark ready" confirm={t.goal_id && t.goal_status !== 'released' ? 'This bypasses the goal release gate for this task. Continue?' : undefined} />}
           {t.human.action === 'release_goal' && t.goal_id && <ActionBtn url={`/api/goal/${t.goal_id}/release`} label="Release goal" confirm={`Release goal #${t.goal_id}?`} />}
           {st === 'running' && <ActionBtn url={`/api/task/${t.id}/stop`} label="Stop" kind="warn" confirm="Kill the running agent? The run is marked failed and the task leaves the queue (manual)." />}

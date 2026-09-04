@@ -1352,16 +1352,27 @@ def mark_ready(task_id, db_path=None):
     """Set a task to 'ready' only if all deps are done; else raise ValueError.
     A task already 'ready' is a silent no-op (no duplicate transition/activity);
     a 'running' task is refused — re-releasing a claimed task would let the
-    next dispatcher tick claim it a second time."""
+    next dispatcher tick claim it a second time. An owner-gated task
+    (owner_approval=1) is refused outright: the dispatcher never claims gated
+    tasks, so 'ready' would be an undispatchable dead end — approval (clearing
+    the gate) is the one sanctioned release and queues it automatically."""
     t = get_task(task_id, db_path=db_path)
     if t is None:
         raise ValueError("no task with id %s" % task_id)
-    if t["status"] == "ready":
-        return
     if t["status"] == "running":
         raise ValueError(
             "task %d is 'running' (claimed by the dispatcher) — it cannot be "
             "re-released while a run owns it" % task_id)
+    if t["owner_approval"]:
+        # Found live on #175/#183 (2026-09-04): mark-ready pushed gated tasks
+        # to 'ready' where the dispatch safeguard silently never claims them.
+        raise ValueError(
+            "task %d is owner-gated — mark-ready cannot queue it. Approve it "
+            "instead (clear the owner gate on the task page, or `wm task edit "
+            "%d --owner-approval 0`); it then queues automatically."
+            % (task_id, task_id))
+    if t["status"] == "ready":
+        return
     if not deps_done(task_id, db_path=db_path):
         deps = list_task_deps(task_id, db_path=db_path)
         raise ValueError(
@@ -2515,6 +2526,14 @@ def retry_task(task_id, db_path=None):
         raise ValueError("cannot retry task %d while it is running" % task_id)
     if t["status"] == "done":
         raise ValueError("cannot retry task %d: already done" % task_id)
+    if t["owner_approval"]:
+        # The dispatcher never claims gated tasks, so 'ready' would be an
+        # undispatchable dead end (the #175/#183 trap, 2026-09-04).
+        raise ValueError(
+            "task %d is owner-gated — retry cannot re-queue it. Approve it "
+            "first (clear the owner gate on the task page, or `wm task edit "
+            "%d --owner-approval 0`); then retry re-opens it to ready."
+            % (task_id, task_id))
     conn = _connect(db_path)
     try:
         with conn:

@@ -18,7 +18,16 @@ def _setup(store, db):
 
 
 def _run(store, db, tid, profile="coder"):
+    # mark_ready refuses owner-gated tasks (the #175/#183 dead-end guard), so
+    # to exercise a run against a STILL-GATED task, lift the gate to release,
+    # then restore it before claiming (the claim predicate then refuses, as it
+    # did before — start_run does not require a successful claim).
+    gated = bool(store.get_task(tid, db_path=db)["owner_approval"])
+    if gated:
+        store.edit_task(tid, owner_approval=False, db_path=db)
     store.mark_ready(tid, db_path=db)
+    if gated:
+        store.edit_task(tid, owner_approval=True, db_path=db)
     store.claim_task(tid, db_path=db)
     return store.start_run(tid, profile, db_path=db)
 
@@ -277,8 +286,22 @@ def test_owner_gate_blocks_ready_until_owner_approval_then_dispatches(env, monke
     os.makedirs("/tmp/demo", exist_ok=True)
     tid = store.create_task("demo", "Gated ready", "", "",
                             owner_approval=True, db_path=db)
-    store.mark_ready(tid, db_path=db)
+    # mark_ready refuses gated tasks outright — 'ready' would be a silent,
+    # undispatchable dead end (the live #175/#183 trap, 2026-09-04).
+    with pytest.raises(ValueError, match="owner-gated"):
+        store.mark_ready(tid, db_path=db)
+    assert store.get_task(tid, db_path=db)["status"] == "planned"
+    with pytest.raises(ValueError, match="owner-gated"):
+        store.retry_task(tid, db_path=db)
 
+    # Legacy rows from before the guard can still sit gated+ready; the claim
+    # predicate is what protects them from dispatch.
+    con = store._connect(db)
+    try:
+        with con:
+            con.execute("UPDATE tasks SET status='ready' WHERE id=?", (tid,))
+    finally:
+        con.close()
     launched = []
     monkeypatch.setattr(
         "core.wm_dispatch._launch",

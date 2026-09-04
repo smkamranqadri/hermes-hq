@@ -33,9 +33,35 @@ def test_manual_plan_has_distinct_approve_plan_action():
                        [], "planned", None)
     assert plan["state"] == "needsyou"
     assert plan["action"] == "approve_plan"
-    # only manual is affected: a gated task in any other status is unchanged
+    # a gated task that is actually running stays under working
     assert hs.classify({"status": "running", "owner_approval": 1}, [], None,
                        None)["state"] == "working"
+
+
+def test_gated_queueable_states_need_you():
+    """Gated ready/rework/waiting_approval surface the real blocker: the
+    dispatcher refuses gated claims, so 'Queued' would be a silent dead end."""
+    for st in ("ready", "rework"):
+        r = hs.classify({"status": st, "owner_approval": 1}, [], "released", None)
+        assert r["state"] == "needsyou", st
+        assert r["label"] == "Awaiting approval"
+        assert r["reason"] == "awaiting your approval"
+    r = hs.classify({"status": "waiting_approval", "owner_approval": 1},
+                    [{"id": 5, "status": "done"}], "released", None)
+    assert r["state"] == "needsyou" and r["label"] == "Awaiting approval"
+    # unmet deps: approval can be given early; the dep info is kept in reason
+    r = hs.classify({"status": "waiting_approval", "owner_approval": 1},
+                    [{"id": 5, "status": "running"}], "released", None)
+    assert r["state"] == "needsyou"
+    assert r["reason"] == "awaiting your approval · then waiting on #5"
+    # an unreleased goal outranks the gate: release is the structural blocker
+    r = hs.classify({"status": "waiting_approval", "owner_approval": 1},
+                    [], "planned", None)
+    assert r["state"] == "needsyou" and r["action"] == "release_goal"
+    # non-gated behavior is byte-identical
+    assert t("ready") == {"state": "queued", "reason": None, "action": None}
+    assert t("rework") == {"state": "queued", "reason": "rework requested",
+                           "action": None}
 
 
 def test_waiting_approval_is_queued_or_needs_you():

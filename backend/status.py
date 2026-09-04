@@ -34,14 +34,28 @@ def classify(task, deps=(), goal_status=None, last_run=None):
     st = task["status"]
     state = HUMAN_STATE.get(st, "backlog")
     reason, action, label = None, None, None
+    gated = bool(_get(task, "owner_approval"))
     if st == "waiting_approval":
         unmet = [d for d in deps if d["status"] != "done"]
         if unmet:
             reason = "waiting on " + ", ".join("#%d" % d["id"] for d in unmet)
+            if gated:
+                # The owner's approval is pending too and can be given early;
+                # once cleared, dependency completion promotes it normally.
+                state, label = "needsyou", "Awaiting approval"
+                reason = "awaiting your approval · then " + reason
         elif goal_status and goal_status != "released":
             state, reason, action = "needsyou", "goal not released", "release_goal"
+        elif gated:
+            state, reason, label = "needsyou", "awaiting your approval", \
+                "Awaiting approval"
         else:
             reason = "promoting"
+    elif st in ("ready", "rework") and gated:
+        # The dispatcher refuses to claim gated tasks, so these would sit
+        # "Queued" forever — surface the real blocker: the owner's approval.
+        state, reason, label = "needsyou", "awaiting your approval", \
+            "Awaiting approval"
     elif st == "rework":
         reason = "rework requested"
     elif st == "needs_review":
