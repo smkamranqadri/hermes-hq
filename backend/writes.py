@@ -475,4 +475,4 @@ def dispatch_now():
 
 @router.get("/system/roster")
 def roster():
-    return {"assignees": list(store.ASSIGNEE_PROFILES), "review_policies": list(store.REVIEW_POLICIES)}
+    return {"assignees": list(store.ASSIGNABLE), "review_policies": list(store.REVIEW_POLICIES)}
