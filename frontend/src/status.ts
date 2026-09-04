@@ -13,6 +13,9 @@ export function toHuman(engineStatus: string): Human {
   switch (engineStatus) {
     case 'planned': return { state: 'backlog' }
     case 'draft': return { state: 'backlog' }
+    // owner_approval tasks in ready/rework/waiting_approval arrive from the
+    // server as {state:'needsyou', label:'Awaiting approval'} (the dispatcher
+    // refuses gated claims); these raw-status fallbacks cover flagless tasks.
     case 'ready': return { state: 'queued' }
     case 'rework': return { state: 'queued', reason: 'rework requested' }
     case 'waiting_approval': return { state: 'queued' }
