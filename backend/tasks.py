@@ -12,7 +12,7 @@ from backend.readers import connect_ro, _fetchall, _parse_paths
 ORDER_INDEX = {s: i for i, s in enumerate(hs.ORDER)}
 
 
-def _base(project=None, q=None, archived=False):
+def _base(project=None, q=None, archived=False, assignee=None):
     sql = ("SELECT t.*, p.slug AS project_slug, p.name AS project_name, "
            "g.title AS goal_title, g.status AS goal_status "
            "FROM tasks t JOIN projects p ON p.id = t.project_id "
@@ -22,6 +22,8 @@ def _base(project=None, q=None, archived=False):
         sql += " AND p.archived = 0"
     if project:
         sql += " AND p.slug = ?"; params.append(project)
+    if assignee:
+        sql += " AND t.assignee_profile = ?"; params.append(assignee)
     if q:
         like = "%" + q.strip() + "%"
         sql += (" AND (LOWER(t.title) LIKE LOWER(?) OR LOWER(t.description) LIKE LOWER(?)"
@@ -57,10 +59,10 @@ def _enrich(con, rows):
     return rows
 
 
-def list_tasks(db_path, project=None, state=None, q=None, limit=None, offset=0, archived=False):
+def list_tasks(db_path, project=None, state=None, q=None, limit=None, offset=0, archived=False, assignee=None):
     con = connect_ro(db_path)
     try:
-        sql, params = _base(project, q, archived)
+        sql, params = _base(project, q, archived, assignee)
         rows = _enrich(con, _fetchall(con, sql, params))
     finally:
         con.close()

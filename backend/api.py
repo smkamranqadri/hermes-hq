@@ -36,8 +36,10 @@ def goals(project: str | None = None):
 
 @router.get("/tasks")
 def tasks(project: str | None = None, state: str | None = None, q: str | None = None,
+          assignee: str | None = None,
           limit: int | None = Query(None, ge=1, le=500), offset: int = Query(0, ge=0), archived: int = 0):
-    return tq.list_tasks(_db(), project=project, state=state, q=q, limit=limit, offset=offset, archived=bool(archived))
+    return tq.list_tasks(_db(), project=project, state=state, q=q, assignee=assignee,
+                         limit=limit, offset=offset, archived=bool(archived))
 
 
 @router.get("/task/{task_id}")

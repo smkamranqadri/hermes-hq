@@ -897,9 +897,10 @@ def build_parser():
     tc.add_argument("description", nargs="?")
     tc.add_argument("definition_of_done", nargs="?")
     tc.add_argument("--assignee", default=None,
-                    choices=list(store.ASSIGNEE_PROFILES),
-                    help="one of: %s (omit for unassigned)"
-                         % ", ".join(store.ASSIGNEE_PROFILES))
+                    choices=list(store.ASSIGNABLE),
+                    help="one of: %s (omit for unassigned; 'owner' = the "
+                         "human's own todo, never dispatched)"
+                         % ", ".join(store.ASSIGNABLE))
     tc.add_argument("--goal", type=int, default=None)
     tc.add_argument("--is-code", action="store_true",
                     help="mark this as a CODE task: runs get their own git "
@@ -927,9 +928,9 @@ def build_parser():
     # at launch. "" is kept as the explicit "unassign" spelling (engine parity:
     # validate_assignee maps empty -> NULL).
     ta.add_argument("profile", metavar="profile",
-                    choices=list(store.ASSIGNEE_PROFILES) + [""],
+                    choices=list(store.ASSIGNABLE) + [""],
                     help="one of: %s (or '' to unassign)"
-                         % ", ".join(store.ASSIGNEE_PROFILES))
+                         % ", ".join(store.ASSIGNABLE))
     ta.set_defaults(fn=cmd_task_assign)
     mr = task_sub.add_parser("mark-ready", help="Mark a task ready (deps must be done)")
     mr.add_argument("id", type=int)

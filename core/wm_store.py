@@ -120,7 +120,17 @@ DEFAULT_PROFILE = "default"
 # a real specialist profile.
 SPECIALIST_PROFILES = ("analyst", "writer", "marketer", "coder", "uiux",
                        "reviewer")
+
+# Second Brain: the reserved HUMAN assignee. A task assigned to `owner` is the
+# owner's own todo — the dispatcher's claim/candidate predicates skip it
+# unconditionally (it is NOT a Hermes profile and must never reach
+# `hermes --profile owner`). Owner tasks sit `ready` until the owner closes
+# them from the dashboard. Deliberately NOT in ASSIGNEE_PROFILES: that tuple
+# is the roster of REAL agents (gateways, Agents page, chat, session stores
+# all iterate it) — `owner` is assignable, never an agent.
+OWNER_ASSIGNEE = "owner"
 ASSIGNEE_PROFILES = (ORCHESTRATOR_AGENT,) + SPECIALIST_PROFILES
+ASSIGNABLE = ASSIGNEE_PROFILES + (OWNER_ASSIGNEE,)
 
 
 def validate_assignee(assignee):
@@ -140,10 +150,10 @@ def validate_assignee(assignee):
                          % (assignee,))
     if assignee == "":
         return None
-    if assignee not in ASSIGNEE_PROFILES:
+    if assignee not in ASSIGNABLE:
         raise ValueError(
             "unknown assignee profile %r — must be one of %s (or unassigned)"
-            % (assignee, ", ".join(ASSIGNEE_PROFILES)))
+            % (assignee, ", ".join(ASSIGNABLE)))
     return assignee
 
 
@@ -450,6 +460,65 @@ CREATE TABLE IF NOT EXISTS push_subscriptions (
     failures    INTEGER DEFAULT 0
 );
 
+-- Second Brain (intent/SecondBrainPlan.md, Phase 1) -------------------------
+CREATE TABLE IF NOT EXISTS areas (
+    id         INTEGER PRIMARY KEY,
+    name       TEXT NOT NULL,
+    parent_id  INTEGER REFERENCES areas(id),
+    position   INTEGER DEFAULT 0,
+    created_at REAL,
+    archived   INTEGER DEFAULT 0
+);
+CREATE UNIQUE INDEX IF NOT EXISTS idx_areas_name
+    ON areas(name, COALESCE(parent_id, 0));
+
+CREATE TABLE IF NOT EXISTS notes (
+    id           INTEGER PRIMARY KEY,
+    title        TEXT NOT NULL,
+    body         TEXT DEFAULT '',
+    type         TEXT DEFAULT 'note',      -- note | playbook | wiki
+    status       TEXT DEFAULT 'inbox',     -- inbox | active | archived
+    area_id      INTEGER REFERENCES areas(id),
+    project_id   INTEGER REFERENCES projects(id),
+    tags         TEXT DEFAULT '[]',        -- JSON list of strings
+    authored_by  TEXT DEFAULT 'owner',     -- owner | librarian | import
+    content_hash TEXT,                     -- sha256 of imported source body
+    pinned       INTEGER DEFAULT 0,
+    created_at   REAL,
+    updated_at   REAL
+);
+
+CREATE TABLE IF NOT EXISTS note_entries (
+    id         INTEGER PRIMARY KEY,
+    note_id    INTEGER NOT NULL REFERENCES notes(id),
+    body       TEXT NOT NULL,
+    created_at REAL
+);
+
+CREATE TABLE IF NOT EXISTS note_revisions (
+    id         INTEGER PRIMARY KEY,
+    note_id    INTEGER NOT NULL REFERENCES notes(id),
+    title      TEXT,
+    body       TEXT,
+    tags       TEXT,
+    edited_by  TEXT,
+    created_at REAL
+);
+
+CREATE TABLE IF NOT EXISTS note_links (
+    note_id    INTEGER NOT NULL REFERENCES notes(id),
+    kind       TEXT NOT NULL,              -- task | schedule
+    target_id  INTEGER NOT NULL,
+    created_at REAL,
+    PRIMARY KEY (note_id, kind, target_id)
+);
+
+CREATE INDEX IF NOT EXISTS idx_notes_status   ON notes(status);
+CREATE INDEX IF NOT EXISTS idx_notes_area     ON notes(area_id);
+CREATE INDEX IF NOT EXISTS idx_notes_project  ON notes(project_id);
+CREATE INDEX IF NOT EXISTS idx_entries_note   ON note_entries(note_id);
+CREATE INDEX IF NOT EXISTS idx_revisions_note ON note_revisions(note_id);
+
 CREATE INDEX IF NOT EXISTS idx_tasks_project ON tasks(project_id);
 CREATE INDEX IF NOT EXISTS idx_tasks_goal    ON tasks(goal_id);
 CREATE INDEX IF NOT EXISTS idx_tasks_status  ON tasks(status);
@@ -536,8 +605,47 @@ def init_db(db_path=None):
             conn.execute(
                 "UPDATE wm_meta SET value=? WHERE key='schema_version'",
                 (SCHEMA_VERSION,))
+            _init_notes_fts(conn)
+            _seed_areas(conn)
     finally:
         conn.close()
+
+
+# Life areas seeded once (empty table only) from the owner's kamran-focus
+# domains — the interviewed starting taxonomy (intent/SecondBrainPlan.md).
+SEED_AREAS = ("AI Workflow", "Career", "Content", "Family", "Finance",
+              "Health", "Home", "Journal", "Side Project", "Study", "Work")
+
+# Set False when this SQLite build lacks FTS5; note search then degrades to
+# LIKE. Probed once per process in _init_notes_fts.
+NOTES_FTS = True
+
+
+def _init_notes_fts(conn):
+    """Create the notes FTS5 index; degrade gracefully without FTS5.
+
+    A plain (not external-content) FTS5 table keyed by note id via rowid.
+    unicode61 handles Arabic-script (Urdu) tokens acceptably — accepted in
+    the plan; a trigram index is the later fix if recall disappoints.
+    """
+    global NOTES_FTS
+    try:
+        conn.execute(
+            "CREATE VIRTUAL TABLE IF NOT EXISTS notes_fts USING fts5("
+            "title, body, tags, tokenize='unicode61')")
+        NOTES_FTS = True
+    except sqlite3.OperationalError:
+        NOTES_FTS = False
+
+
+def _seed_areas(conn):
+    if conn.execute("SELECT COUNT(*) AS n FROM areas").fetchone()["n"]:
+        return
+    now = time.time()
+    for i, name in enumerate(SEED_AREAS):
+        conn.execute(
+            "INSERT INTO areas(name, parent_id, position, created_at) "
+            "VALUES(?, NULL, ?, ?)", (name, i, now))
 
 
 # ---------------------------------------------------------------------------
@@ -1410,7 +1518,8 @@ def claim_task(task_id, db_path=None):
             cur = conn.execute(
                 "UPDATE tasks SET status='running', claimed_at=?, heartbeat_at=? "
                 "WHERE id=? AND status IN ('ready','rework') "
-                "AND owner_approval=0",
+                "AND owner_approval=0 "
+                "AND COALESCE(assignee_profile,'') != 'owner'",
                 (now, now, task_id))
             rowcount = cur.rowcount
             if rowcount == 1:
@@ -1428,6 +1537,7 @@ def next_ready_tasks(cap, db_path=None):
         return conn.execute(
             "SELECT * FROM tasks WHERE status IN ('ready','rework') "
             "AND owner_approval=0 "
+            "AND COALESCE(assignee_profile,'') != 'owner' "
             "ORDER BY COALESCE(claimed_at, created_at), created_at ASC LIMIT ?",
             (cap,)).fetchall()
     finally:
@@ -2643,13 +2753,17 @@ def edit_task(task_id, description=None, definition_of_done=None,
 def close_by_owner(task_id, note=None, db_path=None):
     """The owner declares work finished outside WM runs. Only a 'manual' task
     qualifies (Take over first) — the sanctioned two-step keeps the dispatcher
-    lifecycle and owner overrides apart. Records the done transition (so the
-    integrity audit passes), waives any open review (so it never orphans),
-    then promotes dependents. Returns the promoted task ids."""
+    lifecycle and owner overrides apart. ONE exception: a task ASSIGNED TO
+    `owner` (Second Brain todo) is never in the dispatcher's queue — its
+    'ready' IS the owner's list, so it closes in one step. Records the done
+    transition (so the integrity audit passes), waives any open review (so it
+    never orphans), then promotes dependents. Returns the promoted task ids."""
     t = get_task(task_id, db_path=db_path)
     if t is None:
         raise ValueError("no task with id %s" % task_id)
-    if t["status"] != "manual":
+    owner_task = (t["assignee_profile"] == OWNER_ASSIGNEE)
+    if t["status"] != "manual" and not (
+            owner_task and t["status"] in ("ready", "rework", "planned")):
         raise ValueError(
             "task %d is '%s', not 'manual' — take it over first "
             "(owner-close only applies to tasks out of the queue)"
@@ -2661,7 +2775,7 @@ def close_by_owner(task_id, note=None, db_path=None):
             conn.execute("UPDATE tasks SET status='done', updated_at=? WHERE id=?",
                          (now, task_id))
             _record_transition_conn(
-                conn, task_id, "done", from_status="manual",
+                conn, task_id, "done", from_status=t["status"],
                 detail=("closed by owner: %s" % note) if note else "closed by owner")
             conn.execute(
                 "UPDATE reviews SET status='waived', verdict='waived', "
@@ -3985,3 +4099,400 @@ def fire_due(now=None, db_path=None):
         finally:
             conn.close()
     return results
+
+
+# ---------------------------------------------------------------------------
+# Second Brain — areas, notes, entries, revisions, links, search
+# (intent/SecondBrainPlan.md, Phase 1). Owner-facing writes only in P1: the
+# librarian gets propose-* surfaces in Phase 2 and NEVER writes these tables
+# directly — keep it that way.
+# ---------------------------------------------------------------------------
+NOTE_TYPES = ("note", "playbook", "wiki")
+NOTE_STATUSES = ("inbox", "active", "archived")
+NOTE_AUTHORS = ("owner", "librarian", "import")
+NOTE_LINK_KINDS = ("task", "schedule")
+
+
+def _encode_tags(tags):
+    """Validate and JSON-encode a tag list. Tags are short plain strings."""
+    if tags is None:
+        return "[]"
+    if not isinstance(tags, (list, tuple)):
+        raise ValueError("tags must be a list of strings")
+    out = []
+    for t in tags:
+        if not isinstance(t, str) or not t.strip():
+            raise ValueError("tags must be non-empty strings, got %r" % (t,))
+        if len(t) > 60:
+            raise ValueError("tag too long (max 60): %r" % t[:70])
+        s = t.strip()
+        if s not in out:
+            out.append(s)
+    return json.dumps(out)
+
+
+def _decode_note(row):
+    d = dict(row)
+    try:
+        d["tags"] = json.loads(d.get("tags") or "[]")
+    except ValueError:
+        d["tags"] = []
+    return d
+
+
+def _fts_sync(conn, note_id):
+    """Refresh the FTS row for one note (title + body + entries + tags)."""
+    if not NOTES_FTS:
+        return
+    row = conn.execute("SELECT title, body, tags FROM notes WHERE id=?",
+                       (note_id,)).fetchone()
+    conn.execute("DELETE FROM notes_fts WHERE rowid=?", (note_id,))
+    if row is None:
+        return
+    entries = conn.execute(
+        "SELECT body FROM note_entries WHERE note_id=? ORDER BY id",
+        (note_id,)).fetchall()
+    body = row["body"] or ""
+    if entries:
+        body = body + "\n" + "\n".join(e["body"] for e in entries)
+    try:
+        tags = " ".join(json.loads(row["tags"] or "[]"))
+    except ValueError:
+        tags = ""
+    conn.execute(
+        "INSERT INTO notes_fts(rowid, title, body, tags) VALUES(?,?,?,?)",
+        (note_id, row["title"] or "", body, tags))
+
+
+def create_area(name, parent_id=None, db_path=None):
+    """Create a life area (or sub-area). Returns the new id."""
+    if not isinstance(name, str) or not name.strip():
+        raise ValueError("area name is required")
+    name = name.strip()
+    conn = _connect(db_path)
+    try:
+        with conn:
+            if parent_id is not None:
+                parent = conn.execute("SELECT id, parent_id FROM areas WHERE id=?",
+                                      (parent_id,)).fetchone()
+                if parent is None:
+                    raise ValueError("no such parent area: %r" % parent_id)
+                if parent["parent_id"] is not None:
+                    raise ValueError("areas are two-level: cannot nest under a sub-area")
+            try:
+                cur = conn.execute(
+                    "INSERT INTO areas(name, parent_id, position, created_at) "
+                    "VALUES(?,?,COALESCE((SELECT MAX(position)+1 FROM areas "
+                    "WHERE COALESCE(parent_id,0)=COALESCE(?,0)), 0),?)",
+                    (name, parent_id, parent_id, time.time()))
+            except sqlite3.IntegrityError:
+                raise ValueError("area %r already exists at this level" % name)
+            return cur.lastrowid
+    finally:
+        conn.close()
+
+
+def list_areas(db_path=None, archived=False):
+    conn = _connect(db_path)
+    try:
+        sql = "SELECT * FROM areas"
+        if not archived:
+            sql += " WHERE archived=0"
+        sql += " ORDER BY COALESCE(parent_id, id), parent_id IS NOT NULL, position, id"
+        return [dict(r) for r in conn.execute(sql).fetchall()]
+    finally:
+        conn.close()
+
+
+def create_note(title, body="", note_type="note", status="inbox", area_id=None,
+                project_id=None, tags=None, authored_by="owner",
+                content_hash=None, db_path=None):
+    """Create a note. Returns the new id. Logs to activity."""
+    if not isinstance(title, str) or not title.strip():
+        raise ValueError("note title is required")
+    if note_type not in NOTE_TYPES:
+        raise ValueError("invalid note type %r (one of %s)"
+                         % (note_type, ", ".join(NOTE_TYPES)))
+    if status not in NOTE_STATUSES:
+        raise ValueError("invalid note status %r (one of %s)"
+                         % (status, ", ".join(NOTE_STATUSES)))
+    if authored_by not in NOTE_AUTHORS:
+        raise ValueError("invalid authored_by %r" % (authored_by,))
+    tags_json = _encode_tags(tags)
+    conn = _connect(db_path)
+    try:
+        with conn:
+            if area_id is not None and conn.execute(
+                    "SELECT id FROM areas WHERE id=?", (area_id,)).fetchone() is None:
+                raise ValueError("no such area: %r" % area_id)
+            if project_id is not None and conn.execute(
+                    "SELECT id FROM projects WHERE id=?", (project_id,)).fetchone() is None:
+                raise ValueError("no such project: %r" % project_id)
+            now = time.time()
+            cur = conn.execute(
+                "INSERT INTO notes(title, body, type, status, area_id, project_id, "
+                "tags, authored_by, content_hash, created_at, updated_at) "
+                "VALUES(?,?,?,?,?,?,?,?,?,?,?)",
+                (title.strip(), body or "", note_type, status, area_id,
+                 project_id, tags_json, authored_by, content_hash, now, now))
+            nid = cur.lastrowid
+            _fts_sync(conn, nid)
+    finally:
+        conn.close()
+    log_activity("note_created", project_id=project_id,
+                 detail="note #%d: %s" % (nid, title.strip()[:120]),
+                 db_path=db_path)
+    return nid
+
+
+def get_note(note_id, db_path=None):
+    """Full note dict with entries and links, or None."""
+    conn = _connect(db_path)
+    try:
+        row = conn.execute("SELECT * FROM notes WHERE id=?", (note_id,)).fetchone()
+        if row is None:
+            return None
+        d = _decode_note(row)
+        d["entries"] = [dict(e) for e in conn.execute(
+            "SELECT * FROM note_entries WHERE note_id=? ORDER BY id DESC",
+            (note_id,)).fetchall()]
+        d["links"] = _note_links(conn, note_id)
+        area = conn.execute("SELECT id, name, parent_id FROM areas WHERE id=?",
+                            (d["area_id"],)).fetchone() if d["area_id"] else None
+        if area is not None:
+            parent = conn.execute("SELECT name FROM areas WHERE id=?",
+                                  (area["parent_id"],)).fetchone() if area["parent_id"] else None
+            d["area"] = {"id": area["id"], "name": area["name"],
+                         "parent": parent["name"] if parent else None}
+        else:
+            d["area"] = None
+        proj = conn.execute("SELECT slug, name FROM projects WHERE id=?",
+                            (d["project_id"],)).fetchone() if d["project_id"] else None
+        d["project"] = dict(proj) if proj else None
+        return d
+    finally:
+        conn.close()
+
+
+def _note_links(conn, note_id):
+    out = []
+    for l in conn.execute("SELECT * FROM note_links WHERE note_id=? ORDER BY created_at",
+                          (note_id,)).fetchall():
+        item = dict(l)
+        if l["kind"] == "task":
+            t = conn.execute("SELECT id, title, status FROM tasks WHERE id=?",
+                             (l["target_id"],)).fetchone()
+            item["target"] = dict(t) if t else None
+        elif l["kind"] == "schedule":
+            s = conn.execute("SELECT id, name, cron, enabled FROM schedules WHERE id=?",
+                             (l["target_id"],)).fetchone()
+            item["target"] = dict(s) if s else None
+        out.append(item)
+    return out
+
+
+def list_notes(status=None, area_id=None, project_id=None, note_type=None,
+               authored_by=None, limit=200, offset=0, db_path=None):
+    """Filtered note list, newest-updated first. Bodies truncated for lists."""
+    sql, params = "SELECT * FROM notes WHERE 1=1", []
+    if status is not None:
+        if status not in NOTE_STATUSES:
+            raise ValueError("invalid status filter %r" % status)
+        sql += " AND status=?"; params.append(status)
+    if area_id is not None:
+        sql += (" AND (area_id=? OR area_id IN "
+                "(SELECT id FROM areas WHERE parent_id=?))")
+        params += [area_id, area_id]
+    if project_id is not None:
+        sql += " AND project_id=?"; params.append(project_id)
+    if note_type is not None:
+        sql += " AND type=?"; params.append(note_type)
+    if authored_by is not None:
+        sql += " AND authored_by=?"; params.append(authored_by)
+    sql += " ORDER BY pinned DESC, COALESCE(updated_at, created_at) DESC, id DESC"
+    sql += " LIMIT ? OFFSET ?"; params += [int(limit), int(offset)]
+    conn = _connect(db_path)
+    try:
+        rows = [_decode_note(r) for r in conn.execute(sql, params).fetchall()]
+        for r in rows:
+            if r["body"] and len(r["body"]) > 400:
+                r["body"] = r["body"][:400]
+                r["body_truncated"] = True
+            r["entry_count"] = conn.execute(
+                "SELECT COUNT(*) AS n FROM note_entries WHERE note_id=?",
+                (r["id"],)).fetchone()["n"]
+        return rows
+    finally:
+        conn.close()
+
+
+_NOTE_EDITABLE = ("title", "body", "area_id", "project_id", "tags", "pinned")
+
+
+def update_note(note_id, edited_by="owner", note_type=None, status=None,
+                db_path=None, **fields):
+    """Edit a note. Snapshots the previous content into note_revisions first.
+
+    Enum moves (type/status) validate against the closed sets; unknown field
+    names are rejected so a typo can never silently no-op.
+    """
+    bad = set(fields) - set(_NOTE_EDITABLE)
+    if bad:
+        raise ValueError("unknown note fields: %s" % ", ".join(sorted(bad)))
+    if note_type is not None and note_type not in NOTE_TYPES:
+        raise ValueError("invalid note type %r" % note_type)
+    if status is not None and status not in NOTE_STATUSES:
+        raise ValueError("invalid note status %r" % status)
+    if edited_by not in NOTE_AUTHORS:
+        raise ValueError("invalid edited_by %r" % edited_by)
+    conn = _connect(db_path)
+    try:
+        with conn:
+            old = conn.execute("SELECT * FROM notes WHERE id=?", (note_id,)).fetchone()
+            if old is None:
+                raise ValueError("no such note: %r" % note_id)
+            conn.execute(
+                "INSERT INTO note_revisions(note_id, title, body, tags, edited_by, created_at) "
+                "VALUES(?,?,?,?,?,?)",
+                (note_id, old["title"], old["body"], old["tags"], edited_by,
+                 time.time()))
+            sets, params = [], []
+            for k, v in fields.items():
+                if k == "tags":
+                    v = _encode_tags(v)
+                if k == "area_id" and v is not None and conn.execute(
+                        "SELECT id FROM areas WHERE id=?", (v,)).fetchone() is None:
+                    raise ValueError("no such area: %r" % v)
+                if k == "project_id" and v is not None and conn.execute(
+                        "SELECT id FROM projects WHERE id=?", (v,)).fetchone() is None:
+                    raise ValueError("no such project: %r" % v)
+                if k == "title" and (not isinstance(v, str) or not v.strip()):
+                    raise ValueError("note title is required")
+                if k == "pinned":
+                    v = 1 if v else 0
+                sets.append("%s=?" % k); params.append(v)
+            if note_type is not None:
+                sets.append("type=?"); params.append(note_type)
+            if status is not None:
+                sets.append("status=?"); params.append(status)
+            if not sets:
+                raise ValueError("nothing to update")
+            sets.append("updated_at=?"); params.append(time.time())
+            params.append(note_id)
+            conn.execute("UPDATE notes SET %s WHERE id=?" % ", ".join(sets), params)
+            _fts_sync(conn, note_id)
+    finally:
+        conn.close()
+    log_activity("note_updated", detail="note #%d by %s" % (note_id, edited_by),
+                 db_path=db_path)
+    return get_note(note_id, db_path=db_path)
+
+
+def add_note_entry(note_id, body, db_path=None):
+    """Append a dated entry to a note (the 1:1 append-log pattern)."""
+    if not isinstance(body, str) or not body.strip():
+        raise ValueError("entry body is required")
+    conn = _connect(db_path)
+    try:
+        with conn:
+            if conn.execute("SELECT id FROM notes WHERE id=?", (note_id,)).fetchone() is None:
+                raise ValueError("no such note: %r" % note_id)
+            now = time.time()
+            cur = conn.execute(
+                "INSERT INTO note_entries(note_id, body, created_at) VALUES(?,?,?)",
+                (note_id, body.strip(), now))
+            conn.execute("UPDATE notes SET updated_at=? WHERE id=?", (now, note_id))
+            _fts_sync(conn, note_id)
+            return cur.lastrowid
+    finally:
+        conn.close()
+
+
+def link_note(note_id, kind, target_id, db_path=None):
+    """Attach a created task/schedule to its source note (create-and-link)."""
+    if kind not in NOTE_LINK_KINDS:
+        raise ValueError("invalid link kind %r" % kind)
+    conn = _connect(db_path)
+    try:
+        with conn:
+            if conn.execute("SELECT id FROM notes WHERE id=?", (note_id,)).fetchone() is None:
+                raise ValueError("no such note: %r" % note_id)
+            table = "tasks" if kind == "task" else "schedules"
+            if conn.execute("SELECT id FROM %s WHERE id=?" % table,
+                            (target_id,)).fetchone() is None:
+                raise ValueError("no such %s: %r" % (kind, target_id))
+            conn.execute(
+                "INSERT OR IGNORE INTO note_links(note_id, kind, target_id, created_at) "
+                "VALUES(?,?,?,?)", (note_id, kind, target_id, time.time()))
+    finally:
+        conn.close()
+
+
+def notes_for_project(project_id, limit=100, db_path=None):
+    return list_notes(project_id=project_id, limit=limit, db_path=db_path)
+
+
+def notes_for_task(task_id, db_path=None):
+    """Notes linked to a task (the task-detail back-link)."""
+    conn = _connect(db_path)
+    try:
+        return [_decode_note(r) for r in conn.execute(
+            "SELECT n.* FROM notes n JOIN note_links l ON l.note_id = n.id "
+            "WHERE l.kind='task' AND l.target_id=? ORDER BY n.id", (task_id,)).fetchall()]
+    finally:
+        conn.close()
+
+
+def search_notes(q, limit=50, db_path=None):
+    """Global note search: FTS5 (bm25-ranked) with a LIKE fallback."""
+    q = (q or "").strip()
+    if not q:
+        return []
+    conn = _connect(db_path)
+    try:
+        if NOTES_FTS:
+            try:
+                # quote each term: user input must never hit FTS query syntax
+                match = " ".join('"%s"' % t.replace('"', '""')
+                                 for t in q.split() if t)
+                rows = conn.execute(
+                    "SELECT n.*, bm25(notes_fts) AS rank FROM notes_fts f "
+                    "JOIN notes n ON n.id = f.rowid WHERE notes_fts MATCH ? "
+                    "ORDER BY rank LIMIT ?", (match, int(limit))).fetchall()
+                return [_decode_note(r) for r in rows]
+            except sqlite3.OperationalError:
+                pass  # malformed query despite quoting — fall back to LIKE
+        like = "%" + q + "%"
+        rows = conn.execute(
+            "SELECT * FROM notes WHERE title LIKE ? OR body LIKE ? OR tags LIKE ? "
+            "ORDER BY COALESCE(updated_at, created_at) DESC LIMIT ?",
+            (like, like, like, int(limit))).fetchall()
+        return [_decode_note(r) for r in rows]
+    finally:
+        conn.close()
+
+
+def notes_tree(db_path=None):
+    """The Library tree: areas (two-level) with note counts, project counts,
+    per-type counts, and the inbox count. One call feeds the whole sidebar."""
+    conn = _connect(db_path)
+    try:
+        areas = [dict(r) for r in conn.execute(
+            "SELECT a.*, (SELECT COUNT(*) FROM notes n WHERE n.area_id = a.id "
+            "AND n.status != 'archived') AS note_count "
+            "FROM areas a WHERE a.archived=0 ORDER BY a.position, a.id").fetchall()]
+        projects = [dict(r) for r in conn.execute(
+            "SELECT p.id, p.slug, p.name, COUNT(n.id) AS note_count "
+            "FROM projects p JOIN notes n ON n.project_id = p.id "
+            "AND n.status != 'archived' WHERE p.archived=0 "
+            "GROUP BY p.id ORDER BY p.name").fetchall()]
+        counts = {r["k"]: r["n"] for r in conn.execute(
+            "SELECT type AS k, COUNT(*) AS n FROM notes "
+            "WHERE status != 'archived' GROUP BY type").fetchall()}
+        counts["inbox"] = conn.execute(
+            "SELECT COUNT(*) AS n FROM notes WHERE status='inbox'").fetchone()["n"]
+        counts["archived"] = conn.execute(
+            "SELECT COUNT(*) AS n FROM notes WHERE status='archived'").fetchone()["n"]
+        return {"areas": areas, "projects": projects, "counts": counts}
+    finally:
+        conn.close()
