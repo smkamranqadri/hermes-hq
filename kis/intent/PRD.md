@@ -20,4 +20,4 @@ Out of scope: multi-user, RBAC, messaging channels, secrets vault, integrations 
 Single owner, password auth; Linux next to Hermes; responsive for phone over LAN/Tailscale (PWA later); no API keys stored; engine rules in `knowledge/technical.md`.
 
 ## Stage
-Prototype → daily driver once groups 1–3 land.
+Live daily driver — the control plane running this box since 2026-08-29 (see State).

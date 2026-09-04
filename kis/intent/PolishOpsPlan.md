@@ -1,4 +1,4 @@
-# Polish + Ops Bundle (Standard) — planned 2026-08-31
+# Polish + Ops Bundle (Standard) — planned 2026-08-31 — COMPLETE 2026-09-01 (proof in State git history)
 
 Owner picked "all" of the remaining small rows (interview 2026-08-31): badge =
 distinct "Handed over" chip; brand board = draft edits → owner review → apply →
