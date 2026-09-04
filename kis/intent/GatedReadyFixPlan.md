@@ -1,4 +1,4 @@
-# Gated-Ready Fix (Standard) — planned 2026-09-04
+# Gated-Ready Fix (Standard) — planned 2026-09-04 — SHIPPED 2026-09-04 (16d349c; pipeline verify via re-specced #183 pending owner approval)
 
 Origin: after the dispatch safeguard (`OwnerGatedDispatchPlan.md`, `6a0d02f`), a
 gated task pushed to `ready` via `mark_ready` (orchestrator "unstuck" #175/#183
