@@ -1,7 +1,8 @@
 import { useState } from 'react'
 import { Link, useParams } from 'react-router-dom'
 import clsx from 'clsx'
-import { useProject, ago, when } from '../api'
+import { useProject, useProjectNotes, useAreas, ago, when } from '../api'
+import { NoteRow } from '../components/brain'
 import { GlassCard } from '../components/GlassCard'
 import { TaskRow } from '../components/TaskRow'
 import { Empty, Loading, Chip, Crumbs, Label, Agent } from '../components/ui'
@@ -10,12 +11,14 @@ import { NewTaskModal, NewGoalModal, ActionBtn } from '../components/forms'
 import { Btn } from '../components/Modal'
 import { ScopedChat } from '../components/ScopedChat'
 
-const TABS = ['tasks', 'goals', 'runs', 'activity'] as const
+const TABS = ['tasks', 'goals', 'notes', 'runs', 'activity'] as const
 const GOAL_TONE: Record<string, string> = { draft: 'text-muted', planning: 'text-needsyou', planned: 'text-queued', released: 'text-working' }
 
 export function ProjectDetail() {
   const { slug = '' } = useParams()
   const q = useProject(slug)
+  const notes = useProjectNotes(slug)
+  const areas = useAreas()
   const p = q.data
   usePageTitle(p?.name ?? slug)
   const [tab, setTab] = useState<(typeof TABS)[number]>('tasks')
@@ -69,6 +72,9 @@ export function ProjectDetail() {
             {g.status === 'planned' && <ActionBtn url={`/api/goal/${g.id}/release`} label="Release" confirm={`Release goal #${g.id}? Its tasks become eligible to run as their dependencies complete.`} />}
           </div>
         </GlassCard>))}</div> : <Empty title="No goals" />)}
+      {tab === 'notes' && ((notes.data?.notes ?? []).length
+        ? <div className="flex flex-col gap-2">{(notes.data?.notes ?? []).map(n => <NoteRow key={n.id} n={n} areas={areas.data?.areas} />)}</div>
+        : <Empty title="No notes linked" note="File a note to this project from the Second Brain and it shows up here." />)}
       {tab === 'runs' && (p.runs.length ? <div className="flex flex-col gap-2">{p.runs.map(r => (
         <Link key={r.id} to={`/tasks/${r.task_id}`} className="glass flex flex-wrap items-center gap-3 rounded-xl px-4 py-2 text-xs hover:bg-raised">
           <span className="font-mono text-muted">run #{r.id}</span><Agent name={r.agent_profile} /><span className="text-muted">task #{r.task_id}</span>

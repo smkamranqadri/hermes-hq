@@ -69,7 +69,7 @@ export const useProjects = (archived = false) =>
   useQuery({ queryKey: ['projects', archived], queryFn: () => get<{ projects: Project[] }>(`/api/projects?archived=${archived ? 1 : 0}`) })
 export const useProject = (slug: string) =>
   useQuery({ queryKey: ['project', slug], queryFn: () => get<ProjectDetail>(`/api/project/${slug}`) })
-export const useTasks = (p: { project?: string; state?: string; q?: string; limit?: number; offset?: number }) => {
+export const useTasks = (p: { project?: string; state?: string; q?: string; assignee?: string; limit?: number; offset?: number }) => {
   const qs = new URLSearchParams()
   Object.entries(p).forEach(([k, v]) => { if (v !== undefined && v !== '' && v !== null) qs.set(k, String(v)) })
   return useQuery({ queryKey: ['tasks', p], queryFn: () => get<TasksEnvelope>(`/api/tasks?${qs}`), refetchInterval: 15000 })
@@ -141,6 +141,34 @@ export const useChatSearch = (q: string) => useQuery({ queryKey: ['chat-search',
 // ---- notifications ------------------------------------------------------
 export type Notification = { id: number; ts: number; kind: 'needs_you' | 'done' | 'info' | 'chat' | 'question'; title: string; body: string | null; href: string | null; task_id: number | null; read_at: number | null }
 export const useNotifications = () => useQuery({ queryKey: ['notifications'], queryFn: () => get<{ notifications: Notification[]; unread: number }>('/api/notifications?limit=50'), refetchInterval: 15000 })
+
+// ---- Second Brain ------------------------------------------------------
+export type Area = { id: number; name: string; parent_id: number | null; position: number; archived: number; note_count?: number }
+export type NoteLink = { note_id: number; kind: 'task' | 'schedule'; target_id: number; target: { id: number; title?: string; name?: string; status?: string; cron?: string; enabled?: number } | null }
+export type Note = {
+  id: number; title: string; body: string; body_truncated?: boolean; type: 'note' | 'playbook' | 'wiki'
+  status: 'inbox' | 'active' | 'archived'; area_id: number | null; project_id: number | null
+  tags: string[]; authored_by: string; pinned: number; created_at: number; updated_at: number | null; entry_count?: number
+}
+export type NoteEntry = { id: number; note_id: number; body: string; created_at: number }
+export type NoteFull = Note & {
+  entries: NoteEntry[]; links: NoteLink[]
+  area: { id: number; name: string; parent: string | null } | null
+  project: { slug: string; name: string } | null
+}
+export type NotesTree = { areas: Area[]; projects: { id: number; slug: string; name: string; note_count: number }[]; counts: Record<string, number> }
+
+export const useAreas = () => useQuery({ queryKey: ['areas'], queryFn: () => get<{ areas: Area[] }>('/api/areas') })
+export const useNotesTree = () => useQuery({ queryKey: ['notes-tree'], queryFn: () => get<NotesTree>('/api/notes/tree'), refetchInterval: 30000 })
+export const useNotes = (p: { status?: string; area_id?: number; project_id?: number; type?: string; q?: string; limit?: number }) => {
+  const qs = new URLSearchParams()
+  Object.entries(p).forEach(([k, v]) => { if (v !== undefined && v !== '' && v !== null) qs.set(k, String(v)) })
+  return useQuery({ queryKey: ['notes', p], queryFn: () => get<{ notes: Note[] }>(`/api/notes?${qs}`) })
+}
+export const useNote = (id: number) =>
+  useQuery({ queryKey: ['note', id], queryFn: () => get<NoteFull>(`/api/note/${id}`), enabled: Number.isFinite(id) })
+export const useProjectNotes = (slug: string) =>
+  useQuery({ queryKey: ['project-notes', slug], queryFn: () => get<{ notes: Note[] }>(`/api/project/${slug}/notes`) })
 export const markNotificationsRead = (ids?: number[], source_key?: string) => post<{ marked: number }>('/api/notifications/read', source_key ? { source_key } : ids ? { ids } : {})
 export const addNotification = (n: { kind: 'chat' | 'question'; title: string; body?: string; href?: string; source_key?: string }) => post<{ id: number | null }>('/api/notifications', n)
 

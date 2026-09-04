@@ -24,7 +24,7 @@ A second brain inside hermes-hq: capture anything (text/photo/voice, incl. batch
 
 ## Phases
 
-### Phase 1 — Foundation (no librarian)
+### Phase 1 — Foundation (no librarian) — BUILT 2026-09-04 (branch `worktree-second-brain-plan`; owner click-through pending merge + deploy)
 Schema + migrations (`notes`, `areas`, `note_entries`, `note_revisions`, FTS5 index; task/schedule link columns), `backend/notes.py` API (CRUD, entries append, search, tree counts; **agent-session write refusal** from day one), owner-assignee groundwork (reserved `owner` assignee + dispatcher skip + "mine" filter), frontend: navbar change, Second Brain Home (capture editor: text first; inbox list; recent), Library (tree + search + note preview), Note Detail (body, entries, tags, manual file/edit/archive, New task / New reminder create-and-link), project-page Notes section. Manual filing only.
 **DoD:** suite green incl. new `test_notes.py` (agent write refusal, owner-task skip predicate, entries, FTS); Playwright 390px + desktop proofs; owner captures, files, searches, and creates a linked task + reminder live.
 

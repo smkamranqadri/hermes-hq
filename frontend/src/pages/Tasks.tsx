@@ -18,11 +18,12 @@ export function Tasks() {
   const state = sp.get('state') ?? ''
   const q = sp.get('q') ?? ''
   const view = sp.get('view') ?? 'list'
+  const assignee = sp.get('assignee') ?? ''
   const set = (k: string, v: string) => { const n = new URLSearchParams(sp); v ? n.set(k, v) : n.delete(k); setSp(n, { replace: true }) }
   const [draft, setDraft] = useState(q)
   const [creating, setCreating] = useState(false)
   const projects = useProjects()
-  const tasks = useTasks({ project, state, q })
+  const tasks = useTasks({ project, state, q, assignee })
   const d = tasks.data
   const groups = ORDER.map(s => [s, (d?.tasks ?? []).filter(t => t.human.state === s)] as const).filter(([, l]) => l.length)
 
@@ -44,6 +45,10 @@ export function Tasks() {
           <option value="">All states</option>
           {(d?.stateOptions ?? ORDER).map(s => <option key={s} value={s}>{HUMAN_LABEL[s as HumanState] ?? s}</option>)}
         </Select>
+        <button onClick={() => set('assignee', assignee === 'owner' ? '' : 'owner')}
+          className={clsx('rounded-full border px-3 py-1.5 font-mono text-[10px] uppercase tracking-wider',
+            assignee === 'owner' ? 'border-accent bg-accent/15 text-accent-2' : 'border-line text-muted hover:text-fg')}
+          title="Only tasks assigned to you — the dispatcher never claims these">Mine</button>
         <form onSubmit={e => { e.preventDefault(); set('q', draft) }} className="flex w-full gap-1 sm:w-auto">
           <Input value={draft} onChange={e => setDraft(e.target.value)} placeholder="Search title, id, agent…" className="w-full sm:w-56" />
         </form>

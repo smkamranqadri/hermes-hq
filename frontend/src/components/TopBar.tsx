@@ -7,12 +7,14 @@ import { Menu, MenuItem } from './Menu'
 import { AppearanceMenu } from './AppearanceMenu'
 
 // Five primary tabs. Reviews lives inside Tasks; Activity inside Overview/Project.
+// Second Brain took Agents' slot (owner decision 2026-09-04); Agents moved to
+// TOOLS — a combined Agents+Chat view is a logged future candidate.
 export const TABS = [
-  ['Overview', '/'], ['Projects', '/projects'], ['Tasks', '/tasks'], ['Agents', '/agents'], ['Chat', '/chat'],
+  ['Overview', '/'], ['Projects', '/projects'], ['Tasks', '/tasks'], ['Second Brain', '/brain'], ['Chat', '/chat'],
 ] as const
 // Secondary surfaces behind the Tools menu (Group 5–7 + browsers).
 export const TOOLS = [
-  ['Files', '/files'], ['Terminal', '/terminal'], ['Memory', '/memory'],
+  ['Agents', '/agents'], ['Files', '/files'], ['Terminal', '/terminal'], ['Memory', '/memory'],
   ['Skills', '/skills'], ['MCP', '/mcp'], ['Schedules', '/schedules'], ['Activity', '/activity'],
 ] as const
 
