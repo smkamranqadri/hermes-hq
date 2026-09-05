@@ -2,10 +2,13 @@
  * Phase 1 = manual filing; the librarian's proposals arrive in Phase 2. */
 import { useState } from 'react'
 import { Link } from 'react-router-dom'
-import { useAreas, useNotes, type Note } from '../api'
+import { useQueryClient } from '@tanstack/react-query'
+import { post, useAreas, useNotes, type Note } from '../api'
 import { GlassCard, PageHeader } from '../components/GlassCard'
 import { BrainSubNav, CaptureBox, FileNoteModal, NoteRow, PendingProposalChip, useBrainCounts } from '../components/brain'
+import { Btn } from '../components/Modal'
 import { Empty, Label, Loading } from '../components/ui'
+import { useToast } from '../components/Toast'
 import { usePageTitle } from '../usePageTitle'
 
 export function SecondBrain() {
@@ -15,6 +18,16 @@ export function SecondBrain() {
   const inboxNotes = useNotes({ status: 'inbox', limit: 30 })
   const recent = useNotes({ status: 'active', limit: 8 })
   const [filing, setFiling] = useState<Note | null>(null)
+  const qc = useQueryClient(); const toast = useToast()
+  const [triaging, setTriaging] = useState(false)
+  const triageNow = async () => {
+    setTriaging(true)
+    try {
+      const r = await post<{ queued: boolean; task_id?: number; detail: string }>('/api/brain/triage-now')
+      toast(r.queued ? `Librarian ingest queued — task #${r.task_id}` : r.detail)
+      qc.invalidateQueries()
+    } catch (e) { toast(e instanceof Error ? e.message : String(e), 'err') } finally { setTriaging(false) }
+  }
   const rootAreas = (tree.data?.areas ?? []).filter(a => !a.parent_id && (a.note_count ?? 0) > 0)
   const maxCount = Math.max(1, ...rootAreas.map(a => a.note_count ?? 0))
   return (
@@ -92,6 +105,10 @@ export function SecondBrain() {
             ) : (
               <p className="mt-2 text-xs text-muted">Files your captures and splits batch dumps on a schedule — every change waits for your approval in the <Link to="/brain/review" className="text-accent-2 hover:underline">review queue</Link>.</p>
             )}
+            <div className="mt-3 border-t border-line-subtle pt-3">
+              <Btn kind="ghost" busy={triaging} onClick={() => void triageNow()}>Triage now</Btn>
+              <p className="mt-1.5 text-[11px] text-muted">Fresh captures already nudge the librarian to run within ~2 min — this skips even that wait. Costs a model run only when there's something to triage.</p>
+            </div>
           </GlassCard>
         </div>
       </div>

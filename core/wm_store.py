@@ -486,6 +486,8 @@ CREATE TABLE IF NOT EXISTS notes (
     authored_by  TEXT DEFAULT 'owner',     -- owner | librarian | import
     content_hash TEXT,                     -- sha256 of imported source body
     pinned       INTEGER DEFAULT 0,
+    disputed     INTEGER DEFAULT 0,        -- 2b: contradiction approved — keep-both, never silently reconciled
+
     created_at   REAL,
     updated_at   REAL
 );
@@ -509,7 +511,7 @@ CREATE TABLE IF NOT EXISTS note_revisions (
 
 CREATE TABLE IF NOT EXISTS note_links (
     note_id    INTEGER NOT NULL REFERENCES notes(id),
-    kind       TEXT NOT NULL,              -- task | schedule
+    kind       TEXT NOT NULL,              -- task | schedule | note (disputed pair)
     target_id  INTEGER NOT NULL,
     created_at REAL,
     PRIMARY KEY (note_id, kind, target_id)
@@ -521,7 +523,7 @@ CREATE TABLE IF NOT EXISTS note_links (
 -- propose-*`; the review queue reads/decides via the owner-session HTTP API.
 CREATE TABLE IF NOT EXISTS proposals (
     id             INTEGER PRIMARY KEY,
-    kind           TEXT NOT NULL,               -- split | file (2b adds wiki_update | contradiction | new_task)
+    kind           TEXT NOT NULL,               -- split | file | contradiction | new_task (P4 adds wiki_update)
     note_id        INTEGER REFERENCES notes(id),
     payload        TEXT NOT NULL DEFAULT '{}',  -- JSON, kind-specific (validated in create_proposal)
     summary        TEXT DEFAULT '',
@@ -609,6 +611,10 @@ def _migrate(conn):
     # skipped run and mints NO task — so no agent run and no model call.
     if "heartbeat" not in _table_columns(conn, "schedules"):
         conn.execute("ALTER TABLE schedules ADD COLUMN heartbeat TEXT DEFAULT ''")
+    # Second Brain P2b-i: an approved contradiction proposal flags BOTH notes
+    # disputed (keep-both; the owner clears the flag once resolved).
+    if "disputed" not in _table_columns(conn, "notes"):
+        conn.execute("ALTER TABLE notes ADD COLUMN disputed INTEGER DEFAULT 0")
 
 
 def init_db(db_path=None):
@@ -4180,7 +4186,7 @@ def fire_due(now=None, db_path=None):
 NOTE_TYPES = ("note", "playbook", "wiki")
 NOTE_STATUSES = ("inbox", "active", "archived")
 NOTE_AUTHORS = ("owner", "librarian", "import")
-NOTE_LINK_KINDS = ("task", "schedule")
+NOTE_LINK_KINDS = ("task", "schedule", "note")
 
 
 def _encode_tags(tags):
@@ -4357,6 +4363,10 @@ def _note_links(conn, note_id):
             s = conn.execute("SELECT id, name, cron, enabled FROM schedules WHERE id=?",
                              (l["target_id"],)).fetchone()
             item["target"] = dict(s) if s else None
+        elif l["kind"] == "note":
+            n = conn.execute("SELECT id, title, status, disputed FROM notes WHERE id=?",
+                             (l["target_id"],)).fetchone()
+            item["target"] = dict(n) if n else None
         out.append(item)
     return out
 
@@ -4402,7 +4412,7 @@ def list_notes(status=None, area_id=None, project_id=None, note_type=None,
         conn.close()
 
 
-_NOTE_EDITABLE = ("title", "body", "area_id", "project_id", "tags", "pinned")
+_NOTE_EDITABLE = ("title", "body", "area_id", "project_id", "tags", "pinned", "disputed")
 
 
 def update_note(note_id, edited_by="owner", note_type=None, status=None,
@@ -4444,7 +4454,7 @@ def update_note(note_id, edited_by="owner", note_type=None, status=None,
                     raise ValueError("no such project: %r" % v)
                 if k == "title" and (not isinstance(v, str) or not v.strip()):
                     raise ValueError("note title is required")
-                if k == "pinned":
+                if k in ("pinned", "disputed"):
                     v = 1 if v else 0
                 sets.append("%s=?" % k); params.append(v)
             if note_type is not None:
@@ -4493,7 +4503,7 @@ def link_note(note_id, kind, target_id, db_path=None):
         with conn:
             if conn.execute("SELECT id FROM notes WHERE id=?", (note_id,)).fetchone() is None:
                 raise ValueError("no such note: %r" % note_id)
-            table = "tasks" if kind == "task" else "schedules"
+            table = {"task": "tasks", "schedule": "schedules", "note": "notes"}[kind]
             if conn.execute("SELECT id FROM %s WHERE id=?" % table,
                             (target_id,)).fetchone() is None:
                 raise ValueError("no such %s: %r" % (kind, target_id))
@@ -4603,7 +4613,7 @@ def list_note_tags(db_path=None):
 # only in approve_proposal, which the OWNER reaches through the cookie-session
 # HTTP API. Keep it that way: do not add sanctioned agent paths into notes.
 # ---------------------------------------------------------------------------
-PROPOSAL_KINDS = ("split", "file")
+PROPOSAL_KINDS = ("split", "file", "contradiction", "new_task")
 PROPOSAL_STATUSES = ("pending", "approved", "rejected", "superseded")
 PROPOSAL_CLASSES = ("routine", "needs_attention")
 MAX_SPLIT_PARTS = 50
@@ -4629,14 +4639,22 @@ def _validate_filing(conn, part, where):
         _encode_tags(part.get("tags"))          # raises on bad shape
 
 
-def _validate_proposal_payload(conn, kind, payload):
+def _validate_proposal_payload(conn, kind, payload, note_id=None):
     if kind == "file":
-        _validate_filing(conn, payload, "file payload")
+        # `archive` (2b-i) marks a junk/museum capture: filing straight to
+        # Archive instead of the Library. No separate kind — same review flow.
+        archive = payload.get("archive")
+        _validate_filing(conn, {k: v for k, v in payload.items() if k != "archive"},
+                         "file payload")
+        if archive is not None and not isinstance(archive, bool):
+            raise ValueError("file payload: archive must be true/false")
         if payload.get("title") is not None or payload.get("body") is not None:
             raise ValueError("a file proposal moves a note; it cannot rewrite "
                              "title/body (that is a split part's job)")
-        if not any(payload.get(k) is not None for k in ("area_id", "project_id", "tags", "type")):
-            raise ValueError("file payload needs at least one of area_id, project_id, tags, type")
+        if not archive and not any(payload.get(k) is not None
+                                   for k in ("area_id", "project_id", "tags", "type")):
+            raise ValueError("file payload needs at least one of area_id, "
+                             "project_id, tags, type (or archive: true)")
     elif kind == "split":
         parts = payload.get("parts")
         if not isinstance(parts, list) or not parts:
@@ -4656,6 +4674,44 @@ def _validate_proposal_payload(conn, kind, payload):
                 raise ValueError("%s: title too long (max 300)" % where)
             if part.get("body") is not None and not isinstance(part["body"], str):
                 raise ValueError("%s: body must be a string" % where)
+    elif kind == "contradiction":
+        # Keep-both, never silently reconcile: approval flags BOTH notes
+        # disputed and cross-links them; no content is merged or rewritten.
+        unknown = set(payload) - {"other_note_id", "explanation"}
+        if unknown:
+            raise ValueError("contradiction payload has unknown fields: %s"
+                             % ", ".join(sorted(unknown)))
+        other = payload.get("other_note_id")
+        if not isinstance(other, int):
+            raise ValueError("contradiction payload needs other_note_id (int)")
+        if note_id is not None and other == note_id:
+            raise ValueError("a note cannot contradict itself")
+        if conn.execute("SELECT id FROM notes WHERE id=?", (other,)).fetchone() is None:
+            raise ValueError("contradiction payload: no such note: %r" % other)
+        exp = payload.get("explanation")
+        if exp is not None and (not isinstance(exp, str) or len(exp) > 2000):
+            raise ValueError("contradiction explanation must be a string (max 2000)")
+    elif kind == "new_task":
+        # Graduation stays create-and-link: approval creates a real HQ task
+        # linked to the note; the note stays a note.
+        unknown = set(payload) - {"title", "description", "project_id", "assignee"}
+        if unknown:
+            raise ValueError("new_task payload has unknown fields: %s"
+                             % ", ".join(sorted(unknown)))
+        title = payload.get("title")
+        if not isinstance(title, str) or not title.strip():
+            raise ValueError("new_task payload needs a title")
+        if len(title) > 300:
+            raise ValueError("new_task title too long (max 300)")
+        if payload.get("description") is not None and not isinstance(payload["description"], str):
+            raise ValueError("new_task description must be a string")
+        if payload.get("project_id") is not None and conn.execute(
+                "SELECT id FROM projects WHERE id=?", (payload["project_id"],)).fetchone() is None:
+            raise ValueError("new_task payload: no such project: %r" % payload["project_id"])
+        assignee = payload.get("assignee")
+        if assignee is not None and assignee not in ASSIGNABLE:
+            raise ValueError("new_task assignee %r not assignable (one of %s)"
+                             % (assignee, ", ".join(ASSIGNABLE)))
     else:
         raise ValueError("invalid proposal kind %r (one of %s)"
                          % (kind, ", ".join(PROPOSAL_KINDS)))
@@ -4677,7 +4733,7 @@ def create_proposal(kind, note_id, payload, summary="", classification="needs_at
                                 (note_id,)).fetchone()
             if note is None:
                 raise ValueError("no such note: %r" % note_id)
-            _validate_proposal_payload(conn, kind, payload)
+            _validate_proposal_payload(conn, kind, payload, note_id=note_id)
             now = time.time()
             conn.execute(
                 "UPDATE proposals SET status='superseded', decided_at=? "
@@ -4763,15 +4819,23 @@ def proposal_counts(db_path=None):
         conn.close()
 
 
-def approve_proposal(pid, db_path=None):
+def approve_proposal(pid, payload_override=None, db_path=None):
     """OWNER approval: apply the proposed change to the Library.
 
-    file  -> apply the filing to the note (inbox leaves for the Library).
-    split -> create one note per part (verbatim owner text => authored_by
-             'owner'; a filed part lands 'active', an unfiled one 'inbox'),
-             then archive the original unless archive_original is false.
-    Everything is re-validated against current state — the note or an area may
-    have changed since the librarian proposed. Returns the decided proposal.
+    file          -> apply the filing to the note (inbox leaves for the
+                     Library; `archive: true` sends it to Archive instead).
+    split         -> create one note per part (verbatim owner text =>
+                     authored_by 'owner'; a filed part lands 'active', an
+                     unfiled one 'inbox'), then archive the original unless
+                     archive_original is false.
+    contradiction -> flag BOTH notes disputed and cross-link them (keep-both).
+    new_task      -> create a real HQ task and link it (create-and-link).
+
+    `payload_override` is the owner's edit-before-approve: the edited payload
+    is validated, persisted onto the proposal row (the record shows what was
+    actually approved), then applied. Everything is re-validated against
+    current state — the note or an area may have changed since the librarian
+    proposed. Returns the decided proposal.
     """
     p = get_proposal(pid, db_path=db_path)
     if p is None:
@@ -4782,21 +4846,61 @@ def approve_proposal(pid, db_path=None):
     if note is None:
         raise ValueError("proposal #%d's note #%s no longer exists" % (pid, p["note_id"]))
     payload = p["payload"] or {}
-    # Re-validate the whole payload up front so a stale area/project fails the
-    # approval BEFORE any note is touched (no partial split application).
+    edited = payload_override is not None and payload_override != payload
+    if edited:
+        if not isinstance(payload_override, dict):
+            raise ValueError("edited payload must be an object")
+        payload = payload_override
+    # Re-validate the whole payload up front so a stale area/project (or a bad
+    # owner edit) fails the approval BEFORE any note is touched.
     conn = _connect(db_path)
     try:
-        _validate_proposal_payload(conn, p["kind"], payload)
+        _validate_proposal_payload(conn, p["kind"], payload, note_id=p["note_id"])
+        if edited:
+            with conn:
+                conn.execute("UPDATE proposals SET payload=? WHERE id=?",
+                             (json.dumps(payload), pid))
     finally:
         conn.close()
+    if edited:
+        log_activity("proposal_edited", detail="proposal #%d (%s) payload edited "
+                     "by owner before approval" % (pid, p["kind"]), db_path=db_path)
     result = {}
     if p["kind"] == "file":
         fields = {k: payload[k] for k in ("area_id", "project_id", "tags")
                   if payload.get(k) is not None}
+        archived = bool(payload.get("archive"))
         update_note(p["note_id"], edited_by="librarian",
-                    note_type=payload.get("type"), status="active",
+                    note_type=payload.get("type"),
+                    status="archived" if archived else "active",
                     db_path=db_path, **fields)
-        result = {"filed": True}
+        result = {"filed": True, "archived": archived}
+    elif p["kind"] == "contradiction":
+        other = payload["other_note_id"]
+        if get_note(other, db_path=db_path) is None:
+            raise ValueError("contradicting note #%s no longer exists" % other)
+        for a, b in ((p["note_id"], other), (other, p["note_id"])):
+            update_note(a, edited_by="librarian", disputed=True, db_path=db_path)
+            link_note(a, "note", b, db_path=db_path)
+        result = {"disputed": [p["note_id"], other]}
+    elif p["kind"] == "new_task":
+        proj = None
+        if payload.get("project_id") is not None:
+            proj = get_project(payload["project_id"], db_path=db_path)
+        elif note.get("project"):
+            proj = note["project"]
+        if proj is None:
+            raise ValueError("new_task proposal #%d has no project and note #%d "
+                             "is not project-linked — edit the proposal to pick one"
+                             % (pid, p["note_id"]))
+        desc = payload.get("description") or ("From note #%d: %s"
+                                              % (p["note_id"], note["title"]))
+        tid = create_task(proj["slug"], payload["title"].strip(), desc, "",
+                          assignee_profile=payload.get("assignee") or OWNER_ASSIGNEE,
+                          db_path=db_path)
+        mark_ready(tid, db_path=db_path)
+        link_note(p["note_id"], "task", tid, db_path=db_path)
+        result = {"task_id": tid}
     else:                                        # split
         ids = []
         for part in payload["parts"]:
@@ -4881,3 +4985,27 @@ def heartbeat_check(name, db_path=None):
     # Unknown names fail OPEN (the run happens) — a heartbeat must never be
     # able to silently kill a schedule. create/update validate the closed set.
     return (True, "unknown heartbeat %r" % name)
+
+
+HEARTBEAT_NUDGE_SECONDS = 120
+
+
+def nudge_heartbeat_schedules(name, delay=HEARTBEAT_NUDGE_SECONDS, db_path=None):
+    """Pull every enabled schedule with this heartbeat forward to ~now+delay.
+
+    2b-i capture nudge: a fresh capture shouldn't wait out the full cron gap.
+    Never moves a fire EARLIER than now+delay, so a burst of captures debounces
+    into one run (the first capture sets the time; later ones see next_fire_at
+    already <= target and leave it). Returns how many schedules moved.
+    """
+    target = time.time() + delay
+    conn = _connect(db_path)
+    try:
+        with conn:
+            cur = conn.execute(
+                "UPDATE schedules SET next_fire_at=? WHERE enabled=1 AND heartbeat=? "
+                "AND next_fire_at IS NOT NULL AND next_fire_at > ?",
+                (target, name, target))
+            return cur.rowcount
+    finally:
+        conn.close()
