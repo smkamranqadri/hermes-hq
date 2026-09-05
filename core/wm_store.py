@@ -4712,6 +4712,12 @@ def _validate_proposal_payload(conn, kind, payload, note_id=None):
         if assignee is not None and assignee not in ASSIGNABLE:
             raise ValueError("new_task assignee %r not assignable (one of %s)"
                              % (assignee, ", ".join(ASSIGNABLE)))
+        if payload.get("project_id") is None and note_id is not None:
+            row = conn.execute("SELECT project_id FROM notes WHERE id=?",
+                               (note_id,)).fetchone()
+            if row is not None and row["project_id"] is None:
+                raise ValueError("new_task payload needs a project_id — note #%s "
+                                 "is not project-linked" % note_id)
     else:
         raise ValueError("invalid proposal kind %r (one of %s)"
                          % (kind, ", ".join(PROPOSAL_KINDS)))
@@ -4724,6 +4730,11 @@ def create_proposal(kind, note_id, payload, summary="", classification="needs_at
     note (a re-read replaces, never stacks). Notifies the owner (needs_you)."""
     if classification not in PROPOSAL_CLASSES:
         raise ValueError("classification must be one of %s" % (PROPOSAL_CLASSES,))
+    if kind in ("contradiction", "new_task") and classification == "routine":
+        # Bulk-approve must never silently mint a task or flag a dispute —
+        # these kinds always cross the owner's eyes (Knowledge → rules).
+        raise ValueError("%s proposals are always needs_attention — "
+                         "the owner reads them before anything happens" % kind)
     if not isinstance(payload, dict):
         raise ValueError("payload must be an object")
     conn = _connect(db_path)
@@ -4852,19 +4863,14 @@ def approve_proposal(pid, payload_override=None, db_path=None):
             raise ValueError("edited payload must be an object")
         payload = payload_override
     # Re-validate the whole payload up front so a stale area/project (or a bad
-    # owner edit) fails the approval BEFORE any note is touched.
+    # owner edit) fails the approval BEFORE any note is touched. The edited
+    # payload is persisted only AFTER the apply succeeds — a failed approval
+    # must leave the librarian's original payload intact on the pending row.
     conn = _connect(db_path)
     try:
         _validate_proposal_payload(conn, p["kind"], payload, note_id=p["note_id"])
-        if edited:
-            with conn:
-                conn.execute("UPDATE proposals SET payload=? WHERE id=?",
-                             (json.dumps(payload), pid))
     finally:
         conn.close()
-    if edited:
-        log_activity("proposal_edited", detail="proposal #%d (%s) payload edited "
-                     "by owner before approval" % (pid, p["kind"]), db_path=db_path)
     result = {}
     if p["kind"] == "file":
         fields = {k: payload[k] for k in ("area_id", "project_id", "tags")
@@ -4919,10 +4925,16 @@ def approve_proposal(pid, payload_override=None, db_path=None):
     conn = _connect(db_path)
     try:
         with conn:
+            if edited:
+                conn.execute("UPDATE proposals SET payload=? WHERE id=?",
+                             (json.dumps(payload), pid))
             conn.execute("UPDATE proposals SET status='approved', result=?, decided_at=? "
                          "WHERE id=?", (json.dumps(result), now, pid))
     finally:
         conn.close()
+    if edited:
+        log_activity("proposal_edited", detail="proposal #%d (%s) payload edited "
+                     "by owner at approval" % (pid, p["kind"]), db_path=db_path)
     log_activity("proposal_approved", detail="proposal #%d (%s) on note #%d"
                  % (pid, p["kind"], p["note_id"]), db_path=db_path)
     return get_proposal(pid, db_path=db_path)

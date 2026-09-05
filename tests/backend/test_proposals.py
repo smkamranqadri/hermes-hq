@@ -403,11 +403,33 @@ def test_new_task_validation(env):
     with pytest.raises(ValueError, match="not assignable"):
         store.create_proposal("new_task", nid, {"title": "x", "assignee": "nobody"},
                               db_path=db)
-    # note has no project and payload names none -> approval refuses instructively
+    # unlinked note + no payload project -> refused at PROPOSE time already
+    with pytest.raises(ValueError, match="not project-linked"):
+        store.create_proposal("new_task", nid, {"title": "x"}, db_path=db)
+    # ...and if the note loses its project between propose and approve, the
+    # approval refuses instructively and the proposal stays pending untouched
+    proj = store.get_project(slug="alpha", db_path=db)
+    store.update_note(nid, project_id=proj["id"], db_path=db)
     pid = store.create_proposal("new_task", nid, {"title": "x"}, db_path=db)
-    with pytest.raises(ValueError, match="edit the proposal to pick one"):
+    store.update_note(nid, project_id=None, db_path=db)
+    with pytest.raises(ValueError, match="not project-linked"):
         store.approve_proposal(pid, db_path=db)
     assert store.get_proposal(pid, db_path=db)["status"] == "pending"    # untouched
+
+
+def test_owner_eyes_kinds_never_routine(env):
+    """Bulk 'Approve all routine' must never silently mint a task or flag a
+    dispute — contradiction/new_task refuse the routine classification."""
+    c, store, db = env
+    a = store.create_note("v1", db_path=db)
+    b = store.create_note("v2", db_path=db)
+    with pytest.raises(ValueError, match="always needs_attention"):
+        store.create_proposal("contradiction", a, {"other_note_id": b},
+                              classification="routine", db_path=db)
+    from core import wm_cli
+    with pytest.raises(SystemExit):                       # --routine flag is gone
+        wm_cli.build_parser().parse_args(
+            ["note", "propose-task", "1", "--title", "x", "--summary", "s", "--routine"])
 
 
 def test_archive_via_file(env, capsys):
@@ -440,7 +462,9 @@ def test_edit_before_approve(env):
                  json={"payload": {"area_id": 9999}}, headers=h)
     assert bad.status_code == 409
     assert store.get_note(nid, db_path=db)["status"] == "inbox"          # untouched
-    assert store.get_proposal(pid, db_path=db)["status"] == "pending"
+    stale = store.get_proposal(pid, db_path=db)
+    assert stale["status"] == "pending"
+    assert stale["payload"] == {"area_id": work}   # librarian's original survives a failed edit
     r = c.post("/api/proposal/%d/approve" % pid,
                json={"payload": {"archive": True}}, headers=h)
     assert r.status_code == 200
