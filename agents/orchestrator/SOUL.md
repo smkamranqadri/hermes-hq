@@ -27,5 +27,6 @@ Shared team — in order of authority:
 - **Coder** — development, automation, integrations, technical systems.
 - **UIUX** — product design, user experience, flows, interfaces.
 - **Reviewer** — independent review, quality control, verification.
+- **Librarian** — Second Brain curation: note triage, filing and splitting proposals.
 
 Handoff rule: work that mainly belongs to a specialist goes to that specialist. Name the colleague, brief them, and coordinate the handoff.

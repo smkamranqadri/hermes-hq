@@ -7,7 +7,7 @@ import { useQueryClient } from '@tanstack/react-query'
 import { post, useNote, when } from '../api'
 import { GlassCard } from '../components/GlassCard'
 import { Markdown } from '../components/chat/Markdown'
-import { FileNoteModal, NewReminderFromNoteModal, NewTaskFromNoteModal, ProposalBanner, TYPE_TONE } from '../components/brain'
+import { DisputedChip, FileNoteModal, NewReminderFromNoteModal, NewTaskFromNoteModal, ProposalBanner, TYPE_TONE } from '../components/brain'
 import { Btn, ConfirmModal, TextArea } from '../components/Modal'
 import { Chip, Crumbs, Empty, Label, Loading } from '../components/ui'
 import { useToast } from '../components/Toast'
@@ -61,6 +61,16 @@ export function BrainNote() {
       <div className="mb-4 flex flex-wrap items-center gap-1.5">
         {n.status === 'inbox' && <Chip tone="accent">inbox</Chip>}
         {n.status === 'archived' && <Chip>archived</Chip>}
+        {!!n.disputed && (
+          <span className="inline-flex items-center gap-1.5">
+            <DisputedChip />
+            <button type="button" disabled={busy === 'disputed'}
+              className="font-mono text-[10px] uppercase tracking-wider text-muted underline hover:text-fg"
+              onClick={() => void act('disputed', () => post(`/api/note/${n.id}/edit`, { disputed: false }), 'Dispute cleared on this note')}>
+              resolve
+            </button>
+          </span>
+        )}
         <span className={clsx('font-mono text-[10px] uppercase tracking-wider', TYPE_TONE[n.type])}>{n.type}</span>
         <button type="button" onClick={() => setModal('file')} title="Edit area, project, tags" className="flex flex-wrap items-center gap-1.5 hover:opacity-80">
           {areaLabel ? <Chip tone="accent">{areaLabel}</Chip> : <Chip>no area — set ✎</Chip>}
@@ -117,11 +127,12 @@ export function BrainNote() {
           <div className="mt-2 flex flex-col gap-2 text-sm">
             {n.links.map(l => (
               <div key={`${l.kind}-${l.target_id}`} className="flex flex-wrap items-center gap-2">
-                <Chip tone="accent">{l.kind === 'task' ? 'task' : 'reminder'}</Chip>
-                {l.kind === 'task'
-                  ? <Link to={`/tasks/${l.target_id}`} className="hover:text-accent-2">#{l.target_id} — {l.target?.title ?? '(deleted)'}</Link>
-                  : <Link to="/schedules" className="hover:text-accent-2">{l.target?.name ?? '(deleted)'} <span className="font-mono text-[10px] text-muted">{l.target?.cron}</span></Link>}
+                <Chip tone="accent">{l.kind === 'task' ? 'task' : l.kind === 'note' ? 'conflicts with' : 'reminder'}</Chip>
+                {l.kind === 'task' && <Link to={`/tasks/${l.target_id}`} className="hover:text-accent-2">#{l.target_id} — {l.target?.title ?? '(deleted)'}</Link>}
+                {l.kind === 'schedule' && <Link to="/schedules" className="hover:text-accent-2">{l.target?.name ?? '(deleted)'} <span className="font-mono text-[10px] text-muted">{l.target?.cron}</span></Link>}
+                {l.kind === 'note' && <Link to={`/brain/note/${l.target_id}`} className="hover:text-accent-2">#{l.target_id} — {l.target?.title ?? '(deleted)'}</Link>}
                 {l.kind === 'task' && l.target?.status && <Chip>{l.target.status}</Chip>}
+                {l.kind === 'note' && !!l.target?.disputed && <DisputedChip />}
               </div>
             ))}
           </div>

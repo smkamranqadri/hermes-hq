@@ -68,7 +68,8 @@ def test_librarian_surface_cannot_write_notes(env):
     note_parser = [a for a in wm_cli.build_parser()._subparsers._group_actions[0]
                    .choices["note"]._subparsers._group_actions[0].choices]
     assert set(note_parser) == {"inbox", "show", "areas", "tags", "proposals",
-                                "propose-file", "propose-split"}
+                                "propose-file", "propose-split",
+                                "propose-contradiction", "propose-task"}
 
 
 # ---- propose + validate -------------------------------------------------
@@ -344,3 +345,153 @@ def test_librarian_is_assignable(env):
     tid = store.create_task("alpha", "ingest", assignee_profile="librarian", db_path=db)
     store.mark_ready(tid, db_path=db)
     assert store.claim_task(tid, db_path=db) is True                     # dispatchable
+
+
+# ---- Phase 2b-i: contradiction / new_task / archive-via-file / edits ----
+
+def test_contradiction_round_trip(env):
+    """Approval flags BOTH notes disputed and cross-links them (keep-both);
+    the owner can clear a flag through the note-edit API once resolved."""
+    c, store, db = env
+    a = store.create_note("Budget is 5k", db_path=db)
+    b = store.create_note("Budget is 8k", db_path=db)
+    with pytest.raises(ValueError, match="cannot contradict itself"):
+        store.create_proposal("contradiction", a, {"other_note_id": a}, db_path=db)
+    with pytest.raises(ValueError, match="no such note"):
+        store.create_proposal("contradiction", a, {"other_note_id": 9999}, db_path=db)
+    pid = store.create_proposal("contradiction", a,
+                                {"other_note_id": b, "explanation": "amounts differ"},
+                                db_path=db)
+    p = store.approve_proposal(pid, db_path=db)
+    assert p["status"] == "approved" and p["result"]["disputed"] == [a, b]
+    na, nb = store.get_note(a, db_path=db), store.get_note(b, db_path=db)
+    assert na["disputed"] == 1 and nb["disputed"] == 1
+    assert any(l["kind"] == "note" and l["target_id"] == b for l in na["links"])
+    assert any(l["kind"] == "note" and l["target_id"] == a for l in nb["links"])
+    h = login(c)
+    r = c.post("/api/note/%d/edit" % a, json={"disputed": False}, headers=h)
+    assert r.status_code == 200 and r.json()["note"]["disputed"] == 0
+    assert store.get_note(b, db_path=db)["disputed"] == 1     # per-note clear
+
+
+def test_new_task_round_trip_via_cli(env, capsys):
+    """`wm note propose-task` -> owner approval creates a real ready HQ task
+    linked both ways; the note stays a note (create-and-link, never convert)."""
+    c, store, db = env
+    from core import wm_cli
+    nid = store.create_note("Call the dentist", db_path=db)
+    assert wm_cli.main(["note", "propose-task", str(nid), "--title", "Book dentist",
+                        "--project", "alpha", "--summary", "actionable"]) == 0
+    pid = store.list_proposals(status="pending", db_path=db)[0]["id"]
+    h = login(c)
+    r = c.post("/api/proposal/%d/approve" % pid, headers=h)
+    assert r.status_code == 200
+    tid = r.json()["proposal"]["result"]["task_id"]
+    t = store.get_task(tid, db_path=db)
+    assert t["status"] == "ready" and t["assignee_profile"] == "owner"
+    n = store.get_note(nid, db_path=db)
+    assert n["status"] != "archived"                          # note stays a note
+    assert any(l["kind"] == "task" and l["target_id"] == tid for l in n["links"])
+    assert store.notes_for_task(tid, db_path=db)[0]["id"] == nid
+
+
+def test_new_task_validation(env):
+    c, store, db = env
+    nid = store.create_note("todo-ish", db_path=db)
+    with pytest.raises(ValueError, match="needs a title"):
+        store.create_proposal("new_task", nid, {}, db_path=db)
+    with pytest.raises(ValueError, match="not assignable"):
+        store.create_proposal("new_task", nid, {"title": "x", "assignee": "nobody"},
+                              db_path=db)
+    # note has no project and payload names none -> approval refuses instructively
+    pid = store.create_proposal("new_task", nid, {"title": "x"}, db_path=db)
+    with pytest.raises(ValueError, match="edit the proposal to pick one"):
+        store.approve_proposal(pid, db_path=db)
+    assert store.get_proposal(pid, db_path=db)["status"] == "pending"    # untouched
+
+
+def test_archive_via_file(env, capsys):
+    """Junk handling reuses the file kind: `--archive` files straight to
+    Archive (no new proposal kind) and approval leaves it searchable."""
+    c, store, db = env
+    from core import wm_cli
+    nid = store.create_note("asdfasd", body="keyboard mash", db_path=db)
+    with pytest.raises(ValueError, match="archive: true"):
+        store.create_proposal("file", nid, {}, db_path=db)               # still needs a target
+    assert wm_cli.main(["note", "propose-file", str(nid), "--archive",
+                        "--summary", "junk test capture", "--routine"]) == 0
+    p = store.list_proposals(status="pending", db_path=db)[0]
+    assert p["payload"] == {"archive": True}
+    store.approve_proposal(p["id"], db_path=db)
+    n = store.get_note(nid, db_path=db)
+    assert n["status"] == "archived"
+    assert store.get_proposal(p["id"], db_path=db)["result"]["archived"] is True
+
+
+def test_edit_before_approve(env):
+    """The owner's edited payload is validated, persisted on the row, and
+    applied; a bad edit 409s BEFORE anything changes."""
+    c, store, db = env
+    nid = store.create_note("misc capture", db_path=db)
+    work = area_id(store, db, "Work")
+    pid = store.create_proposal("file", nid, {"area_id": work}, db_path=db)
+    h = login(c)
+    bad = c.post("/api/proposal/%d/approve" % pid,
+                 json={"payload": {"area_id": 9999}}, headers=h)
+    assert bad.status_code == 409
+    assert store.get_note(nid, db_path=db)["status"] == "inbox"          # untouched
+    assert store.get_proposal(pid, db_path=db)["status"] == "pending"
+    r = c.post("/api/proposal/%d/approve" % pid,
+               json={"payload": {"archive": True}}, headers=h)
+    assert r.status_code == 200
+    assert store.get_note(nid, db_path=db)["status"] == "archived"       # edit applied
+    assert store.get_proposal(pid, db_path=db)["payload"] == {"archive": True}
+
+
+def test_capture_nudge_debounced(env):
+    """A fresh capture pulls the ingest schedule to ~2 min out; a burst
+    debounces to ONE pull and non-inbox creates never nudge."""
+    import time as _t
+    c, store, db = env
+    sid = store.create_schedule("Librarian ingest", "*/30 * * * *", "alpha",
+                                "Triage the Second Brain inbox",
+                                assignee_profile="librarian",
+                                heartbeat="librarian_ingest", db_path=db)
+    conn = store._connect(db)
+    with conn:
+        conn.execute("UPDATE schedules SET next_fire_at=? WHERE id=?",
+                     (_t.time() + 3600, sid))
+    conn.close()
+    h = login(c)
+    r = c.post("/api/notes", json={"title": "filed directly", "status": "active",
+                                   "area_id": area_id(store, db, "Work")}, headers=h)
+    assert r.status_code == 200 and r.json()["nudged"] == 0              # not a capture
+    assert store.get_schedule(sid, db_path=db)["next_fire_at"] > _t.time() + 3000
+    r = c.post("/api/notes", json={"title": "brain dump"}, headers=h)
+    assert r.json()["nudged"] == 1
+    first = store.get_schedule(sid, db_path=db)["next_fire_at"]
+    assert first <= _t.time() + store.HEARTBEAT_NUDGE_SECONDS + 1
+    r = c.post("/api/notes", json={"title": "second dump"}, headers=h)
+    assert r.json()["nudged"] == 0                                       # debounced
+    assert store.get_schedule(sid, db_path=db)["next_fire_at"] == first
+
+
+def test_triage_now(env):
+    """The impatience button: mints an ingest task only when there is real
+    work and no ingest task already open — never a silent model spend."""
+    c, store, db = env
+    assert c.post("/api/brain/triage-now").status_code == 401            # owner wall
+    h = login(c)
+    assert c.post("/api/brain/triage-now", headers=h).status_code == 409  # no schedule
+    store.create_schedule("Librarian ingest", "*/30 * * * *", "alpha",
+                          "Triage the Second Brain inbox",
+                          assignee_profile="librarian",
+                          heartbeat="librarian_ingest", db_path=db)
+    r = c.post("/api/brain/triage-now", headers=h).json()
+    assert r["queued"] is False and "nothing to triage" in r["detail"]
+    assert store.list_tasks(db_path=db) == []
+    store.create_note("untriaged capture", db_path=db)
+    r = c.post("/api/brain/triage-now", headers=h).json()
+    assert r["queued"] is True and store.get_task(r["task_id"], db_path=db)
+    r2 = c.post("/api/brain/triage-now", headers=h).json()
+    assert r2["queued"] is False and r2["task_id"] == r["task_id"]       # already open

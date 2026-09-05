@@ -146,11 +146,11 @@ export const useNotifications = () => useQuery({ queryKey: ['notifications'], qu
 
 // ---- Second Brain ------------------------------------------------------
 export type Area = { id: number; name: string; parent_id: number | null; position: number; archived: number; note_count?: number }
-export type NoteLink = { note_id: number; kind: 'task' | 'schedule'; target_id: number; target: { id: number; title?: string; name?: string; status?: string; cron?: string; enabled?: number } | null }
+export type NoteLink = { note_id: number; kind: 'task' | 'schedule' | 'note'; target_id: number; target: { id: number; title?: string; name?: string; status?: string; cron?: string; enabled?: number; disputed?: number } | null }
 export type Note = {
   id: number; title: string; body: string; body_truncated?: boolean; type: 'note' | 'playbook' | 'wiki'
   status: 'inbox' | 'active' | 'archived'; area_id: number | null; project_id: number | null
-  tags: string[]; authored_by: string; pinned: number; created_at: number; updated_at: number | null; entry_count?: number
+  tags: string[]; authored_by: string; pinned: number; disputed: number; created_at: number; updated_at: number | null; entry_count?: number
   pending_proposal_id?: number | null
 }
 export type NoteEntry = { id: number; note_id: number; body: string; created_at: number }
@@ -177,12 +177,18 @@ export const useTaskNotes = (id: number) =>
 
 // ---- librarian proposals (Phase 2a) ------------------------------------
 export type SplitPart = { title: string; body?: string; area_id?: number; project_id?: number; tags?: string[]; type?: Note['type'] }
+export type ProposalPayload = {
+  parts?: SplitPart[]; archive_original?: boolean; area_id?: number; project_id?: number; tags?: string[]; type?: Note['type']
+  archive?: boolean                                                     // file → Archive (junk/museum)
+  other_note_id?: number; explanation?: string                          // contradiction
+  title?: string; description?: string; assignee?: string              // new_task
+}
 export type Proposal = {
-  id: number; kind: 'split' | 'file'; note_id: number
-  payload: { parts?: SplitPart[]; archive_original?: boolean; area_id?: number; project_id?: number; tags?: string[]; type?: Note['type'] } | null
+  id: number; kind: 'split' | 'file' | 'contradiction' | 'new_task'; note_id: number
+  payload: ProposalPayload | null
   summary: string; classification: 'routine' | 'needs_attention'
   status: 'pending' | 'approved' | 'rejected' | 'superseded'
-  author: string; feedback: string | null; result: { note_ids?: number[]; filed?: boolean } | null
+  author: string; feedback: string | null; result: { note_ids?: number[]; filed?: boolean; archived?: boolean; disputed?: number[]; task_id?: number } | null
   created_at: number; decided_at: number | null; note_title: string | null; note_status: string | null
 }
 export type ProposalCounts = { pending: number; routine: number; needs_attention: number }

@@ -63,6 +63,7 @@ class NoteEdit(BaseModel):
     project_id: int | None = None
     tags: list[str] | None = None
     pinned: bool | None = None
+    disputed: bool | None = None     # owner clears a contradiction flag once resolved
     # explicit clears — PATCH-style Nones are ambiguous, so unlinking an
     # area/project is its own flag rather than "field present but null"
     clear_area: bool = False
@@ -121,13 +122,18 @@ def create_note(body: NoteIn):
                   note_type=body.type, status=body.status,
                   area_id=body.area_id, project_id=body.project_id,
                   tags=body.tags, authored_by="owner")
-    return {"id": nid, "note": store.get_note(nid, db_path=_db())}
+    nudged = 0
+    if body.status == "inbox":
+        # 2b-i capture nudge: don't make a fresh capture wait out the cron gap.
+        # Debounced in the store — a burst of captures collapses to one run.
+        nudged = store.nudge_heartbeat_schedules("librarian_ingest", db_path=_db())
+    return {"id": nid, "note": store.get_note(nid, db_path=_db()), "nudged": nudged}
 
 
 @router.post("/note/{note_id}/edit")
 def edit_note(note_id: int, body: NoteEdit):
     fields = {}
-    for k in ("title", "body", "tags", "pinned"):
+    for k in ("title", "body", "tags", "pinned", "disputed"):
         v = getattr(body, k)
         if v is not None:
             fields[k] = v
@@ -206,6 +212,12 @@ class RejectIn(BaseModel):
     feedback: str = ""
 
 
+class ApproveIn(BaseModel):
+    # edit-before-approve: the owner's edited payload replaces the librarian's
+    # (validated + persisted in the store before anything is applied)
+    payload: dict | None = None
+
+
 @router.get("/proposals")
 def proposals(status: str | None = "pending", classification: str | None = None,
               note_id: int | None = None, limit: int = Query(100, ge=1, le=500)):
@@ -220,8 +232,9 @@ def proposals_counts():
 
 
 @router.post("/proposal/{pid}/approve")
-def approve_proposal(pid: int):
-    p = _engine(store.approve_proposal, pid)
+def approve_proposal(pid: int, body: ApproveIn | None = None):
+    p = _engine(store.approve_proposal, pid,
+                payload_override=body.payload if body else None)
     return {"ok": True, "proposal": p, "counts": store.proposal_counts(db_path=_db())}
 
 
@@ -236,6 +249,31 @@ def approve_routine():
     res = _engine(store.approve_routine_proposals)
     res["counts"] = store.proposal_counts(db_path=_db())
     return res
+
+
+@router.post("/brain/triage-now")
+def triage_now():
+    """Owner's impatience button: fire the librarian ingest schedule right now.
+
+    Honest about money — if the heartbeat says there's nothing untriaged, or
+    the previous ingest task is still open, no task is minted and the response
+    says why instead of quietly spending a model run.
+    """
+    rows = [r for r in store.list_schedules(db_path=_db())
+            if r.get("heartbeat") == "librarian_ingest" and r["enabled"]]
+    if not rows:
+        raise HTTPException(409, "no enabled librarian ingest schedule — "
+                                 "create or resume one under Schedules")
+    row = rows[0]
+    has_work, detail = store.heartbeat_check("librarian_ingest", db_path=_db())
+    if not has_work:
+        return {"queued": False, "detail": "nothing to triage (%s)" % detail}
+    if row.get("last_task_id") and row.get("last_task_status") in store.OPEN_TASK_STATUSES:
+        return {"queued": False, "task_id": row["last_task_id"],
+                "detail": "ingest task #%s is already %s"
+                          % (row["last_task_id"], row["last_task_status"])}
+    tid = _engine(store.run_schedule_now, row["id"])
+    return {"queued": True, "task_id": tid, "detail": detail}
 
 
 @router.get("/project/{slug}/notes")

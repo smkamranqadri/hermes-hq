@@ -33,6 +33,95 @@ export function PendingProposalChip({ link = true }: { link?: boolean }) {
   return <Link to="/brain/review" className={`${cls} hover:bg-working/10`}>librarian proposed → review</Link>
 }
 
+/** A note flagged by an approved contradiction proposal — keep-both until the
+ * owner resolves it (clear the flag from the note page). */
+export function DisputedChip() {
+  return (
+    <span title="Contradiction — both notes kept until you resolve it"
+      className="inline-flex items-center rounded-full border border-needsyou/60 px-2 py-0.5 font-mono text-[10px] uppercase tracking-wider text-needsyou">
+      disputed
+    </span>
+  )
+}
+
+/** File-to-Archive proposals must read differently from real filings — the
+ * owner is approving "this is junk/museum", not "this belongs somewhere". */
+function ArchiveChip() {
+  return (
+    <span className="inline-flex items-center rounded-full border border-needsyou/60 px-2 py-0.5 font-mono text-[10px] uppercase tracking-wider text-needsyou">
+      → archive
+    </span>
+  )
+}
+
+export const KIND_LABEL: Record<Proposal['kind'], string> = { split: 'split', file: 'file', contradiction: 'contradiction', new_task: 'new task' }
+
+export function approveLabel(p: Proposal) {
+  if (p.kind === 'split') return `Approve split (${p.payload?.parts?.length ?? 0} notes)`
+  if (p.kind === 'file') return p.payload?.archive ? 'Approve → archive' : 'Approve filing'
+  if (p.kind === 'contradiction') return 'Mark both disputed'
+  return 'Create task & link'
+}
+
+/** Kind-specific payload rendering, shared by the Review queue and the
+ * note-page banner so every surface tells the same story. */
+export function ProposalPayloadView({ p, compact = false }: { p: Proposal; compact?: boolean }) {
+  const areas = useAreas(); const projects = useProjects()
+  const chips = (f: { area_id?: number; project_id?: number; tags?: string[]; type?: string; archive?: boolean }, inboxFallback = false) => {
+    const area = areaLabel(areas.data?.areas, f.area_id ?? null)
+    const proj = f.project_id ? (projects.data?.projects ?? []).find(x => x.id === f.project_id) : null
+    return (
+      <>
+        {f.archive && <ArchiveChip />}
+        {area && <Chip tone="accent">{area}</Chip>}
+        {proj && <Chip tone="accent">{proj.name}</Chip>}
+        {f.type && f.type !== 'note' && <Chip>{f.type}</Chip>}
+        {(f.tags ?? []).map(t => <Chip key={t}>{t}</Chip>)}
+        {inboxFallback && !f.archive && !area && !proj && <Chip>→ inbox</Chip>}
+      </>
+    )
+  }
+  if (p.kind === 'file' && p.payload) return <div className="mt-2 flex flex-wrap items-center gap-1.5">{chips(p.payload, true)}</div>
+  if (p.kind === 'split') return (
+    <ol className="mt-2 flex flex-col gap-1.5">
+      {(p.payload?.parts ?? []).map((part: SplitPart, i: number) => (
+        <li key={i} className={clsx('rounded-lg border border-line-subtle bg-inset px-3', compact ? 'py-1.5' : 'py-2')}>
+          <div className={clsx('flex flex-wrap items-center gap-1.5', compact && 'text-xs')}>
+            <span className={clsx('font-medium', compact ? '' : 'text-xs')}>{part.title}</span>
+            {chips(part)}
+          </div>
+          {!compact && part.body && <p className="mt-1 line-clamp-2 text-[11px] text-muted">{part.body}</p>}
+        </li>
+      ))}
+      {!compact && p.payload?.archive_original === false && <p className="text-[11px] text-muted">Source note stays (not archived).</p>}
+    </ol>
+  )
+  if (p.kind === 'contradiction') return (
+    <div className="mt-2 rounded-lg border border-needsyou/40 bg-inset px-3 py-2 text-xs">
+      <div className="flex flex-wrap items-center gap-1.5">
+        <DisputedChip />
+        <span className="text-muted">conflicts with</span>
+        <Link to={`/brain/note/${p.payload?.other_note_id}`} className="font-medium hover:text-accent-2">note #{p.payload?.other_note_id}</Link>
+      </div>
+      {p.payload?.explanation && <p className="mt-1 text-muted">{p.payload.explanation}</p>}
+      <p className="mt-1 text-[11px] text-muted">Keep-both: approving flags both notes, nothing is merged or rewritten.</p>
+    </div>
+  )
+  if (p.kind === 'new_task') return (
+    <div className="mt-2 rounded-lg border border-line-subtle bg-inset px-3 py-2 text-xs">
+      <div className="flex flex-wrap items-center gap-1.5">
+        <Chip tone="accent">task</Chip>
+        <span className="font-medium">{p.payload?.title}</span>
+        {p.payload?.project_id != null && chips({ project_id: p.payload.project_id })}
+        <Chip>{p.payload?.assignee ?? 'owner'}</Chip>
+      </div>
+      {p.payload?.description && <p className="mt-1 line-clamp-2 text-muted">{p.payload.description}</p>}
+      <p className="mt-1 text-[11px] text-muted">Creates a real linked task — the note stays a note.</p>
+    </div>
+  )
+  return null
+}
+
 export function areaLabel(areas: Area[] | undefined, id: number | null) {
   if (!id || !areas) return null
   const a = areas.find(x => x.id === id)
@@ -58,6 +147,7 @@ export function NoteRow({ n, areas, showBody = true }: { n: Note; areas?: Area[]
         {area && <Chip tone="accent">{area}</Chip>}
         {n.tags.slice(0, 4).map(t => <Chip key={t}>{t}</Chip>)}
         {n.status === 'archived' && <Chip>archived</Chip>}
+        {!!n.disputed && <DisputedChip />}
         {!!n.pending_proposal_id && <PendingProposalChip link={false} />}
       </div>
     </Link>
@@ -251,7 +341,6 @@ export function CaptureBox({ compact = false }: { compact?: boolean }) {
  * decision buttons live here too so the owner can decide wherever they are. */
 export function ProposalBanner({ noteId }: { noteId: number }) {
   const qc = useQueryClient(); const toast = useToast()
-  const areas = useAreas(); const projects = useProjects()
   const q = useQuery({
     queryKey: ['note-proposals', noteId],
     queryFn: () => get<{ proposals: Proposal[] }>(`/api/proposals?status=pending&note_id=${noteId}`),
@@ -262,18 +351,6 @@ export function ProposalBanner({ noteId }: { noteId: number }) {
   const [feedback, setFeedback] = useState('')
   const rows = q.data?.proposals ?? []
   if (!rows.length) return null
-  const dest = (p: { area_id?: number; project_id?: number; tags?: string[]; type?: string }) => {
-    const area = areaLabel(areas.data?.areas, p.area_id ?? null)
-    const proj = p.project_id ? (projects.data?.projects ?? []).find(x => x.id === p.project_id) : null
-    return (
-      <>
-        {area && <Chip tone="accent">{area}</Chip>}
-        {proj && <Chip tone="accent">{proj.name}</Chip>}
-        {p.type && p.type !== 'note' && <Chip>{p.type}</Chip>}
-        {(p.tags ?? []).map(t => <Chip key={t}>{t}</Chip>)}
-      </>
-    )
-  }
   const decide = async (id: number, action: 'approve' | 'reject') => {
     setBusy(true)
     try {
@@ -287,24 +364,11 @@ export function ProposalBanner({ noteId }: { noteId: number }) {
       {rows.map(p => (
         <div key={p.id} className="rounded-xl border border-working/50 bg-working/10 p-3" data-proposal-banner>
           <div className="flex flex-wrap items-center gap-2">
-            <Label>Librarian proposed · {p.kind}</Label>
+            <Label>Librarian proposed · {KIND_LABEL[p.kind]}</Label>
             <span className="ml-auto font-mono text-[10px] text-muted">#{p.id}</span>
           </div>
           {p.summary && <p className="mt-1 text-sm">{p.summary}</p>}
-          {p.kind === 'file' && p.payload && (
-            <div className="mt-2 flex flex-wrap items-center gap-1.5">{dest(p.payload)}</div>
-          )}
-          {p.kind === 'split' && (
-            <ol className="mt-2 flex flex-col gap-1.5">
-              {(p.payload?.parts ?? []).map((part: SplitPart, i: number) => (
-                <li key={i} className="rounded-lg border border-line-subtle bg-inset px-3 py-1.5">
-                  <div className="flex flex-wrap items-center gap-1.5 text-xs">
-                    <span className="font-medium">{part.title}</span>{dest(part)}
-                  </div>
-                </li>
-              ))}
-            </ol>
-          )}
+          <ProposalPayloadView p={p} compact />
           {rejecting === p.id ? (
             <div className="mt-3 flex flex-col gap-2">
               <TextArea rows={2} value={feedback} onChange={e => setFeedback(e.target.value)}
@@ -316,9 +380,7 @@ export function ProposalBanner({ noteId }: { noteId: number }) {
             </div>
           ) : (
             <div className="mt-3 flex flex-wrap gap-2">
-              <Btn onClick={() => void decide(p.id, 'approve')} busy={busy}>
-                {p.kind === 'split' ? `Approve split (${p.payload?.parts?.length ?? 0} notes)` : 'Approve filing'}
-              </Btn>
+              <Btn onClick={() => void decide(p.id, 'approve')} busy={busy}>{approveLabel(p)}</Btn>
               <Btn kind="ghost" onClick={() => { setRejecting(p.id); setFeedback('') }}>Reject…</Btn>
               <Link to="/brain/review" className="ml-auto self-center text-[11px] text-accent-2 hover:underline">Review queue →</Link>
             </div>

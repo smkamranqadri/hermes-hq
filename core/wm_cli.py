@@ -607,7 +607,7 @@ def cmd_reviews(args):
 # ---------------------------------------------------------------------------
 # Second Brain `wm note` group (Phase 2a) — the LIBRARIAN'S surface.
 # Reads (inbox/show/areas/tags/proposals) orient the librarian; the only
-# writes are propose-file / propose-split, which touch the proposals table
+# writes are the propose-* verbs (file/split/contradiction/task), which touch the proposals table
 # alone. There is deliberately NO note-writing command here: notes change
 # only when the owner approves a proposal in the dashboard.
 # ---------------------------------------------------------------------------
@@ -716,8 +716,40 @@ def cmd_note_propose_file(args):
         payload["tags"] = [t.strip() for t in args.tags.split(",") if t.strip()]
     if args.type:
         payload["type"] = args.type
+    if args.archive:
+        payload["archive"] = True
     pid = store.create_proposal(
         "file", args.id, payload, summary=args.summary,
+        classification="routine" if args.routine else "needs_attention")
+    _proposal_result(pid, args.summary)
+    return 0
+
+
+def cmd_note_propose_contradiction(args):
+    payload = {"other_note_id": args.other}
+    if args.explain:
+        payload["explanation"] = args.explain
+    pid = store.create_proposal(
+        "contradiction", args.id, payload, summary=args.summary,
+        classification="routine" if args.routine else "needs_attention")
+    _proposal_result(pid, args.summary)
+    return 0
+
+
+def cmd_note_propose_task(args):
+    payload = {"title": args.title}
+    if args.desc:
+        payload["description"] = args.desc
+    if args.project:
+        proj = store.get_project(slug=args.project)
+        if proj is None:
+            _p("error: no such project: %s" % args.project)
+            return 1
+        payload["project_id"] = proj["id"]
+    if args.assignee:
+        payload["assignee"] = args.assignee
+    pid = store.create_proposal(
+        "new_task", args.id, payload, summary=args.summary,
         classification="routine" if args.routine else "needs_attention")
     _proposal_result(pid, args.summary)
     return 0
@@ -1198,7 +1230,35 @@ def build_parser():
     pf.add_argument("--routine", action="store_true",
                     help="classify routine (owner can bulk-approve); default "
                          "needs_attention")
+    pf.add_argument("--archive", action="store_true",
+                    help="junk/museum capture: file it straight to Archive "
+                         "(searchable, reversible) instead of the Library")
     pf.set_defaults(fn=cmd_note_propose_file)
+    pc = note_sub.add_parser("propose-contradiction",
+                             help="two notes disagree: propose flagging BOTH "
+                                  "disputed (keep-both — never reconcile them "
+                                  "yourself)")
+    pc.add_argument("id", type=int)
+    pc.add_argument("--other", type=int, required=True,
+                    help="the note id this one contradicts")
+    pc.add_argument("--explain", default=None,
+                    help="what disagrees with what (the owner reads this)")
+    pc.add_argument("--summary", required=True)
+    pc.add_argument("--routine", action="store_true")
+    pc.set_defaults(fn=cmd_note_propose_contradiction)
+    pt = note_sub.add_parser("propose-task",
+                             help="a note describes real work: propose creating "
+                                  "a linked HQ task (the note stays a note)")
+    pt.add_argument("id", type=int)
+    pt.add_argument("--title", required=True)
+    pt.add_argument("--desc", default=None, help="task description")
+    pt.add_argument("--project", default=None,
+                    help="project slug (default: the note's project)")
+    pt.add_argument("--assignee", default=None,
+                    help="assignee profile (default: owner — Kamran's own todo)")
+    pt.add_argument("--summary", required=True)
+    pt.add_argument("--routine", action="store_true")
+    pt.set_defaults(fn=cmd_note_propose_task)
     psp = note_sub.add_parser("propose-split",
                               help="propose splitting one capture into N notes; "
                                    "parts JSON from a file or '-' (stdin)")
