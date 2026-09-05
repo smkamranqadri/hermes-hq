@@ -106,11 +106,13 @@ function ModelRow({ name, gatewayOn }: { name: string; gatewayOn: boolean }) {
   )
 }
 
+const CUSTOM = '__custom__'
+
 function ModelModal({ name, current, gatewayOn, onClose }: { name: string; current: AgentModel; gatewayOn: boolean; onClose: () => void }) {
   const qc = useQueryClient(); const toast = useToast()
   const [f, setF] = useState({ provider: current.provider, model: current.model, effort: current.effort })
-  const [q, setQ] = useState('')
-  const opts = useModels(q, f.provider, name)
+  const [custom, setCustom] = useState(false)
+  const opts = useModels('', f.provider, name)
   const [busy, setBusy] = useState(false)
   const [warn, setWarn] = useState<string | null>(null)
   const save = async (confirm = false) => {
@@ -137,12 +139,19 @@ function ModelModal({ name, current, gatewayOn, onClose }: { name: string; curre
             {providers.map(p => <option key={p.id} value={p.id}>{p.name}{p.active ? ' (current)' : ''}</option>)}
           </SelectInput>
         </Field>
-        <Field label="Model" hint="Pick a suggestion or type any model id the provider accepts.">
-          <TextInput list="agent-model-suggestions" value={f.model}
-            onChange={e => { setF(x => ({ ...x, model: e.target.value })); setQ(e.target.value) }} placeholder="model id" />
-          <datalist id="agent-model-suggestions">
-            {suggestions.map(s => <option key={s.id} value={s.id}>{s.description}</option>)}
-          </datalist>
+        <Field label="Model" hint="Suggestions come from this provider; pick “Type a model id…” for anything else.">
+          <SelectInput value={custom ? CUSTOM : f.model}
+            onChange={e => {
+              if (e.target.value === CUSTOM) { setCustom(true); return }
+              setCustom(false); setF(x => ({ ...x, model: e.target.value }))
+            }}>
+            {!f.model && !custom && <option value="">— pick —</option>}
+            {f.model && !suggestions.some(s => s.id === f.model) && <option value={f.model}>{f.model} (current)</option>}
+            {suggestions.map(s => <option key={s.id} value={s.id}>{s.id}</option>)}
+            <option value={CUSTOM}>Type a model id…</option>
+          </SelectInput>
+          {custom && <div className="mt-2"><TextInput autoFocus value={f.model} placeholder="model id"
+            onChange={e => setF(x => ({ ...x, model: e.target.value }))} /></div>}
         </Field>
         <Field label="Reasoning effort">
           <SelectInput value={f.effort} onChange={e => setF(x => ({ ...x, effort: e.target.value }))}>
