@@ -86,10 +86,15 @@ export function ProposalPayloadView({ p, compact = false }: { p: Proposal; compa
       </>
     )
   }
+  // Declared tag coinage renders loudly — approving registers these in the
+  // closed taxonomy, so the owner should notice before clicking.
+  const newTags = (p.payload?.new_tags ?? []).map(t => (
+    <span key={t} className="inline-flex items-center rounded-full border border-working/60 px-2 py-0.5 font-mono text-[10px] uppercase tracking-wider text-working">new tag: {t}</span>
+  ))
   // A filed note always leaves the inbox, so file gets NO inbox-fallback
   // chip; an unfiled split part genuinely lands back in the inbox, so split
   // parts DO — that chip is the owner's pre-approval warning.
-  if (p.kind === 'file' && p.payload) return <div className="mt-2 flex flex-wrap items-center gap-1.5">{chips(p.payload)}</div>
+  if (p.kind === 'file' && p.payload) return <div className="mt-2 flex flex-wrap items-center gap-1.5">{chips(p.payload)}{newTags}</div>
   if (p.kind === 'split') return (
     <ol className="mt-2 flex flex-col gap-1.5">
       {(p.payload?.parts ?? []).map((part: SplitPart, i: number) => (
@@ -101,6 +106,7 @@ export function ProposalPayloadView({ p, compact = false }: { p: Proposal; compa
           {!compact && part.body && <p className="mt-1 line-clamp-2 text-[11px] text-muted">{part.body}</p>}
         </li>
       ))}
+      {newTags.length > 0 && <li className="flex flex-wrap gap-1.5">{newTags}</li>}
       {!compact && p.payload?.archive_original === false && <p className="text-[11px] text-muted">Source note stays (not archived).</p>}
     </ol>
   )

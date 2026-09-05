@@ -3,7 +3,7 @@
 import { useState } from 'react'
 import { useSearchParams } from 'react-router-dom'
 import clsx from 'clsx'
-import { useAreas, useNotes, useNotesTree } from '../api'
+import { useAreas, useNoteTags, useNotes, useNotesTree } from '../api'
 import { PageHeader } from '../components/GlassCard'
 import { BrainSubNav, NoteRow, useBrainCounts } from '../components/brain'
 import { Empty, Input, Label, Loading, Select } from '../components/ui'
@@ -26,26 +26,38 @@ export function BrainLibrary() {
   usePageTitle('Library')
   const [sp, setSp] = useSearchParams()
   const areaSel = sp.get('area'); const projSel = sp.get('project'); const typeSel = sp.get('type'); const view = sp.get('view')
+  const tagSel = sp.get('tag')
   const q = sp.get('q') ?? ''
   const [draft, setDraft] = useState(q)
   const { inbox, review } = useBrainCounts()
   const tree = useNotesTree()
   const areas = useAreas()
+  const tags = useNoteTags()
   const pick = (k: 'area' | 'project' | 'type' | 'view', v: string | null) => {
     const n = new URLSearchParams()
     if (v) n.set(k, v)
     if (q) n.set('q', q)
     setSp(n, { replace: true })
   }
+  // 2b-ii sub-filters: tag (anywhere) and project (within an area) REFINE the
+  // current selection instead of replacing it.
+  const refine = (k: 'tag' | 'project', v: string | null) => {
+    const n = new URLSearchParams(sp)
+    v ? n.set(k, v) : n.delete(k)
+    setSp(n, { replace: true })
+  }
   const filters = q
     ? { q, limit: 100 }
     : view === 'archived' ? { status: 'archived', limit: 100 }
     : view === 'inbox' ? { status: 'inbox', limit: 100 }
-    : { status: undefined as string | undefined, area_id: areaSel ? Number(areaSel) : undefined, project_id: projSel ? Number(projSel) : undefined, type: typeSel ?? undefined, limit: 100 }
+    : { status: undefined as string | undefined, area_id: areaSel ? Number(areaSel) : undefined, project_id: projSel ? Number(projSel) : undefined, type: typeSel ?? undefined, tag: tagSel ?? undefined, limit: 100 }
   const notes = useNotes(filters)
   const roots = (tree.data?.areas ?? []).filter(a => !a.parent_id)
   const children = (id: number) => (tree.data?.areas ?? []).filter(a => a.parent_id === id)
-  const selLabel = q ? `“${q}”` : view === 'archived' ? 'Archive' : view === 'inbox' ? 'Inbox' : typeSel ? typeSel + 's' : projSel ? tree.data?.projects.find(p => String(p.id) === projSel)?.name ?? 'Project' : areaSel ? (tree.data?.areas ?? []).find(a => String(a.id) === areaSel)?.name ?? 'Area' : 'All notes'
+  const baseLabel = q ? `“${q}”` : view === 'archived' ? 'Archive' : view === 'inbox' ? 'Inbox' : typeSel ? typeSel + 's' : projSel && !areaSel ? tree.data?.projects.find(p => String(p.id) === projSel)?.name ?? 'Project' : areaSel ? (tree.data?.areas ?? []).find(a => String(a.id) === areaSel)?.name ?? 'Area' : 'All notes'
+  const selLabel = baseLabel
+    + (areaSel && projSel ? ` · ${tree.data?.projects.find(p => String(p.id) === projSel)?.name ?? 'project'}` : '')
+    + (tagSel && !q && !view ? ` · #${tagSel}` : '')
   return (
     <section className="mx-auto max-w-6xl p-4 sm:p-6">
       <PageHeader crumb="second-brain // library" title="Library" right={
@@ -102,6 +114,20 @@ export function BrainLibrary() {
             <Label>{selLabel}</Label>
             {notes.data && <span className="font-mono text-[10px] text-muted">{notes.data.notes.length} note{notes.data.notes.length === 1 ? '' : 's'}</span>}
           </div>
+          {!q && !view && (
+            <div className="mb-3 flex flex-wrap gap-2">
+              <Select value={tagSel ?? ''} onChange={e => refine('tag', e.target.value || null)} aria-label="Tag filter">
+                <option value="">All tags</option>
+                {(tags.data?.tags ?? []).map(t => <option key={t.tag} value={t.tag}>{t.tag} ({t.count})</option>)}
+              </Select>
+              {areaSel && (
+                <Select value={projSel ?? ''} onChange={e => refine('project', e.target.value || null)} aria-label="Project filter">
+                  <option value="">All projects</option>
+                  {(tree.data?.projects ?? []).map(p => <option key={p.id} value={p.id}>{p.name}</option>)}
+                </Select>
+              )}
+            </div>
+          )}
           {notes.isLoading && <Loading rows={5} />}
           {notes.isError && <Empty error title="Could not load notes" note={String(notes.error)} />}
           {notes.data && notes.data.notes.length === 0 && <Empty title={q ? 'No matches' : 'Nothing here yet'} note={q ? 'Try different words — search covers titles, bodies, entries and tags.' : 'Capture from Home, then file notes here.'} />}

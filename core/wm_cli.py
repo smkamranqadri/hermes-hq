@@ -707,6 +707,22 @@ def _proposal_result(pid, summary):
        "`wm note proposals --status rejected` before re-proposing.")
 
 
+def cmd_note_lint(args):
+    """Deterministic Library hygiene report — the lint lane's read surface.
+    Fix findings via proposals only (refile orphans, split oversized dumps,
+    propose-file --archive stale junk); tag duplicates go to the owner."""
+    rows = store.lint_library()
+    if not rows:
+        _p("Library lint: clean — no findings.")
+        return 0
+    _p("Library lint: %d finding(s)" % len(rows))
+    for f in rows:
+        ref = ("note #%s" % f["note_id"]) if f["note_id"] else "taxonomy"
+        title = (" (%s)" % f["title"][:50]) if f.get("title") else ""
+        _p("  [%-13s] %s%s: %s" % (f["check"], ref, title, f["detail"]))
+    return 0
+
+
 def cmd_note_propose_file(args):
     payload = {}
     if args.area_id is not None:
@@ -723,6 +739,8 @@ def cmd_note_propose_file(args):
         payload["type"] = args.type
     if args.archive:
         payload["archive"] = True
+    if args.new_tags:
+        payload["new_tags"] = [t.strip() for t in args.new_tags.split(",") if t.strip()]
     pid = store.create_proposal(
         "file", args.id, payload, summary=args.summary,
         classification="routine" if args.routine else "needs_attention")
@@ -771,6 +789,8 @@ def cmd_note_propose_split(args):
     if isinstance(parts, dict):
         parts = parts.get("parts")
     payload = {"parts": parts, "archive_original": not args.keep_original}
+    if args.new_tags:
+        payload["new_tags"] = [t.strip() for t in args.new_tags.split(",") if t.strip()]
     pid = store.create_proposal(
         "split", args.id, payload, summary=args.summary,
         classification="routine" if args.routine else "needs_attention")
@@ -1216,7 +1236,12 @@ def build_parser():
     ns.add_argument("id", type=int)
     ns.set_defaults(fn=cmd_note_show)
     note_sub.add_parser("areas", help="area tree with ids").set_defaults(fn=cmd_note_areas)
-    note_sub.add_parser("tags", help="tags in use with counts").set_defaults(fn=cmd_note_tags)
+    note_sub.add_parser("tags", help="the closed tag taxonomy with in-use counts "
+                                     "(propose only these; coin via --new-tags)"
+                        ).set_defaults(fn=cmd_note_tags)
+    note_sub.add_parser("lint", help="deterministic Library hygiene report "
+                                     "(fix findings via proposals only)"
+                        ).set_defaults(fn=cmd_note_lint)
     np_ = note_sub.add_parser("proposals", help="list proposals (rejected ones "
                                                "carry owner feedback — read it)")
     np_.add_argument("--status", default=None,
@@ -1238,6 +1263,10 @@ def build_parser():
     pf.add_argument("--archive", action="store_true",
                     help="junk/museum capture: file it straight to Archive "
                          "(searchable, reversible) instead of the Library")
+    pf.add_argument("--new-tags", dest="new_tags", default=None,
+                    help="comma-separated coinage declaration: tags used here "
+                         "that are NOT yet in the taxonomy (owner approval "
+                         "registers them)")
     pf.set_defaults(fn=cmd_note_propose_file)
     pc = note_sub.add_parser("propose-contradiction",
                              help="two notes disagree: propose flagging BOTH "
@@ -1274,6 +1303,9 @@ def build_parser():
     psp.add_argument("--routine", action="store_true")
     psp.add_argument("--keep-original", action="store_true", dest="keep_original",
                      help="do not archive the source note on approval")
+    psp.add_argument("--new-tags", dest="new_tags", default=None,
+                     help="comma-separated coinage declaration for tags used "
+                          "in the parts but not yet in the taxonomy")
     psp.set_defaults(fn=cmd_note_propose_split)
     bk = sub.add_parser("backup", help="write an online backup of wm.db")
     bk.add_argument("--dir", dest="dir", default=None)

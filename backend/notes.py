@@ -94,13 +94,19 @@ class NoteReminderIn(BaseModel):
 @router.get("/notes")
 def notes(status: str | None = None, area_id: int | None = None,
           project_id: int | None = None, type: str | None = None,
-          q: str | None = None,
+          tag: str | None = None, q: str | None = None,
           limit: int = Query(100, ge=1, le=500), offset: int = Query(0, ge=0)):
     if q:
         return {"notes": _engine(store.search_notes, q, limit=limit), "q": q}
     return {"notes": _engine(store.list_notes, status=status, area_id=area_id,
-                             project_id=project_id, note_type=type,
+                             project_id=project_id, note_type=type, tag=tag,
                              limit=limit, offset=offset)}
+
+
+@router.get("/notes/tags")
+def notes_tags():
+    """The closed taxonomy with in-use counts (Library tag filter + edit UIs)."""
+    return {"tags": store.list_note_tags(db_path=_db())}
 
 
 @router.get("/notes/tree")

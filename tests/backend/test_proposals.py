@@ -67,7 +67,7 @@ def test_librarian_surface_cannot_write_notes(env):
     from core import wm_cli
     note_parser = [a for a in wm_cli.build_parser()._subparsers._group_actions[0]
                    .choices["note"]._subparsers._group_actions[0].choices]
-    assert set(note_parser) == {"inbox", "show", "areas", "tags", "proposals",
+    assert set(note_parser) == {"inbox", "show", "areas", "tags", "lint", "proposals",
                                 "propose-file", "propose-split",
                                 "propose-contradiction", "propose-task"}
 
@@ -139,7 +139,8 @@ def test_file_proposal_approve_files_note(env):
     h = login(c)
     nid = store.create_note("Gym plan", body="3x week", db_path=db)
     pid = store.create_proposal(
-        "file", nid, {"area_id": area_id(store, db, "Health"), "tags": ["fitness"]},
+        "file", nid, {"area_id": area_id(store, db, "Health"), "tags": ["fitness"],
+                      "new_tags": ["fitness"]},
         summary="health note", classification="routine", db_path=db)
     r = c.post("/api/proposal/%d/approve" % pid, headers=h)
     assert r.status_code == 200
@@ -158,6 +159,7 @@ def test_split_proposal_round_trip(env):
     h = login(c)
     work = area_id(store, db, "Work")
     body = "dentist tuesday\n\nSimpliEd pricing: tier idea\n\nUrdu: نوٹ لکھنا"
+    store.create_note("tag seed", tags=["pricing"], status="archived", db_path=db)  # owner registers the tag
     nid = store.create_note("brain dump", body=body, db_path=db)
     parts = [
         {"title": "Dentist Tuesday", "body": "dentist tuesday"},                    # unfiled -> inbox
@@ -272,7 +274,8 @@ def test_cli_propose_split_and_file(env, tmp_path):
         len(p["payload"]["parts"]) == 2
     nid2 = store.create_note("cli single", db_path=db)
     assert wm_cli.main(["note", "propose-file", str(nid2), "--project", "alpha",
-                        "--tags", "ops,alpha", "--summary", "project note"]) == 0
+                        "--tags", "ops,alpha", "--new-tags", "ops,alpha",
+                        "--summary", "project note"]) == 0
     p2 = store.list_proposals(status="pending", note_id=nid2, db_path=db)[0]
     assert p2["payload"]["project_id"] == store.get_project(slug="alpha", db_path=db)["id"]
     # bad project slug is a clean CLI error, not a traceback
@@ -564,3 +567,115 @@ def test_nudge_survives_open_task_skip(env):
     assert fired[0][1] == "skipped"
     assert store.get_schedule(sid, db_path=db)["next_fire_at"] > _t.time() + \
         store.HEARTBEAT_NUDGE_SECONDS + 1                           # cron, not retry
+
+
+# ---- Phase 2b-ii: closed taxonomy / tag filter / lint lane ---------------
+
+def test_taxonomy_closed_for_agents_open_for_owner(env):
+    """Owner writes auto-register tags; agent proposals must reuse registered
+    tags or declare coinage via new_tags (registered only at owner approval)."""
+    c, store, db = env
+    h = login(c)
+    r = c.post("/api/notes", json={"title": "owner note", "tags": ["deen"]}, headers=h)
+    assert r.status_code == 200
+    assert "deen" in store.taxonomy_tags(db_path=db)                 # owner auto-adds
+    nid = store.create_note("agent target", db_path=db)
+    with pytest.raises(ValueError, match="not in the taxonomy"):     # DoD: rejected in code
+        store.create_proposal("file", nid, {"tags": ["freshcoin"]}, db_path=db)
+    with pytest.raises(ValueError, match="declared but not used"):
+        store.create_proposal("file", nid, {"tags": ["deen"], "new_tags": ["ghost"]},
+                              db_path=db)
+    pid = store.create_proposal("file", nid,
+                                {"tags": ["freshcoin"], "new_tags": ["freshcoin"],
+                                 "archive": True}, db_path=db)
+    assert "freshcoin" not in store.taxonomy_tags(db_path=db)        # not before approval
+    store.approve_proposal(pid, db_path=db)
+    assert "freshcoin" in store.taxonomy_tags(db_path=db)            # registered at approval
+    assert store.get_note(nid, db_path=db)["tags"] == ["freshcoin"]
+    # owner edit-before-approve may use a brand-new tag with no declaration
+    nid2 = store.create_note("second target", db_path=db)
+    pid2 = store.create_proposal("file", nid2, {"archive": True}, db_path=db)
+    r = c.post("/api/proposal/%d/approve" % pid2,
+               json={"payload": {"archive": True, "tags": ["ownercoin"]}}, headers=h)
+    assert r.status_code == 200
+    assert "ownercoin" in store.taxonomy_tags(db_path=db)
+
+
+def test_taxonomy_seeded_from_existing_tags(env):
+    c, store, db = env
+    store.create_note("n", tags=["legacy-tag"], db_path=db)
+    conn = store._connect(db)
+    with conn:
+        conn.execute("DELETE FROM note_tag_taxonomy")
+    conn.close()
+    store.init_db(db_path=db)                                        # migration reseeds
+    assert "legacy-tag" in store.taxonomy_tags(db_path=db)
+
+
+def test_library_tag_filter_composes_with_area(env):
+    """DoD 2b-ii: area+tag filter returns the right subset."""
+    c, store, db = env
+    work = area_id(store, db, "Work")
+    health = area_id(store, db, "Health")
+    a = store.create_note("w-tagged", status="active", area_id=work, tags=["deep"], db_path=db)
+    store.create_note("w-plain", status="active", area_id=work, db_path=db)
+    store.create_note("h-tagged", status="active", area_id=health, tags=["deep"], db_path=db)
+    got = store.list_notes(area_id=work, tag="deep", db_path=db)
+    assert [n["id"] for n in got] == [a]
+    assert len(store.list_notes(tag="deep", db_path=db)) == 2
+    h = login(c)
+    r = c.get("/api/notes?area_id=%d&tag=deep" % work, headers=h)
+    assert [n["id"] for n in r.json()["notes"]] == [a]
+    r = c.get("/api/notes/tags", headers=h)
+    assert any(t["tag"] == "deep" and t["count"] == 2 for t in r.json()["tags"])
+
+
+def test_lint_findings_and_notification(env):
+    """DoD 2b-ii: the lint report lands as a notification (deduped per day)."""
+    import time as _t
+    c, store, db = env
+    assert store.lint_library(db_path=db) == []                      # clean start
+    store.create_note("orphan", status="active", db_path=db)         # filed nowhere
+    old = store.create_note("stale", db_path=db)                     # inbox, backdated
+    big = store.create_note("dump", body="x" * (store.LINT_OVERSIZED_BODY + 1), db_path=db)
+    conn = store._connect(db)
+    with conn:
+        conn.execute("UPDATE notes SET created_at=? WHERE id=?",
+                     (_t.time() - 8 * 86400, old))
+        conn.execute("INSERT INTO note_links(note_id, kind, target_id, created_at) "
+                     "VALUES(?, 'task', 99999, ?)", (big, _t.time()))
+        conn.execute("INSERT OR IGNORE INTO note_tag_taxonomy(tag, created_at) "
+                     "VALUES('finance', 1), ('finances', 1)")
+    conn.close()
+    checks = {f["check"] for f in store.lint_library(db_path=db)}
+    assert {"orphan", "stale_inbox", "dangling_link", "oversized", "tag_duplicates"} <= checks
+    store.lint_library(notify=True, db_path=db)
+    store.lint_library(notify=True, db_path=db)                      # same-day dedupe
+    conn = store._connect(db)
+    n = conn.execute("SELECT COUNT(*) FROM notifications WHERE source_key LIKE 'lint:%'").fetchone()[0]
+    conn.close()
+    assert n == 1
+
+
+def test_lint_heartbeat_schedule(env):
+    """Clean library => lint schedule skips (no task, no model call); findings
+    mint the librarian fix run."""
+    c, store, db = env
+    sid = store.create_schedule("Library lint", "0 6 * * *", "alpha",
+                                "Second Brain: fix lint findings",
+                                assignee_profile="librarian",
+                                heartbeat="librarian_lint", db_path=db)
+    conn = store._connect(db)
+    with conn:
+        conn.execute("UPDATE schedules SET next_fire_at=1.0 WHERE id=?", (sid,))
+    conn.close()
+    assert store.fire_due(db_path=db)[0][1] == "skipped"             # clean => free
+    assert store.list_tasks(db_path=db) == []
+    store.create_note("orphan", status="active", db_path=db)
+    conn = store._connect(db)
+    with conn:
+        conn.execute("UPDATE schedules SET next_fire_at=1.0 WHERE id=?", (sid,))
+    conn.close()
+    sid_, kind, tid = store.fire_due(db_path=db)[0]
+    assert kind in ("fired", "late")
+    assert store.get_task(tid, db_path=db)["assignee_profile"] == "librarian"
