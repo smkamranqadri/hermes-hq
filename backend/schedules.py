@@ -92,6 +92,7 @@ class ScheduleIn(BaseModel):
     review_policy: str = "none"
     is_code: bool = False
     overlap: str = "skip"
+    one_shot: bool = False
     enabled: bool = True
 
 
@@ -100,7 +101,7 @@ def create(b: ScheduleIn):
     sid = _wrap(store.create_schedule, b.name, b.cron, b.project, b.title, b.description,
                 b.definition_of_done, assignee_profile=b.assignee, goal_id=b.goal_id,
                 review_policy=b.review_policy, is_code=b.is_code, zone=b.zone,
-                overlap=b.overlap, enabled=b.enabled, db_path=_db())
+                overlap=b.overlap, one_shot=b.one_shot, enabled=b.enabled, db_path=_db())
     return _view(store.get_schedule(sid, db_path=_db()))
 
 

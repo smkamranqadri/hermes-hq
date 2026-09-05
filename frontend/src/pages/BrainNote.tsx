@@ -53,7 +53,7 @@ export function BrainNote() {
         <div className="flex flex-wrap gap-2">
           <Btn onClick={() => setModal('task')}>+ Task</Btn>
           <Btn kind="ghost" onClick={() => setModal('reminder')}>+ Reminder</Btn>
-          <Btn kind="ghost" onClick={() => setModal('file')}>{n.status === 'inbox' ? 'File…' : 'Filing…'}</Btn>
+          <Btn kind="ghost" onClick={() => setModal('file')}>{n.status === 'inbox' ? 'File…' : 'Refile…'}</Btn>
         </div>
       </div>
 
@@ -61,9 +61,11 @@ export function BrainNote() {
         {n.status === 'inbox' && <Chip tone="accent">inbox</Chip>}
         {n.status === 'archived' && <Chip>archived</Chip>}
         <span className={clsx('font-mono text-[10px] uppercase tracking-wider', TYPE_TONE[n.type])}>{n.type}</span>
-        {areaLabel && <Chip tone="accent">{areaLabel}</Chip>}
+        <button type="button" onClick={() => setModal('file')} title="Edit area, project, tags" className="flex flex-wrap items-center gap-1.5 hover:opacity-80">
+          {areaLabel ? <Chip tone="accent">{areaLabel}</Chip> : <Chip>no area — set ✎</Chip>}
+          {n.tags.map(t => <Chip key={t}>{t}</Chip>)}
+        </button>
         {n.project && <Link to={`/projects/${n.project.slug}`}><Chip>{n.project.name}</Chip></Link>}
-        {n.tags.map(t => <Chip key={t}>{t}</Chip>)}
         <Chip>{n.authored_by}</Chip>
         <span className="ml-auto font-mono text-[10px] text-muted">updated {when(n.updated_at ?? n.created_at)}</span>
       </div>

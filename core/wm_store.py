@@ -435,6 +435,7 @@ CREATE TABLE IF NOT EXISTS schedules (
     review_policy      TEXT DEFAULT 'none',
     is_code            INTEGER DEFAULT 0,
     overlap            TEXT DEFAULT 'skip',      -- skip | always
+    one_shot           INTEGER DEFAULT 0,        -- fire once, then disable (Second Brain one-time reminders)
     enabled            INTEGER DEFAULT 1,
     created_at         REAL,
     updated_at         REAL,
@@ -577,6 +578,10 @@ def _migrate(conn):
     # ("Awaiting approval") instead of `done` — the owner closes or redirects.
     if "owner_approval" not in _table_columns(conn, "tasks"):
         conn.execute("ALTER TABLE tasks ADD COLUMN owner_approval INTEGER DEFAULT 0")
+    # Second Brain P1.1: one-time reminders — a one_shot schedule disables
+    # itself after its first real firing.
+    if "one_shot" not in _table_columns(conn, "schedules"):
+        conn.execute("ALTER TABLE schedules ADD COLUMN one_shot INTEGER DEFAULT 0")
 
 
 def init_db(db_path=None):
@@ -3887,7 +3892,8 @@ def _schedule_row(conn, sid):
 
 def create_schedule(name, cron, project_slug, title, description="", definition_of_done="",
                     assignee_profile=None, goal_id=None, review_policy="none", is_code=False,
-                    zone=None, overlap="skip", enabled=True, db_path=None):
+                    zone=None, overlap="skip", enabled=True, one_shot=False,
+                    db_path=None):
     from core import schedule as sch
     zone = zone or sch.DEFAULT_ZONE
     sch.validate(cron, zone)
@@ -3908,11 +3914,12 @@ def create_schedule(name, cron, project_slug, title, description="", definition_
             now = time.time()
             cur = conn.execute(
                 "INSERT INTO schedules(name, cron, zone, project_id, title, description, definition_of_done, "
-                "assignee_profile, goal_id, review_policy, is_code, overlap, enabled, created_at, updated_at, next_fire_at) "
-                "VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
+                "assignee_profile, goal_id, review_policy, is_code, overlap, one_shot, enabled, created_at, updated_at, next_fire_at) "
+                "VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
                 (name.strip(), cron, zone, proj["id"], title, description, definition_of_done,
                  assignee_profile, goal_id, review_policy, 1 if is_code else 0, overlap,
-                 1 if enabled else 0, now, now, sch.next_fires(cron, zone, 1, now)[0]))
+                 1 if one_shot else 0, 1 if enabled else 0, now, now,
+                 sch.next_fires(cron, zone, 1, now)[0]))
             sid = cur.lastrowid
         log_activity(action="schedule_create", project_id=proj["id"], detail=name, db_path=db_path)
         return sid
@@ -3923,7 +3930,8 @@ def create_schedule(name, cron, project_slug, title, description="", definition_
 def update_schedule(sid, db_path=None, **fields):
     from core import schedule as sch
     allowed = {"name", "cron", "zone", "title", "description", "definition_of_done",
-               "assignee_profile", "goal_id", "review_policy", "is_code", "overlap", "enabled"}
+               "assignee_profile", "goal_id", "review_policy", "is_code", "overlap",
+               "one_shot", "enabled"}
     bad = set(fields) - allowed
     if bad:
         raise ValueError("cannot update %s" % ", ".join(sorted(bad)))
@@ -3940,7 +3948,7 @@ def update_schedule(sid, db_path=None, **fields):
             cron = fields.get("cron", row["cron"]); zone = fields.get("zone", row["zone"])
             sch.validate(cron, zone)
             now = time.time()
-            sets = {k: (1 if v else 0) if k in ("is_code", "enabled") else v for k, v in fields.items()}
+            sets = {k: (1 if v else 0) if k in ("is_code", "enabled", "one_shot") else v for k, v in fields.items()}
             sets["updated_at"] = now
             if "cron" in fields or "zone" in fields or fields.get("enabled"):
                 sets["next_fire_at"] = sch.next_fires(cron, zone, 1, now)[0]
@@ -4087,15 +4095,22 @@ def fire_due(now=None, db_path=None):
             add_notification("needs_you", "Schedule '%s' failed" % row["name"], body=str(e)[:300],
                              href="/schedules", project_id=row["project_id"],
                              source_key="schedule-error:%s:%s" % (sid, int(row["next_fire_at"])), db_path=db_path)
-        # always advance next_fire_at past now (collapses any backlog of missed windows)
+        # always advance next_fire_at past now (collapses any backlog of missed
+        # windows). A one_shot schedule that actually FIRED retires instead:
+        # enabled=0, next_fire_at NULL (skipped/error keep it armed).
+        fired_once = row.get("one_shot") and kind in ("fired", "late")
         try:
-            nxt = sch.next_fires(row["cron"], row["zone"], 1, now)[0]
+            nxt = None if fired_once else sch.next_fires(row["cron"], row["zone"], 1, now)[0]
         except Exception:
             nxt = None
         conn = _connect(db_path)
         try:
             with conn:
-                conn.execute("UPDATE schedules SET next_fire_at=? WHERE id=?", (nxt, sid))
+                if fired_once:
+                    conn.execute("UPDATE schedules SET enabled=0, next_fire_at=NULL, updated_at=? WHERE id=?",
+                                 (now, sid))
+                else:
+                    conn.execute("UPDATE schedules SET next_fire_at=? WHERE id=?", (nxt, sid))
         finally:
             conn.close()
     return results

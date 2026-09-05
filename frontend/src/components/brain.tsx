@@ -153,18 +153,26 @@ export function NewTaskFromNoteModal({ n, onClose }: { n: NoteFull; onClose: () 
 export function NewReminderFromNoteModal({ n, onClose }: { n: NoteFull; onClose: () => void }) {
   const qc = useQueryClient(); const toast = useToast()
   const projects = useProjects()
+  const tomorrow = new Date(Date.now() + 86400000).toISOString().slice(0, 10)
   const [f, setF] = useState({ name: n.title, project: n.project?.slug ?? '', cron: '0 9 * * *' })
-  const [preset, setPreset] = useState({ kind: 'daily', at: '09:00', dow: 'mon', day: 1, every_hours: 6 })
+  const [preset, setPreset] = useState({ kind: 'once', at: '09:00', dow: 'mon', day: 1, every_hours: 6, date: tomorrow })
   const [busy, setBusy] = useState(false)
   useEffect(() => {
     if (preset.kind === 'custom') return
+    if (preset.kind === 'once') {
+      // one date + time -> a plain cron for that calendar moment; one_shot retires it after firing
+      const [hh, mm] = preset.at.split(':')
+      const d = new Date(preset.date + 'T00:00:00')
+      if (!Number.isNaN(d.getTime())) setF(x => ({ ...x, cron: `${Number(mm)} ${Number(hh)} ${d.getDate()} ${d.getMonth() + 1} *` }))
+      return
+    }
     post<{ cron: string }>('/api/schedules/compile', preset).then(r => setF(x => ({ ...x, cron: r.cron }))).catch(() => undefined)
   }, [preset])
   const save = async () => {
     if (!f.project) { toast('Pick a project — reminders mint tasks there', 'err'); return }
     setBusy(true)
     try {
-      const r = await post<{ id: number }>(`/api/note/${n.id}/new-reminder`, { name: f.name, project: f.project, cron: f.cron })
+      const r = await post<{ id: number }>(`/api/note/${n.id}/new-reminder`, { name: f.name, project: f.project, cron: f.cron, one_shot: preset.kind === 'once' })
       toast(`Reminder #${r.id} created & linked`); qc.invalidateQueries(); onClose()
     } catch (e) { toast(e instanceof Error ? e.message : String(e), 'err') } finally { setBusy(false) }
   }
@@ -181,20 +189,21 @@ export function NewReminderFromNoteModal({ n, onClose }: { n: NoteFull; onClose:
         <div className="grid grid-cols-2 gap-2">
           <Field label="Repeat">
             <SelectInput value={preset.kind} onChange={e => setPreset(x => ({ ...x, kind: e.target.value }))}>
-              {['daily', 'weekdays', 'weekly', 'monthly', 'custom'].map(k => <option key={k}>{k}</option>)}
+              {['once', 'daily', 'weekdays', 'weekly', 'monthly', 'custom'].map(k => <option key={k}>{k}</option>)}
             </SelectInput>
           </Field>
-          <Field label={preset.kind === 'custom' ? 'Cron' : 'At (PKT)'}>
+          <Field label={preset.kind === 'custom' ? 'Cron' : preset.kind === 'once' ? 'On (PKT)' : 'At (PKT)'}>
             {preset.kind === 'custom'
               ? <TextInput value={f.cron} onChange={e => setF(x => ({ ...x, cron: e.target.value }))} placeholder="0 9 * * *" />
               : <div className="flex gap-1">
+                  {preset.kind === 'once' && <TextInput type="date" value={preset.date} onChange={e => setPreset(x => ({ ...x, date: e.target.value }))} aria-label="Date" />}
                   <TextInput type="time" value={preset.at} onChange={e => setPreset(x => ({ ...x, at: e.target.value }))} aria-label="Time" />
                   {preset.kind === 'weekly' && <SelectInput value={preset.dow} onChange={e => setPreset(x => ({ ...x, dow: e.target.value }))}>{['mon', 'tue', 'wed', 'thu', 'fri', 'sat', 'sun'].map(d => <option key={d}>{d}</option>)}</SelectInput>}
                   {preset.kind === 'monthly' && <TextInput type="number" min={1} max={28} value={preset.day} onChange={e => setPreset(x => ({ ...x, day: Number(e.target.value) }))} className="w-20" aria-label="Day of month" />}
                 </div>}
           </Field>
         </div>
-        <p className="text-[11px] text-muted">Fires as a task assigned to you (never dispatched to agents) · cron <span className="font-mono">{f.cron}</span></p>
+        <p className="text-[11px] text-muted">{preset.kind === 'once' ? 'Fires once as a task assigned to you, then the reminder retires itself.' : 'Fires as a task assigned to you (never dispatched to agents).'} · cron <span className="font-mono">{f.cron}</span></p>
         <div className="flex justify-end gap-2"><Btn kind="ghost" onClick={onClose}>Cancel</Btn><Btn onClick={() => void save()} busy={busy}>Create & link</Btn></div>
       </div>
     </Modal>
