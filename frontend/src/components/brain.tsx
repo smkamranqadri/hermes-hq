@@ -56,11 +56,16 @@ function ArchiveChip() {
 
 export const KIND_LABEL: Record<Proposal['kind'], string> = { split: 'split', file: 'file', contradiction: 'contradiction', new_task: 'new task' }
 
-export function approveLabel(p: Proposal) {
-  if (p.kind === 'split') return `Approve split (${p.payload?.parts?.length ?? 0} notes)`
-  if (p.kind === 'file') return p.payload?.archive ? 'Approve → archive' : 'Approve filing'
-  if (p.kind === 'contradiction') return 'Mark both disputed'
-  return 'Create task & link'
+/** Record-keyed so adding a proposal kind fails compilation here instead of
+ * silently inheriting another kind's button copy. */
+export function approveLabel(p: Proposal): string {
+  const labels: Record<Proposal['kind'], string> = {
+    split: `Approve split (${p.payload?.parts?.length ?? 0} notes)`,
+    file: p.payload?.archive ? 'Approve → archive' : 'Approve filing',
+    contradiction: 'Mark both disputed',
+    new_task: 'Create task & link',
+  }
+  return labels[p.kind]
 }
 
 /** Kind-specific payload rendering, shared by the Review queue and the
@@ -81,14 +86,17 @@ export function ProposalPayloadView({ p, compact = false }: { p: Proposal; compa
       </>
     )
   }
-  if (p.kind === 'file' && p.payload) return <div className="mt-2 flex flex-wrap items-center gap-1.5">{chips(p.payload, true)}</div>
+  // A filed note always leaves the inbox, so file gets NO inbox-fallback
+  // chip; an unfiled split part genuinely lands back in the inbox, so split
+  // parts DO — that chip is the owner's pre-approval warning.
+  if (p.kind === 'file' && p.payload) return <div className="mt-2 flex flex-wrap items-center gap-1.5">{chips(p.payload)}</div>
   if (p.kind === 'split') return (
     <ol className="mt-2 flex flex-col gap-1.5">
       {(p.payload?.parts ?? []).map((part: SplitPart, i: number) => (
         <li key={i} className={clsx('rounded-lg border border-line-subtle bg-inset px-3', compact ? 'py-1.5' : 'py-2')}>
           <div className={clsx('flex flex-wrap items-center gap-1.5', compact && 'text-xs')}>
             <span className={clsx('font-medium', compact ? '' : 'text-xs')}>{part.title}</span>
-            {chips(part)}
+            {chips(part, true)}
           </div>
           {!compact && part.body && <p className="mt-1 line-clamp-2 text-[11px] text-muted">{part.body}</p>}
         </li>
@@ -154,7 +162,34 @@ export function NoteRow({ n, areas, showBody = true }: { n: Note; areas?: Area[]
   )
 }
 
-const tagsFrom = (s: string) => s.split(',').map(t => t.trim()).filter(Boolean)
+export const tagsFrom = (s: string) => s.split(',').map(t => t.trim()).filter(Boolean)
+
+/** Two-level area picker — the ONE place the area optgroup tree is rendered
+ * (FileNoteModal and the proposal editor both consume it). */
+export function AreaSelect({ value, onChange, areas }: { value: string; onChange: (v: string) => void; areas: Area[] }) {
+  const roots = areas.filter(a => !a.parent_id)
+  return (
+    <SelectInput value={value} onChange={e => onChange(e.target.value)} aria-label="Area">
+      <option value="">— no area —</option>
+      {roots.map(r => (
+        <optgroup key={r.id} label={r.name}>
+          <option value={r.id}>{r.name}</option>
+          {areas.filter(a => a.parent_id === r.id).map(a => <option key={a.id} value={a.id}>{r.name} / {a.name}</option>)}
+        </optgroup>
+      ))}
+    </SelectInput>
+  )
+}
+
+/** Project picker by id — shared for the same reason. */
+export function ProjectSelect({ value, onChange, projects }: { value: string; onChange: (v: string) => void; projects: { id: number; name: string }[] }) {
+  return (
+    <SelectInput value={value} onChange={e => onChange(e.target.value)} aria-label="Project">
+      <option value="">— no project —</option>
+      {projects.map(p => <option key={p.id} value={p.id}>{p.name}</option>)}
+    </SelectInput>
+  )
+}
 
 /** File / edit metadata: area, project, tags, type — the manual filing path
  * until the librarian proposes these in Phase 2. Filing an inbox note also
@@ -179,26 +214,14 @@ export function FileNoteModal({ n, onClose }: { n: Note; onClose: () => void }) 
       toast(n.status === 'inbox' ? 'Filed' : 'Saved'); qc.invalidateQueries(); onClose()
     } catch (e) { toast(e instanceof Error ? e.message : String(e), 'err') } finally { setBusy(false) }
   }
-  const roots = (areas.data?.areas ?? []).filter(a => !a.parent_id)
   return (
     <Modal title={n.status === 'inbox' ? `File “${n.title}”` : 'Edit filing'} onClose={onClose}>
       <div className="flex flex-col gap-3">
         <Field label="Area">
-          <SelectInput value={f.area_id} onChange={e => setF(x => ({ ...x, area_id: e.target.value }))}>
-            <option value="">— none —</option>
-            {roots.map(r => (
-              <optgroup key={r.id} label={r.name}>
-                <option value={r.id}>{r.name}</option>
-                {(areas.data?.areas ?? []).filter(a => a.parent_id === r.id).map(a => <option key={a.id} value={a.id}>{r.name} / {a.name}</option>)}
-              </optgroup>
-            ))}
-          </SelectInput>
+          <AreaSelect value={f.area_id} onChange={v => setF(x => ({ ...x, area_id: v }))} areas={areas.data?.areas ?? []} />
         </Field>
         <Field label="Project" hint="Project-linked notes show on that project's page.">
-          <SelectInput value={f.project_id} onChange={e => setF(x => ({ ...x, project_id: e.target.value }))}>
-            <option value="">— none —</option>
-            {(projects.data?.projects ?? []).map(p => <option key={p.id} value={p.id}>{p.name}</option>)}
-          </SelectInput>
+          <ProjectSelect value={f.project_id} onChange={v => setF(x => ({ ...x, project_id: v }))} projects={projects.data?.projects ?? []} />
         </Field>
         <Field label="Type">
           <SelectInput value={f.type} onChange={e => setF(x => ({ ...x, type: e.target.value }))}>

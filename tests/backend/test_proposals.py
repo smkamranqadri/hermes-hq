@@ -368,10 +368,15 @@ def test_contradiction_round_trip(env):
     assert na["disputed"] == 1 and nb["disputed"] == 1
     assert any(l["kind"] == "note" and l["target_id"] == b for l in na["links"])
     assert any(l["kind"] == "note" and l["target_id"] == a for l in nb["links"])
+    # the adjudicated pair can't come back as a fresh proposal (either way round)
+    with pytest.raises(ValueError, match="already flagged disputed"):
+        store.create_proposal("contradiction", b, {"other_note_id": a}, db_path=db)
     h = login(c)
     r = c.post("/api/note/%d/edit" % a, json={"disputed": False}, headers=h)
     assert r.status_code == 200 and r.json()["note"]["disputed"] == 0
     assert store.get_note(b, db_path=db)["disputed"] == 1     # per-note clear
+    # once one side is resolved, a NEW contradiction may be proposed again
+    store.create_proposal("contradiction", a, {"other_note_id": b}, db_path=db)
 
 
 def test_new_task_round_trip_via_cli(env, capsys):
@@ -502,20 +507,60 @@ def test_capture_nudge_debounced(env):
 
 def test_triage_now(env):
     """The impatience button: mints an ingest task only when there is real
-    work and no ingest task already open — never a silent model spend."""
+    work and no ingest task already open — never a silent model spend. Every
+    owner-triggered skip lands in the schedule's run history like fire_due's."""
     c, store, db = env
     assert c.post("/api/brain/triage-now").status_code == 401            # owner wall
     h = login(c)
     assert c.post("/api/brain/triage-now", headers=h).status_code == 409  # no schedule
-    store.create_schedule("Librarian ingest", "*/30 * * * *", "alpha",
-                          "Triage the Second Brain inbox",
-                          assignee_profile="librarian",
-                          heartbeat="librarian_ingest", db_path=db)
+    sid = store.create_schedule("Librarian ingest", "*/30 * * * *", "alpha",
+                                "Triage the Second Brain inbox",
+                                assignee_profile="librarian",
+                                heartbeat="librarian_ingest", db_path=db)
     r = c.post("/api/brain/triage-now", headers=h).json()
     assert r["queued"] is False and "nothing to triage" in r["detail"]
     assert store.list_tasks(db_path=db) == []
+    runs = store.list_schedule_runs(sid, db_path=db)
+    assert runs[0]["kind"] == "skipped" and "manual" in runs[0]["detail"]
     store.create_note("untriaged capture", db_path=db)
     r = c.post("/api/brain/triage-now", headers=h).json()
     assert r["queued"] is True and store.get_task(r["task_id"], db_path=db)
     r2 = c.post("/api/brain/triage-now", headers=h).json()
     assert r2["queued"] is False and r2["task_id"] == r["task_id"]       # already open
+    assert store.list_schedule_runs(sid, db_path=db)[0]["kind"] == "skipped"
+
+
+def test_nudge_survives_open_task_skip(env):
+    """A heartbeat schedule that skips ONLY because the previous ingest task
+    is still open re-arms a short retry — the capture nudge is not consumed
+    by the overlap gate. Idle skips still sleep until cron."""
+    import time as _t
+    c, store, db = env
+    # yearly cron: the next cron fire is guaranteed far away, so the
+    # assertions can't flake near a boundary
+    sid = store.create_schedule("Librarian ingest", "0 0 1 1 *", "alpha",
+                                "Triage", assignee_profile="librarian",
+                                heartbeat="librarian_ingest", db_path=db)
+    tid = store.create_task("alpha", "previous ingest", assignee_profile="librarian",
+                            db_path=db)
+    store.mark_ready(tid, db_path=db)                    # 'ready' is an OPEN status
+    conn = store._connect(db)
+    with conn:
+        conn.execute("UPDATE schedules SET next_fire_at=1.0, last_task_id=? WHERE id=?",
+                     (tid, sid))
+    conn.close()
+    nid = store.create_note("untriaged capture", db_path=db)   # heartbeat has work
+    fired = store.fire_due(db_path=db)
+    assert fired[0][1] == "skipped"
+    nxt = store.get_schedule(sid, db_path=db)["next_fire_at"]
+    assert nxt <= _t.time() + store.HEARTBEAT_NUDGE_SECONDS + 1     # short retry
+    # idle overlap-skip (work all triaged) sleeps until cron, no busy-poll
+    store.create_proposal("file", nid, {"archive": True}, db_path=db)
+    conn = store._connect(db)
+    with conn:
+        conn.execute("UPDATE schedules SET next_fire_at=1.0 WHERE id=?", (sid,))
+    conn.close()
+    fired = store.fire_due(db_path=db)
+    assert fired[0][1] == "skipped"
+    assert store.get_schedule(sid, db_path=db)["next_fire_at"] > _t.time() + \
+        store.HEARTBEAT_NUDGE_SECONDS + 1                           # cron, not retry

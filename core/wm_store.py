@@ -4110,12 +4110,12 @@ def fire_due(now=None, db_path=None):
     results = []
     for row in due:
         sid = row["id"]
+        hb, hb_idle, open_prev, kind = "", False, False, "error"
         try:
             # Heartbeat early-exit (Second Brain P2a): a named deterministic
             # check runs BEFORE any task is minted. "Nothing new" records a
             # skipped firing — no task, no agent run, no model call.
             hb = row.get("heartbeat") or ""
-            hb_idle = False
             if hb:
                 has_work, hb_detail = heartbeat_check(hb, db_path=db_path)
                 hb_idle = not has_work
@@ -4164,6 +4164,13 @@ def fire_due(now=None, db_path=None):
             nxt = None if fired_once else sch.next_fires(row["cron"], row["zone"], 1, now)[0]
         except Exception:
             nxt = None
+        # 2b-i: a heartbeat schedule that skipped ONLY because the previous
+        # task is still open has pending work (a capture nudge would otherwise
+        # be silently consumed by this gate) — re-arm a short retry instead of
+        # sleeping until cron, so the run starts soon after the task closes.
+        # Heartbeat-idle skips still wait for cron.
+        if nxt is not None and kind == "skipped" and hb and not hb_idle and open_prev:
+            nxt = min(nxt, now + HEARTBEAT_NUDGE_SECONDS)
         conn = _connect(db_path)
         try:
             with conn:
@@ -4614,6 +4621,10 @@ def list_note_tags(db_path=None):
 # HTTP API. Keep it that way: do not add sanctioned agent paths into notes.
 # ---------------------------------------------------------------------------
 PROPOSAL_KINDS = ("split", "file", "contradiction", "new_task")
+# Kinds that must ALWAYS cross the owner's eyes: never classified routine, so
+# bulk-approve can't silently mint a task or flag a dispute. When adding a
+# kind (P4: wiki_update), decide its place here explicitly.
+OWNER_EYES_KINDS = ("contradiction", "new_task")
 PROPOSAL_STATUSES = ("pending", "approved", "rejected", "superseded")
 PROPOSAL_CLASSES = ("routine", "needs_attention")
 MAX_SPLIT_PARTS = 50
@@ -4691,6 +4702,20 @@ def _validate_proposal_payload(conn, kind, payload, note_id=None):
         exp = payload.get("explanation")
         if exp is not None and (not isinstance(exp, str) or len(exp) > 2000):
             raise ValueError("contradiction explanation must be a string (max 2000)")
+        if note_id is not None:
+            # An adjudicated pair (both still disputed + cross-linked) must not
+            # come back as a fresh proposal — the owner already decided it.
+            mine = conn.execute("SELECT disputed FROM notes WHERE id=?",
+                                (note_id,)).fetchone()
+            theirs = conn.execute("SELECT disputed FROM notes WHERE id=?",
+                                  (other,)).fetchone()
+            linked = conn.execute(
+                "SELECT 1 FROM note_links WHERE note_id=? AND kind='note' AND target_id=?",
+                (note_id, other)).fetchone()
+            if mine and theirs and linked and mine["disputed"] and theirs["disputed"]:
+                raise ValueError("notes #%s and #%s are already flagged disputed "
+                                 "(adjudicated) — do not re-propose this pair"
+                                 % (note_id, other))
     elif kind == "new_task":
         # Graduation stays create-and-link: approval creates a real HQ task
         # linked to the note; the note stays a note.
@@ -4730,9 +4755,7 @@ def create_proposal(kind, note_id, payload, summary="", classification="needs_at
     note (a re-read replaces, never stacks). Notifies the owner (needs_you)."""
     if classification not in PROPOSAL_CLASSES:
         raise ValueError("classification must be one of %s" % (PROPOSAL_CLASSES,))
-    if kind in ("contradiction", "new_task") and classification == "routine":
-        # Bulk-approve must never silently mint a task or flag a dispute —
-        # these kinds always cross the owner's eyes (Knowledge → rules).
+    if kind in OWNER_EYES_KINDS and classification == "routine":
         raise ValueError("%s proposals are always needs_attention — "
                          "the owner reads them before anything happens" % kind)
     if not isinstance(payload, dict):
@@ -4843,10 +4866,11 @@ def approve_proposal(pid, payload_override=None, db_path=None):
     new_task      -> create a real HQ task and link it (create-and-link).
 
     `payload_override` is the owner's edit-before-approve: the edited payload
-    is validated, persisted onto the proposal row (the record shows what was
-    actually approved), then applied. Everything is re-validated against
-    current state — the note or an area may have changed since the librarian
-    proposed. Returns the decided proposal.
+    is validated, applied, and only then persisted onto the proposal row (so
+    the record shows what was actually approved, while a FAILED approval
+    leaves the librarian's original payload intact). Everything is
+    re-validated against current state — the note or an area may have changed
+    since the librarian proposed. Returns the decided proposal.
     """
     p = get_proposal(pid, db_path=db_path)
     if p is None:
@@ -4871,22 +4895,22 @@ def approve_proposal(pid, payload_override=None, db_path=None):
         _validate_proposal_payload(conn, p["kind"], payload, note_id=p["note_id"])
     finally:
         conn.close()
+    # Revisions/activity name whoever authored the applied payload.
+    actor = "owner" if edited else "librarian"
     result = {}
     if p["kind"] == "file":
         fields = {k: payload[k] for k in ("area_id", "project_id", "tags")
                   if payload.get(k) is not None}
         archived = bool(payload.get("archive"))
-        update_note(p["note_id"], edited_by="librarian",
+        update_note(p["note_id"], edited_by=actor,
                     note_type=payload.get("type"),
                     status="archived" if archived else "active",
                     db_path=db_path, **fields)
         result = {"filed": True, "archived": archived}
     elif p["kind"] == "contradiction":
         other = payload["other_note_id"]
-        if get_note(other, db_path=db_path) is None:
-            raise ValueError("contradicting note #%s no longer exists" % other)
         for a, b in ((p["note_id"], other), (other, p["note_id"])):
-            update_note(a, edited_by="librarian", disputed=True, db_path=db_path)
+            update_note(a, edited_by=actor, disputed=True, db_path=db_path)
             link_note(a, "note", b, db_path=db_path)
         result = {"disputed": [p["note_id"], other]}
     elif p["kind"] == "new_task":
@@ -4918,9 +4942,14 @@ def approve_proposal(pid, payload_override=None, db_path=None):
                 area_id=part.get("area_id"), project_id=part.get("project_id"),
                 tags=part.get("tags"), authored_by="owner", db_path=db_path))
         if payload.get("archive_original", True):
-            update_note(p["note_id"], edited_by="librarian", status="archived",
+            update_note(p["note_id"], edited_by=actor, status="archived",
                         db_path=db_path)
         result = {"note_ids": ids}
+        # Unfiled parts land back in the inbox as fresh untriaged notes — give
+        # them the same ~2 min ingest latency a direct capture gets.
+        if any(part.get("area_id") is None and part.get("project_id") is None
+               for part in payload["parts"]):
+            nudge_heartbeat_schedules("librarian_ingest", db_path=db_path)
     now = time.time()
     conn = _connect(db_path)
     try:
@@ -5021,3 +5050,54 @@ def nudge_heartbeat_schedules(name, delay=HEARTBEAT_NUDGE_SECONDS, db_path=None)
             return cur.rowcount
     finally:
         conn.close()
+
+
+def trigger_heartbeat_schedule(name, db_path=None):
+    """Owner-triggered fire of the named heartbeat schedule ("Triage now").
+
+    Applies the SAME honesty gates as fire_due — heartbeat idle and the
+    schedule's own overlap policy — so the button can never silently spend a
+    model run, and records a skipped firing in the run history like the
+    dispatcher would. Returns {"queued", "task_id", "detail"}; raises
+    ValueError when no enabled schedule carries this heartbeat.
+    """
+    conn = _connect(db_path)
+    try:
+        row = conn.execute(
+            "SELECT s.*, p.slug AS project_slug, t.status AS last_task_status "
+            "FROM schedules s JOIN projects p ON p.id = s.project_id "
+            "LEFT JOIN tasks t ON t.id = s.last_task_id "
+            "WHERE s.enabled=1 AND s.heartbeat=? ORDER BY s.id LIMIT 1",
+            (name,)).fetchone()
+    finally:
+        conn.close()
+    if row is None:
+        raise ValueError("no enabled schedule with heartbeat %r — create or "
+                         "resume one under Schedules" % name)
+    row = dict(row)
+    has_work, detail = heartbeat_check(name, db_path=db_path)
+    if not has_work:
+        conn = _connect(db_path)
+        try:
+            with conn:
+                _record_schedule_run(conn, row["id"], "skipped",
+                                     detail="manual: heartbeat nothing new (%s)" % detail)
+        finally:
+            conn.close()
+        return {"queued": False, "task_id": None,
+                "detail": "nothing to triage (%s)" % detail}
+    if (row["overlap"] == "skip" and row["last_task_id"] is not None
+            and row["last_task_status"] in OPEN_TASK_STATUSES):
+        conn = _connect(db_path)
+        try:
+            with conn:
+                _record_schedule_run(conn, row["id"], "skipped", task_id=row["last_task_id"],
+                                     detail="manual: previous task #%s still %s"
+                                            % (row["last_task_id"], row["last_task_status"]))
+        finally:
+            conn.close()
+        return {"queued": False, "task_id": row["last_task_id"],
+                "detail": "ingest task #%s is already %s"
+                          % (row["last_task_id"], row["last_task_status"])}
+    tid = _spawn_from_schedule(row, "manual", time.time(), db_path=db_path)
+    return {"queued": True, "task_id": tid, "detail": detail}
