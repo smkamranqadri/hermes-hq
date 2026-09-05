@@ -10,13 +10,14 @@ import { Btn, Field, Modal, SelectInput, TextArea, TextInput } from './Modal'
 import { Chip } from './ui'
 import { useToast } from './Toast'
 
-/** Heading-row pill nav: Home · Library · Review (Review lands in Phase 2). */
-export function BrainSubNav({ inbox }: { inbox?: number }) {
+/** Heading-row pill nav: Home · Library · Review. */
+export function BrainSubNav({ inbox, review }: { inbox?: number; review?: number }) {
+  const pill = ({ isActive }: { isActive: boolean }) => clsx('rounded-full px-3 py-1 text-[13px] whitespace-nowrap', isActive ? 'bg-fg font-semibold text-bg' : 'text-muted hover:text-fg')
   return (
     <nav className="flex w-fit items-center gap-1 rounded-full border border-line bg-glass p-1">
-      <NavLink to="/brain" end className={({ isActive }) => clsx('rounded-full px-3 py-1 text-[13px] whitespace-nowrap', isActive ? 'bg-fg font-semibold text-bg' : 'text-muted hover:text-fg')}>Home{typeof inbox === 'number' && inbox > 0 ? ` · ${inbox}` : ''}</NavLink>
-      <NavLink to="/brain/library" className={({ isActive }) => clsx('rounded-full px-3 py-1 text-[13px] whitespace-nowrap', isActive ? 'bg-fg font-semibold text-bg' : 'text-muted hover:text-fg')}>Library</NavLink>
-      <span className="cursor-default rounded-full px-3 py-1 text-[13px] whitespace-nowrap text-muted opacity-50" title="Librarian review queue ships in Phase 2">Review</span>
+      <NavLink to="/brain" end className={pill}>Home{typeof inbox === 'number' && inbox > 0 ? ` · ${inbox}` : ''}</NavLink>
+      <NavLink to="/brain/library" className={pill}>Library</NavLink>
+      <NavLink to="/brain/review" className={pill}>Review{typeof review === 'number' && review > 0 ? ` · ${review}` : ''}</NavLink>
     </nav>
   )
 }
@@ -239,5 +240,5 @@ export function CaptureBox({ compact = false }: { compact?: boolean }) {
 /** Library tree counts used by the Home sidebar too. */
 export function useBrainCounts() {
   const tree = useNotesTree()
-  return { tree, inbox: tree.data?.counts?.inbox ?? 0 }
+  return { tree, inbox: tree.data?.counts?.inbox ?? 0, review: tree.data?.counts?.proposals_pending ?? 0 }
 }

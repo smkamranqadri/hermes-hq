@@ -119,7 +119,7 @@ DEFAULT_PROFILE = "default"
 # malformed name can never be handed to `hermes --profile <name>` as if it were
 # a real specialist profile.
 SPECIALIST_PROFILES = ("analyst", "writer", "marketer", "coder", "uiux",
-                       "reviewer")
+                       "reviewer", "librarian")
 
 # Second Brain: the reserved HUMAN assignee. A task assigned to `owner` is the
 # owner's own todo — the dispatcher's claim/candidate predicates skip it
@@ -436,6 +436,7 @@ CREATE TABLE IF NOT EXISTS schedules (
     is_code            INTEGER DEFAULT 0,
     overlap            TEXT DEFAULT 'skip',      -- skip | always
     one_shot           INTEGER DEFAULT 0,        -- fire once, then disable (Second Brain one-time reminders)
+    heartbeat          TEXT DEFAULT '',          -- named cheap pre-fire check; nothing new => skipped, no task
     enabled            INTEGER DEFAULT 1,
     created_at         REAL,
     updated_at         REAL,
@@ -514,6 +515,27 @@ CREATE TABLE IF NOT EXISTS note_links (
     PRIMARY KEY (note_id, kind, target_id)
 );
 
+-- Second Brain Phase 2a: the librarian's ONLY write surface. A proposal is a
+-- suggested change to the Library; nothing here touches the note tables until
+-- the OWNER approves it (approve_proposal). Agents write via `wm note
+-- propose-*`; the review queue reads/decides via the owner-session HTTP API.
+CREATE TABLE IF NOT EXISTS proposals (
+    id             INTEGER PRIMARY KEY,
+    kind           TEXT NOT NULL,               -- split | file (2b adds wiki_update | contradiction | new_task)
+    note_id        INTEGER REFERENCES notes(id),
+    payload        TEXT NOT NULL DEFAULT '{}',  -- JSON, kind-specific (validated in create_proposal)
+    summary        TEXT DEFAULT '',
+    classification TEXT DEFAULT 'needs_attention', -- routine | needs_attention (routine bulk-approves)
+    status         TEXT DEFAULT 'pending',      -- pending | approved | rejected | superseded
+    author         TEXT DEFAULT 'librarian',
+    feedback       TEXT,                        -- owner feedback on reject; librarian reads it on revision
+    result         TEXT,                        -- JSON record of what approval produced (e.g. {"note_ids": [...]})
+    created_at     REAL,
+    decided_at     REAL
+);
+CREATE INDEX IF NOT EXISTS idx_proposals_status ON proposals(status);
+CREATE INDEX IF NOT EXISTS idx_proposals_note   ON proposals(note_id);
+
 CREATE INDEX IF NOT EXISTS idx_notes_status   ON notes(status);
 CREATE INDEX IF NOT EXISTS idx_notes_area     ON notes(area_id);
 CREATE INDEX IF NOT EXISTS idx_notes_project  ON notes(project_id);
@@ -582,6 +604,11 @@ def _migrate(conn):
     # itself after its first real firing.
     if "one_shot" not in _table_columns(conn, "schedules"):
         conn.execute("ALTER TABLE schedules ADD COLUMN one_shot INTEGER DEFAULT 0")
+    # Second Brain P2a: a schedule can name a cheap deterministic pre-fire
+    # check (heartbeat). When the check says "nothing new", fire_due records a
+    # skipped run and mints NO task — so no agent run and no model call.
+    if "heartbeat" not in _table_columns(conn, "schedules"):
+        conn.execute("ALTER TABLE schedules ADD COLUMN heartbeat TEXT DEFAULT ''")
 
 
 def init_db(db_path=None):
@@ -3879,6 +3906,10 @@ def push_subscription_failed(sid, db_path=None):
 # spawned task is marked ready immediately (create_task parks goal-less tasks).
 # ---------------------------------------------------------------------------
 OVERLAPS = ("skip", "always")
+# Named pre-fire heartbeat checks a schedule may carry ("" = none). Each name
+# maps to a deterministic predicate in heartbeat_check(); adding a check means
+# adding it BOTH places. Kept closed so a typo cannot silently disable a run.
+SCHEDULE_HEARTBEATS = ("", "librarian_ingest")
 OPEN_TASK_STATUSES = ("planned", "waiting_approval", "ready", "running", "needs_review", "rework", "stalled", "blocked", "manual")
 
 
@@ -3893,7 +3924,7 @@ def _schedule_row(conn, sid):
 def create_schedule(name, cron, project_slug, title, description="", definition_of_done="",
                     assignee_profile=None, goal_id=None, review_policy="none", is_code=False,
                     zone=None, overlap="skip", enabled=True, one_shot=False,
-                    db_path=None):
+                    heartbeat="", db_path=None):
     from core import schedule as sch
     zone = zone or sch.DEFAULT_ZONE
     sch.validate(cron, zone)
@@ -3901,6 +3932,8 @@ def create_schedule(name, cron, project_slug, title, description="", definition_
         raise ValueError("overlap must be one of %s" % (OVERLAPS,))
     if review_policy not in REVIEW_POLICIES:
         raise ValueError("review_policy must be one of %s" % (REVIEW_POLICIES,))
+    if (heartbeat or "") not in SCHEDULE_HEARTBEATS:
+        raise ValueError("heartbeat must be one of %s" % (SCHEDULE_HEARTBEATS,))
     if not (name or "").strip() or not (title or "").strip():
         raise ValueError("schedule needs a name and a task title")
     validate_assignee(assignee_profile)
@@ -3914,11 +3947,11 @@ def create_schedule(name, cron, project_slug, title, description="", definition_
             now = time.time()
             cur = conn.execute(
                 "INSERT INTO schedules(name, cron, zone, project_id, title, description, definition_of_done, "
-                "assignee_profile, goal_id, review_policy, is_code, overlap, one_shot, enabled, created_at, updated_at, next_fire_at) "
-                "VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
+                "assignee_profile, goal_id, review_policy, is_code, overlap, one_shot, heartbeat, enabled, created_at, updated_at, next_fire_at) "
+                "VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
                 (name.strip(), cron, zone, proj["id"], title, description, definition_of_done,
                  assignee_profile, goal_id, review_policy, 1 if is_code else 0, overlap,
-                 1 if one_shot else 0, 1 if enabled else 0, now, now,
+                 1 if one_shot else 0, heartbeat or "", 1 if enabled else 0, now, now,
                  sch.next_fires(cron, zone, 1, now)[0]))
             sid = cur.lastrowid
         log_activity(action="schedule_create", project_id=proj["id"], detail=name, db_path=db_path)
@@ -3931,12 +3964,16 @@ def update_schedule(sid, db_path=None, **fields):
     from core import schedule as sch
     allowed = {"name", "cron", "zone", "title", "description", "definition_of_done",
                "assignee_profile", "goal_id", "review_policy", "is_code", "overlap",
-               "one_shot", "enabled"}
+               "one_shot", "heartbeat", "enabled"}
     bad = set(fields) - allowed
     if bad:
         raise ValueError("cannot update %s" % ", ".join(sorted(bad)))
     if "overlap" in fields and fields["overlap"] not in OVERLAPS:
         raise ValueError("overlap must be one of %s" % (OVERLAPS,))
+    if "heartbeat" in fields:
+        fields["heartbeat"] = fields["heartbeat"] or ""
+        if fields["heartbeat"] not in SCHEDULE_HEARTBEATS:
+            raise ValueError("heartbeat must be one of %s" % (SCHEDULE_HEARTBEATS,))
     if "review_policy" in fields and fields["review_policy"] not in REVIEW_POLICIES:
         raise ValueError("review_policy must be one of %s" % (REVIEW_POLICIES,))
     if "assignee_profile" in fields:
@@ -4068,9 +4105,27 @@ def fire_due(now=None, db_path=None):
     for row in due:
         sid = row["id"]
         try:
+            # Heartbeat early-exit (Second Brain P2a): a named deterministic
+            # check runs BEFORE any task is minted. "Nothing new" records a
+            # skipped firing — no task, no agent run, no model call.
+            hb = row.get("heartbeat") or ""
+            hb_idle = False
+            if hb:
+                has_work, hb_detail = heartbeat_check(hb, db_path=db_path)
+                hb_idle = not has_work
             open_prev = (row["overlap"] == "skip" and row["last_task_id"] is not None
                          and row["last_task_status"] in OPEN_TASK_STATUSES)
-            if open_prev:
+            if hb_idle:
+                kind = "skipped"
+                conn = _connect(db_path)
+                try:
+                    with conn:
+                        _record_schedule_run(conn, sid, "skipped",
+                                             detail="heartbeat: nothing new (%s)" % hb_detail)
+                finally:
+                    conn.close()
+                tid = None
+            elif open_prev:
                 kind = "skipped"
                 conn = _connect(db_path)
                 try:
@@ -4508,6 +4563,315 @@ def notes_tree(db_path=None):
             "SELECT COUNT(*) AS n FROM notes WHERE status='inbox'").fetchone()["n"]
         counts["archived"] = conn.execute(
             "SELECT COUNT(*) AS n FROM notes WHERE status='archived'").fetchone()["n"]
+        counts["proposals_pending"] = conn.execute(
+            "SELECT COUNT(*) AS n FROM proposals WHERE status='pending'").fetchone()["n"]
         return {"areas": areas, "projects": projects, "counts": counts}
     finally:
         conn.close()
+
+
+def list_note_tags(db_path=None):
+    """Distinct tags in use with counts — the librarian's taxonomy orientation
+    read (2a ships tag DISCIPLINE: reuse what exists, coin sparingly; the
+    enforced closed taxonomy lands with 2b)."""
+    conn = _connect(db_path)
+    try:
+        counts = {}
+        for r in conn.execute("SELECT tags FROM notes WHERE status != 'archived'"):
+            try:
+                for t in json.loads(r["tags"] or "[]"):
+                    counts[t] = counts.get(t, 0) + 1
+            except ValueError:
+                continue
+        return sorted(({"tag": t, "count": n} for t, n in counts.items()),
+                      key=lambda x: (-x["count"], x["tag"]))
+    finally:
+        conn.close()
+
+
+# ---------------------------------------------------------------------------
+# Second Brain Phase 2a — librarian proposals.
+#
+# The librarian NEVER writes the note tables. Its entire write surface is
+# create_proposal (via `wm note propose-*`); every mutation of notes happens
+# only in approve_proposal, which the OWNER reaches through the cookie-session
+# HTTP API. Keep it that way: do not add sanctioned agent paths into notes.
+# ---------------------------------------------------------------------------
+PROPOSAL_KINDS = ("split", "file")
+PROPOSAL_STATUSES = ("pending", "approved", "rejected", "superseded")
+PROPOSAL_CLASSES = ("routine", "needs_attention")
+MAX_SPLIT_PARTS = 50
+
+
+def _validate_filing(conn, part, where):
+    """Validate the optional filing fields (area_id/project_id/tags/type) of a
+    file payload or a split part. Raises ValueError with a located message."""
+    if not isinstance(part, dict):
+        raise ValueError("%s must be an object" % where)
+    unknown = set(part) - {"title", "body", "area_id", "project_id", "tags", "type"}
+    if unknown:
+        raise ValueError("%s has unknown fields: %s" % (where, ", ".join(sorted(unknown))))
+    if part.get("area_id") is not None:
+        if conn.execute("SELECT id FROM areas WHERE id=?", (part["area_id"],)).fetchone() is None:
+            raise ValueError("%s: no such area: %r" % (where, part["area_id"]))
+    if part.get("project_id") is not None:
+        if conn.execute("SELECT id FROM projects WHERE id=?", (part["project_id"],)).fetchone() is None:
+            raise ValueError("%s: no such project: %r" % (where, part["project_id"]))
+    if part.get("type") is not None and part["type"] not in NOTE_TYPES:
+        raise ValueError("%s: invalid note type %r" % (where, part["type"]))
+    if "tags" in part:
+        _encode_tags(part.get("tags"))          # raises on bad shape
+
+
+def _validate_proposal_payload(conn, kind, payload):
+    if kind == "file":
+        _validate_filing(conn, payload, "file payload")
+        if payload.get("title") is not None or payload.get("body") is not None:
+            raise ValueError("a file proposal moves a note; it cannot rewrite "
+                             "title/body (that is a split part's job)")
+        if not any(payload.get(k) is not None for k in ("area_id", "project_id", "tags", "type")):
+            raise ValueError("file payload needs at least one of area_id, project_id, tags, type")
+    elif kind == "split":
+        parts = payload.get("parts")
+        if not isinstance(parts, list) or not parts:
+            raise ValueError("split payload needs a non-empty parts list")
+        if len(parts) > MAX_SPLIT_PARTS:
+            raise ValueError("split payload has %d parts (max %d)" % (len(parts), MAX_SPLIT_PARTS))
+        unknown = set(payload) - {"parts", "archive_original"}
+        if unknown:
+            raise ValueError("split payload has unknown fields: %s" % ", ".join(sorted(unknown)))
+        for i, part in enumerate(parts):
+            where = "split part %d" % (i + 1)
+            _validate_filing(conn, part, where)
+            title = part.get("title")
+            if not isinstance(title, str) or not title.strip():
+                raise ValueError("%s needs a title" % where)
+            if len(title) > 300:
+                raise ValueError("%s: title too long (max 300)" % where)
+            if part.get("body") is not None and not isinstance(part["body"], str):
+                raise ValueError("%s: body must be a string" % where)
+    else:
+        raise ValueError("invalid proposal kind %r (one of %s)"
+                         % (kind, ", ".join(PROPOSAL_KINDS)))
+
+
+def create_proposal(kind, note_id, payload, summary="", classification="needs_attention",
+                    author="librarian", db_path=None):
+    """File a librarian proposal against a note. Writes ONLY the proposals
+    table. Supersedes any older pending proposal of the same kind on the same
+    note (a re-read replaces, never stacks). Notifies the owner (needs_you)."""
+    if classification not in PROPOSAL_CLASSES:
+        raise ValueError("classification must be one of %s" % (PROPOSAL_CLASSES,))
+    if not isinstance(payload, dict):
+        raise ValueError("payload must be an object")
+    conn = _connect(db_path)
+    try:
+        with conn:
+            note = conn.execute("SELECT id, title, status FROM notes WHERE id=?",
+                                (note_id,)).fetchone()
+            if note is None:
+                raise ValueError("no such note: %r" % note_id)
+            _validate_proposal_payload(conn, kind, payload)
+            now = time.time()
+            conn.execute(
+                "UPDATE proposals SET status='superseded', decided_at=? "
+                "WHERE note_id=? AND kind=? AND status='pending'", (now, note_id, kind))
+            cur = conn.execute(
+                "INSERT INTO proposals(kind, note_id, payload, summary, classification, "
+                "author, created_at) VALUES(?,?,?,?,?,?,?)",
+                (kind, note_id, json.dumps(payload), (summary or "").strip(),
+                 classification, author, now))
+            pid = cur.lastrowid
+    finally:
+        conn.close()
+    log_activity("proposal_created", detail="proposal #%d (%s) on note #%d: %s"
+                 % (pid, kind, note_id, (summary or "")[:120]), db_path=db_path)
+    add_notification("needs_you", "Librarian: %s proposal on '%s'" % (kind, note["title"][:80]),
+                     body=(summary or "")[:300] or None, href="/brain/review",
+                     source_key="proposal:%d" % pid, db_path=db_path)
+    return pid
+
+
+def _decode_proposal(row):
+    d = dict(row)
+    for k in ("payload", "result"):
+        try:
+            d[k] = json.loads(d[k]) if d.get(k) else None
+        except ValueError:
+            d[k] = None
+    return d
+
+
+def list_proposals(status=None, classification=None, note_id=None, kind=None,
+                   limit=100, offset=0, db_path=None):
+    """Proposal list newest-first, with the subject note's title/status joined."""
+    sql = ("SELECT p.*, n.title AS note_title, n.status AS note_status "
+           "FROM proposals p LEFT JOIN notes n ON n.id = p.note_id WHERE 1=1")
+    params = []
+    if status is not None:
+        if status not in PROPOSAL_STATUSES:
+            raise ValueError("invalid status filter %r" % status)
+        sql += " AND p.status=?"; params.append(status)
+    if classification is not None:
+        if classification not in PROPOSAL_CLASSES:
+            raise ValueError("invalid classification filter %r" % classification)
+        sql += " AND p.classification=?"; params.append(classification)
+    if note_id is not None:
+        sql += " AND p.note_id=?"; params.append(note_id)
+    if kind is not None:
+        if kind not in PROPOSAL_KINDS:
+            raise ValueError("invalid kind filter %r" % kind)
+        sql += " AND p.kind=?"; params.append(kind)
+    sql += " ORDER BY p.id DESC LIMIT ? OFFSET ?"; params += [int(limit), int(offset)]
+    conn = _connect(db_path)
+    try:
+        return [_decode_proposal(r) for r in conn.execute(sql, params).fetchall()]
+    finally:
+        conn.close()
+
+
+def get_proposal(pid, db_path=None):
+    conn = _connect(db_path)
+    try:
+        row = conn.execute(
+            "SELECT p.*, n.title AS note_title, n.status AS note_status "
+            "FROM proposals p LEFT JOIN notes n ON n.id = p.note_id WHERE p.id=?",
+            (pid,)).fetchone()
+        return _decode_proposal(row) if row else None
+    finally:
+        conn.close()
+
+
+def proposal_counts(db_path=None):
+    """Badge counts for the review queue: pending split by classification."""
+    conn = _connect(db_path)
+    try:
+        rows = conn.execute(
+            "SELECT classification AS k, COUNT(*) AS n FROM proposals "
+            "WHERE status='pending' GROUP BY classification").fetchall()
+        by = {r["k"]: r["n"] for r in rows}
+        return {"pending": sum(by.values()),
+                "routine": by.get("routine", 0),
+                "needs_attention": by.get("needs_attention", 0)}
+    finally:
+        conn.close()
+
+
+def approve_proposal(pid, db_path=None):
+    """OWNER approval: apply the proposed change to the Library.
+
+    file  -> apply the filing to the note (inbox leaves for the Library).
+    split -> create one note per part (verbatim owner text => authored_by
+             'owner'; a filed part lands 'active', an unfiled one 'inbox'),
+             then archive the original unless archive_original is false.
+    Everything is re-validated against current state — the note or an area may
+    have changed since the librarian proposed. Returns the decided proposal.
+    """
+    p = get_proposal(pid, db_path=db_path)
+    if p is None:
+        raise ValueError("no such proposal: %r" % pid)
+    if p["status"] != "pending":
+        raise ValueError("proposal #%d is %r, not pending" % (pid, p["status"]))
+    note = get_note(p["note_id"], db_path=db_path)
+    if note is None:
+        raise ValueError("proposal #%d's note #%s no longer exists" % (pid, p["note_id"]))
+    payload = p["payload"] or {}
+    # Re-validate the whole payload up front so a stale area/project fails the
+    # approval BEFORE any note is touched (no partial split application).
+    conn = _connect(db_path)
+    try:
+        _validate_proposal_payload(conn, p["kind"], payload)
+    finally:
+        conn.close()
+    result = {}
+    if p["kind"] == "file":
+        fields = {k: payload[k] for k in ("area_id", "project_id", "tags")
+                  if payload.get(k) is not None}
+        update_note(p["note_id"], edited_by="librarian",
+                    note_type=payload.get("type"), status="active",
+                    db_path=db_path, **fields)
+        result = {"filed": True}
+    else:                                        # split
+        ids = []
+        for part in payload["parts"]:
+            filed = part.get("area_id") is not None or part.get("project_id") is not None
+            ids.append(create_note(
+                part["title"], body=part.get("body") or "",
+                note_type=part.get("type") or "note",
+                status="active" if filed else "inbox",
+                area_id=part.get("area_id"), project_id=part.get("project_id"),
+                tags=part.get("tags"), authored_by="owner", db_path=db_path))
+        if payload.get("archive_original", True):
+            update_note(p["note_id"], edited_by="librarian", status="archived",
+                        db_path=db_path)
+        result = {"note_ids": ids}
+    now = time.time()
+    conn = _connect(db_path)
+    try:
+        with conn:
+            conn.execute("UPDATE proposals SET status='approved', result=?, decided_at=? "
+                         "WHERE id=?", (json.dumps(result), now, pid))
+    finally:
+        conn.close()
+    log_activity("proposal_approved", detail="proposal #%d (%s) on note #%d"
+                 % (pid, p["kind"], p["note_id"]), db_path=db_path)
+    return get_proposal(pid, db_path=db_path)
+
+
+def reject_proposal(pid, feedback=None, db_path=None):
+    """OWNER rejection. The feedback text is kept on the row — the librarian
+    reads it (`wm note proposals --status rejected`) before re-proposing."""
+    conn = _connect(db_path)
+    try:
+        with conn:
+            row = conn.execute("SELECT id, status, kind, note_id FROM proposals WHERE id=?",
+                               (pid,)).fetchone()
+            if row is None:
+                raise ValueError("no such proposal: %r" % pid)
+            if row["status"] != "pending":
+                raise ValueError("proposal #%d is %r, not pending" % (pid, row["status"]))
+            conn.execute("UPDATE proposals SET status='rejected', feedback=?, decided_at=? "
+                         "WHERE id=?", ((feedback or "").strip() or None, time.time(), pid))
+    finally:
+        conn.close()
+    log_activity("proposal_rejected", detail="proposal #%d (%s) on note #%d"
+                 % (pid, row["kind"], row["note_id"]), db_path=db_path)
+    return get_proposal(pid, db_path=db_path)
+
+
+def approve_routine_proposals(db_path=None):
+    """Bulk-approve every pending routine proposal (oldest first). One failure
+    never stops the rest; failures come back with their reasons."""
+    ids = [p["id"] for p in list_proposals(status="pending", classification="routine",
+                                           limit=500, db_path=db_path)]
+    ids.sort()
+    approved, failed = [], []
+    for pid in ids:
+        try:
+            approve_proposal(pid, db_path=db_path)
+            approved.append(pid)
+        except ValueError as e:
+            failed.append({"id": pid, "error": str(e)})
+    return {"approved": approved, "failed": failed}
+
+
+def heartbeat_check(name, db_path=None):
+    """Run a named schedule heartbeat. Returns (has_work, detail).
+
+    librarian_ingest: work exists when any inbox note has no pending proposal
+    covering it — i.e. something captured that the librarian has not yet
+    triaged. Deterministic SQL only; this is what makes a quiet ingest tick
+    free (no task, no model call)."""
+    if name == "librarian_ingest":
+        conn = _connect(db_path)
+        try:
+            n = conn.execute(
+                "SELECT COUNT(*) AS n FROM notes n WHERE n.status='inbox' AND NOT EXISTS "
+                "(SELECT 1 FROM proposals p WHERE p.note_id=n.id AND p.status='pending')"
+            ).fetchone()["n"]
+        finally:
+            conn.close()
+        return (n > 0, "%d untriaged inbox note(s)" % n)
+    # Unknown names fail OPEN (the run happens) — a heartbeat must never be
+    # able to silently kill a schedule. create/update validate the closed set.
+    return (True, "unknown heartbeat %r" % name)

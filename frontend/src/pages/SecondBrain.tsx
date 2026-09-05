@@ -10,7 +10,7 @@ import { usePageTitle } from '../usePageTitle'
 
 export function SecondBrain() {
   usePageTitle('Second Brain')
-  const { tree, inbox } = useBrainCounts()
+  const { tree, inbox, review } = useBrainCounts()
   const areas = useAreas()
   const inboxNotes = useNotes({ status: 'inbox', limit: 30 })
   const recent = useNotes({ status: 'active', limit: 8 })
@@ -20,7 +20,7 @@ export function SecondBrain() {
   return (
     <section className="mx-auto max-w-6xl p-4 sm:p-6">
       {filing && <FileNoteModal n={filing} onClose={() => setFiling(null)} />}
-      <PageHeader crumb="second-brain" title="Second Brain" right={<BrainSubNav inbox={inbox} />} />
+      <PageHeader crumb="second-brain" title="Second Brain" right={<BrainSubNav inbox={inbox} review={review} />} />
       <div className="grid gap-5 lg:grid-cols-[minmax(0,1fr)_300px]">
         <div className="flex min-w-0 flex-col gap-4">
           <CaptureBox />
@@ -82,7 +82,14 @@ export function SecondBrain() {
           </GlassCard>
           <GlassCard>
             <Label>Librarian</Label>
-            <p className="mt-2 text-xs text-muted">Arrives in Phase 2: files your captures, splits batch dumps, and proposes wiki updates — you approve everything.</p>
+            {review > 0 ? (
+              <>
+                <p className="mt-2 text-sm"><span className="font-mono font-semibold">{review}</span> proposal{review === 1 ? '' : 's'} waiting for you.</p>
+                <Link to="/brain/review" className="mt-2 inline-block rounded-full border border-needsyou/60 px-3 py-1 font-mono text-[10px] uppercase tracking-wider text-needsyou hover:bg-needsyou/10">Review queue →</Link>
+              </>
+            ) : (
+              <p className="mt-2 text-xs text-muted">Files your captures and splits batch dumps on a schedule — every change waits for your approval in the <Link to="/brain/review" className="text-accent-2 hover:underline">review queue</Link>.</p>
+            )}
           </GlassCard>
         </div>
       </div>
