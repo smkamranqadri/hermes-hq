@@ -7,6 +7,9 @@ Template = the parts of a profile that are *ours* and role-defining:
   skills/<name>-specialist/SKILL.md   verbatim (only the specialist skill; bundled
                                       Hermes skills are re-created by `hermes profile create`)
 Never copied: .env, config.yaml, state.db, sessions, memories, caches.
+(A template MAY carry a hand-authored memories/MEMORY.md SEED — written by hand,
+never extracted from a live profile; install copies it only when the profile has
+no MEMORY.md yet.)
 
 Re-run after editing a live SOUL/skill; it is idempotent (git diff shows drift).
     .venv/bin/python scripts/extract_agent_templates.py [--profiles-dir DIR] [--out agents]

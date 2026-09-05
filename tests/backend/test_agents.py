@@ -73,6 +73,22 @@ def test_install_specialist_then_refuse(env):
     assert c.post("/api/agents/install", json={"template": "../etc"}, headers=h).status_code == 409
 
 
+def test_install_seeds_template_memory_without_clobber(env):
+    c, store, root = env
+    h = login(c)
+    # librarian template carries a hand-authored memories/MEMORY.md seed
+    assert c.post("/api/agents/install", json={"template": "librarian"}, headers=h).status_code == 200
+    mem = root / "profiles" / "librarian" / "memories" / "MEMORY.md"
+    assert mem.read_text().startswith("I am Librarian")
+    # a live agent's learned memory is never overwritten, even on force reinstall
+    mem.write_text("learned things\n")
+    assert c.post("/api/agents/install", json={"template": "librarian", "force": True}, headers=h).status_code == 200
+    assert mem.read_text() == "learned things\n"
+    # a template without a seed (coder) installs fine and writes no memories file
+    assert c.post("/api/agents/install", json={"template": "coder"}, headers=h).status_code == 200
+    assert not (root / "profiles" / "coder" / "memories" / "MEMORY.md").exists()
+
+
 def test_install_orchestrator_overlay_with_backup(env):
     c, store, root = env
     h = login(c)

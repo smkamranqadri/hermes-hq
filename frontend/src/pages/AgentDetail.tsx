@@ -39,6 +39,7 @@ export function AgentDetail() {
             ? <ActionBtn url={`/api/agent/${a.name}/gateway`} label="Disable chat" kind="ghost" body={{ enabled: false }} confirm={`Stop the ${a.name} gateway? Open chats will drop.`} />
             : <ActionBtn url={`/api/agent/${a.name}/gateway`} label="Enable chat" body={{ enabled: true }} confirm={`Start the ${a.name} gateway on :${g.port ?? 'auto'}? Its .env gets API_SERVER_PORT/KEY if missing.`} />)}
           {isDefault && !a.overlay_applied && <ActionBtn url="/api/agents/install" label="Apply Orchestrator soul" kind="ghost" body={{ template: 'orchestrator' }} confirm="Overwrite the default profile's SOUL.md with the HQ Orchestrator soul? The current file is backed up next to it." />}
+          {a.installed && <Link to={`/memory?profile=${a.name}`} className="inline-flex items-center rounded-full border border-line px-4 py-1.5 font-mono text-[11px] uppercase tracking-wider text-muted hover:text-fg">Memory</Link>}
         </div>
         {a.installed && <ModelRow name={a.name} gatewayOn={!!g.enabled} />}
       </div>
