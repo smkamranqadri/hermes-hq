@@ -76,6 +76,9 @@ Repo layout: `core/` (engine package: wm_store/wm_dispatch/wm_run_agent/wm_cli, 
 
 Hermes v0.20.5 at `/opt/hermes`, `HERMES_HOME=/opt/data`, profiles under `/opt/data/profiles/`, gateway :8642, Hermes dashboard :9119, legacy WM dashboard :9009. Node 26, Python 3.13, no pnpm.
 
+## Backend test suite (environment note, learned 2026-09-02)
+The 5 recurring "environment-sensitive" `tests/backend` failures in uid-10000 agent-run environments (cron notification isolation, answer-file reuse, updater notification, terminal HOME, integrity fixture) are environment artifacts, NOT real failures — run the suite as root to verify before treating one as real, and don't re-report them as debt. Current baseline lives in State → Proof.
+
 ## Hermes CLI on this box
 - `/opt/hermes/bin/hermes` is a `docker exec` privilege-drop shim: it can only read paths under `/opt/data` (`~`). Scratch `HERMES_HOME`s for tests/probes must live there (e.g. `/opt/data/hh-scratch`), never in `/tmp`.
 - `hermes profile create NAME --no-alias --description D` creates `$HERMES_HOME/profiles/NAME/` with `profile.yaml` (description), stock `SOUL.md`, bundled skills, `.env`; a `config.yaml` may be absent at creation (inherits root) — all six live specialists have one as of 2026-08-30. Templates in `agents/` layer SOUL + specialist skill on top.
