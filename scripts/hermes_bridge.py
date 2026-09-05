@@ -6,7 +6,7 @@ HERMES_HOME = the profile's home, so every rule (schemas, secret storage, config
 writes, readiness gate) is Hermes' own — nothing is re-implemented here.
 
     hermes_bridge.py <op>   with a JSON object on stdin; one JSON object on stdout.
-ops: providers | config | activate | setup | graph | node | limits
+ops: providers | config | activate | setup | graph | node | limits | model_get | model_set
      skills_list | skills_content | skills_create | skills_update | skills_toggle
      hub_sources | hub_search | hub_preview | hub_scan
      mcp_list | mcp_add | mcp_remove | mcp_test | mcp_enabled | mcp_catalog | mcp_catalog_install
@@ -133,8 +133,56 @@ def op_limits(body):
             "enabled": bool(mem.get("memory_enabled", True)), "provider": str(mem.get("provider") or "")}
 
 
+def op_model_get(body):
+    """The profile's DEFAULT model assignment (what dispatched runs and new
+    sessions use): config.yaml model.* + agent.reasoning_effort."""
+    from hermes_cli.config import load_config
+    cfg = load_config()
+    model = cfg.get("model") if isinstance(cfg.get("model"), dict) else {}
+    agent = cfg.get("agent") if isinstance(cfg.get("agent"), dict) else {}
+    return {"provider": str(model.get("provider") or ""),
+            "model": str(model.get("default") or model.get("model") or ""),
+            "base_url": str(model.get("base_url") or ""),
+            "effort": str(agent.get("reasoning_effort") or "")}
+
+
+@_guard
+def op_model_set(body):
+    """Set the profile's default model/provider (Hermes' OWN assignment code —
+    base_url/api_mode/provider quirks stay Hermes' problem) and/or the
+    reasoning effort. Honors the expensive-model warning unless confirmed."""
+    provider = str(body.get("provider") or "").strip()
+    model = str(body.get("model") or "").strip()
+    base_url = str(body.get("base_url") or "").strip()
+    effort = str(body.get("effort") or "").strip()
+    if model and not body.get("confirm"):
+        try:
+            from hermes_cli.model_selection_guards import combined_selection_warning
+            warning = combined_selection_warning(model, provider=provider, base_url=base_url)
+        except Exception:
+            warning = None
+        if warning is not None:
+            return {"ok": False, "confirm_required": True, "confirm_message": warning.message}
+    out = {"ok": True}
+    if model:
+        w = _ws()
+        out.update(w._apply_model_assignment_sync("main", provider, model, "", base_url) or {})
+        out["ok"] = True
+    if effort:
+        from hermes_cli.config import load_config, save_config
+        cfg = load_config()
+        if not isinstance(cfg.get("agent"), dict):
+            cfg["agent"] = {}
+        cfg["agent"]["reasoning_effort"] = effort
+        save_config(cfg)
+        out["effort"] = effort
+    out.update(op_model_get({}))
+    return out
+
+
 OPS = {"providers": op_providers, "config": op_config, "activate": op_activate, "setup": op_setup,
-       "graph": op_graph, "node": op_node, "limits": op_limits}
+       "graph": op_graph, "node": op_node, "limits": op_limits,
+       "model_get": op_model_get, "model_set": op_model_set}
 
 
 # -- skills (Hermes dashboard router handlers, called in-process under this HERMES_HOME) ------------

@@ -1,11 +1,13 @@
 import { useState } from 'react'
 import { Link, useParams } from 'react-router-dom'
-import { useAgent, ago, when } from '../api'
+import { useQueryClient } from '@tanstack/react-query'
+import { post, useAgent, useAgentModel, useModels, ago, when, type AgentModel } from '../api'
 import { GlassCard } from '../components/GlassCard'
 import { StatusBadge } from '../components/StatusBadge'
 import { Empty, Loading, Chip, Crumbs, Label } from '../components/ui'
 import { ActionBtn } from '../components/forms'
-import { Btn } from '../components/Modal'
+import { Btn, ConfirmModal, Field, Modal, SelectInput, TextInput } from '../components/Modal'
+import { useToast } from '../components/Toast'
 import { usePageTitle } from '../usePageTitle'
 import { GatewayDot } from './Agents'
 
@@ -38,6 +40,7 @@ export function AgentDetail() {
             : <ActionBtn url={`/api/agent/${a.name}/gateway`} label="Enable chat" body={{ enabled: true }} confirm={`Start the ${a.name} gateway on :${g.port ?? 'auto'}? Its .env gets API_SERVER_PORT/KEY if missing.`} />)}
           {isDefault && !a.overlay_applied && <ActionBtn url="/api/agents/install" label="Apply Orchestrator soul" kind="ghost" body={{ template: 'orchestrator' }} confirm="Overwrite the default profile's SOUL.md with the HQ Orchestrator soul? The current file is backed up next to it." />}
         </div>
+        {a.installed && <ModelRow name={a.name} gatewayOn={!!g.enabled} />}
       </div>
       <GlassCard className="min-w-0 overflow-hidden">
         <div className="flex flex-wrap items-center justify-between gap-2"><Label>History · {a.runs} task runs · {a.sessions} sessions</Label><span className="font-mono text-[10px] text-muted">one row per Hermes session; task runs carry their run # and task</span></div>
@@ -76,5 +79,83 @@ export function AgentDetail() {
         {a.last_active_at && <p className="mt-2 text-[11px] text-muted">last active {when(a.last_active_at)}</p>}
       </GlassCard>
     </section>
+  )
+}
+
+/** The profile's DEFAULT model (config.yaml via Hermes' own assignment code).
+ * Applies to new dispatched runs and new sessions; per-turn chat overrides
+ * are unaffected. */
+function ModelRow({ name, gatewayOn }: { name: string; gatewayOn: boolean }) {
+  const m = useAgentModel(name)
+  const [editing, setEditing] = useState(false)
+  return (
+    <div className="flex basis-full flex-wrap items-center gap-2 text-xs" data-model-row>
+      <Label>Model</Label>
+      {m.isLoading && <span className="h-4 w-40 animate-pulse rounded bg-inset" />}
+      {m.isError && <span className="text-muted">unavailable ({String((m.error as Error)?.message ?? 'bridge error').slice(0, 60)})</span>}
+      {m.data && (
+        <>
+          <span className="font-mono">{m.data.model || '—'}</span>
+          {m.data.provider && <Chip>{m.data.provider}</Chip>}
+          {m.data.effort && <Chip>effort {m.data.effort}</Chip>}
+          <Btn kind="ghost" onClick={() => setEditing(true)}>Change…</Btn>
+        </>
+      )}
+      {editing && m.data && <ModelModal name={name} current={m.data} gatewayOn={gatewayOn} onClose={() => setEditing(false)} />}
+    </div>
+  )
+}
+
+function ModelModal({ name, current, gatewayOn, onClose }: { name: string; current: AgentModel; gatewayOn: boolean; onClose: () => void }) {
+  const qc = useQueryClient(); const toast = useToast()
+  const [f, setF] = useState({ provider: current.provider, model: current.model, effort: current.effort })
+  const [q, setQ] = useState('')
+  const opts = useModels(q, f.provider, name)
+  const [busy, setBusy] = useState(false)
+  const [warn, setWarn] = useState<string | null>(null)
+  const save = async (confirm = false) => {
+    setBusy(true)
+    try {
+      const r = await post<{ confirm_required?: boolean; confirm_message?: string; model?: string }>(
+        `/api/agent/${name}/model`,
+        { provider: f.provider || undefined, model: f.model.trim() || undefined, effort: f.effort || undefined, confirm })
+      if (r.confirm_required) { setWarn(r.confirm_message ?? 'This model is flagged as expensive. Proceed?'); return }
+      toast(`Default model saved${gatewayOn ? ' — restart chat to affect new chats' : ''}`)
+      qc.invalidateQueries({ queryKey: ['agent-model', name] }); onClose()
+    } catch (e) { toast(e instanceof Error ? e.message : String(e), 'err') } finally { setBusy(false) }
+  }
+  const providers = opts.data?.providers ?? []
+  const suggestions = opts.data?.models ?? []
+  return (
+    <Modal title={`Default model for ${name}`} onClose={onClose}>
+      {warn && <ConfirmModal title="Expensive model" message={warn} confirmLabel="Use it anyway" busy={busy}
+        onClose={() => setWarn(null)} onConfirm={() => { setWarn(null); void save(true) }} />}
+      <div className="flex flex-col gap-3">
+        <Field label="Provider" hint="Only providers this profile has credentials for.">
+          <SelectInput value={f.provider} onChange={e => setF(x => ({ ...x, provider: e.target.value }))}>
+            {f.provider === '' && <option value="">— pick —</option>}
+            {providers.map(p => <option key={p.id} value={p.id}>{p.name}{p.active ? ' (current)' : ''}</option>)}
+          </SelectInput>
+        </Field>
+        <Field label="Model" hint="Pick a suggestion or type any model id the provider accepts.">
+          <TextInput list="agent-model-suggestions" value={f.model}
+            onChange={e => { setF(x => ({ ...x, model: e.target.value })); setQ(e.target.value) }} placeholder="model id" />
+          <datalist id="agent-model-suggestions">
+            {suggestions.map(s => <option key={s.id} value={s.id}>{s.description}</option>)}
+          </datalist>
+        </Field>
+        <Field label="Reasoning effort">
+          <SelectInput value={f.effort} onChange={e => setF(x => ({ ...x, effort: e.target.value }))}>
+            <option value="">— keep as is —</option>
+            {(opts.data?.efforts ?? []).map(e => <option key={e}>{e}</option>)}
+          </SelectInput>
+        </Field>
+        <p className="text-[11px] text-muted">Sets this profile's default (config.yaml) — new task runs and new chat sessions use it. Per-message overrides in Chat keep working.</p>
+        <div className="flex justify-end gap-2">
+          <Btn kind="ghost" onClick={onClose}>Cancel</Btn>
+          <Btn onClick={() => void save()} busy={busy} disabled={!f.model.trim() && !f.effort}>Save</Btn>
+        </div>
+      </div>
+    </Modal>
   )
 }

@@ -319,6 +319,45 @@ def agent_gateway(name: str, body: GatewayIn):
     return {"gateway": _engine(gw.set_enabled, name, body.enabled)}
 
 
+class AgentModelIn(BaseModel):
+    provider: str | None = None
+    model: str | None = None
+    effort: str | None = None
+    confirm: bool = False        # acknowledge Hermes' expensive-model warning
+
+
+@router.post("/agent/{name}/model")
+def agent_model_set(name: str, body: AgentModelIn):
+    """Set the profile's DEFAULT model/provider/effort through Hermes' own
+    assignment code (bridge model_set). Applies to NEW dispatched runs and new
+    sessions; a running chat gateway keeps its loaded default until restart.
+    A confirm_required response is NOT an error — the UI re-posts with
+    confirm=true after the owner acknowledges the cost warning."""
+    from backend import memory, skills
+    from core import wm_store as store
+    if name not in store.ASSIGNEE_PROFILES:
+        raise HTTPException(404, "no such agent")
+    if bool(body.model) != bool(body.provider):
+        raise HTTPException(400, "provider and model go together")
+    if not body.model and not body.effort:
+        raise HTTPException(422, "nothing to change")
+    if body.effort and body.effort not in chat.EFFORTS:
+        raise HTTPException(400, "effort must be one of %s" % ", ".join(chat.EFFORTS))
+    prof, home = memory.home_of(name)
+    res = memory.bridge(home, "model_set",
+                        {"provider": body.provider, "model": body.model,
+                         "effort": body.effort, "confirm": body.confirm})
+    if isinstance(res, dict) and res.get("confirm_required"):
+        return res
+    res = skills._ok(res)
+    store.log_activity(action="agent_model_set", agent_profile=name,
+                       detail="%s/%s effort=%s" % (res.get("provider") or "-",
+                                                   res.get("model") or "-",
+                                                   res.get("effort") or "-"),
+                       db_path=store.DEFAULT_DB_PATH)
+    return res
+
+
 # ---- chat --------------------------------------------------------------
 class NewSession(BaseModel):
     title: str | None = None
