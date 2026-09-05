@@ -1,6 +1,6 @@
 # DocsPlan — User docs served at /help + docs-maintenance gate
 
-Status: APPROVED 2026-09-05 (owner interview via /kis:plan). Not started.
+Status: APPROVED 2026-09-05 (owner interview via /kis:plan). **PARKED 2026-09-05** — owner is mid-build on the second-brain project and will pick this up later; do not start without an owner go.
 Mode: Phase (3 phases, each verified before the next).
 
 ## Decisions (owner interview 2026-09-05)
