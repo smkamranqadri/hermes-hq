@@ -46,14 +46,6 @@ Getting started / install · Core concepts (projects, goals, tasks, agents) · S
 - Docs start accurate against the current UI; staying accurate relies on the Phase 3 gate.
 - Backend restart for the mount wipes in-memory login sessions (owner re-login).
 
-## Merge-time KIS cleanup (from /kis:check 2026-09-06 — apply in the main checkout in one commit, then delete this section)
-1. Add to `kis/state/current.md` → Next: "Parked 2026-09-05: DocsPlan (`intent/DocsPlan.md`) — resume = /kis:act."
-2. `kis/intent/SecondBrainPlan.md` header: Status PLANNED → IN PROGRESS (P1 + 2a shipped, next 2b); work-mode line "Built through the pipeline" → direct in-session builds (what actually happened per State proofs).
-3. `kis/state/current.md` Suite line (starts "Suite: `tests/backend` **129 passed"): replace with one sentence — baseline **168 passed 0 failed (2026-09-06)**, per-file ledger lives in git history of this line.
-4. Move to `kis/knowledge/technical.md` (testing note): the 5 recurring "environment-sensitive" failures in uid-10000 agent runs (cron notification isolation, answer-file reuse, updater notification, terminal HOME, integrity fixture) are environment artifacts, not real failures — run the suite as root to verify; don't re-report them as debt.
-5. Collapse the 2026-09-02 (phase-gate) and 2026-09-03 (safeguard) proof bullets into the existing "collapsed — see git history" line.
-6. Delete branch `worktree-docs-plan` after merging (local + origin).
-
 ## KIS writes on completion
 - Knowledge: docs rule in `rules.md`; docs toolchain note (`/help` mount, mkdocs, tolerant build) in `technical.md`.
 - Intent: this plan marked COMPLETE.

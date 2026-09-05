@@ -1,8 +1,8 @@
 # Second Brain Plan
 
-**Status:** PLANNED — approved by owner 2026-09-04 (interview + mockup rounds in session; design locked at mockup v3.1).
+**Status:** IN PROGRESS — P1 + 2a SHIPPED (2026-09-05/06), next 2b on owner greenlight. Approved by owner 2026-09-04 (interview + mockup rounds in session; design locked at mockup v3.1).
 **Mockup (UI reference):** https://claude.ai/code/artifact/28097e1a-2343-442f-a21e-ed014e507eb3
-**Work mode:** Phase — four phases, each ships something the owner uses that week. Built through the pipeline (dispatched coder runs + independent review), owner clicks exercised live per phase.
+**Work mode:** Phase — four phases, each ships something the owner uses that week. Built direct in-session (owner's call — not through the pipeline), owner clicks and reviews exercised live per phase.
 
 ## Goal
 
