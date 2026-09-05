@@ -208,9 +208,9 @@ class RejectIn(BaseModel):
 
 @router.get("/proposals")
 def proposals(status: str | None = "pending", classification: str | None = None,
-              limit: int = Query(100, ge=1, le=500)):
+              note_id: int | None = None, limit: int = Query(100, ge=1, le=500)):
     rows = _engine(store.list_proposals, status=status or None,
-                   classification=classification, limit=limit)
+                   classification=classification, note_id=note_id, limit=limit)
     return {"proposals": rows, "counts": store.proposal_counts(db_path=_db())}
 
 

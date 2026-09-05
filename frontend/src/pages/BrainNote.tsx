@@ -7,7 +7,7 @@ import { useQueryClient } from '@tanstack/react-query'
 import { post, useNote, when } from '../api'
 import { GlassCard } from '../components/GlassCard'
 import { Markdown } from '../components/chat/Markdown'
-import { FileNoteModal, NewReminderFromNoteModal, NewTaskFromNoteModal, TYPE_TONE } from '../components/brain'
+import { FileNoteModal, NewReminderFromNoteModal, NewTaskFromNoteModal, ProposalBanner, TYPE_TONE } from '../components/brain'
 import { Btn, ConfirmModal, TextArea } from '../components/Modal'
 import { Chip, Crumbs, Empty, Label, Loading } from '../components/ui'
 import { useToast } from '../components/Toast'
@@ -38,6 +38,7 @@ export function BrainNote() {
   return (
     <section className="mx-auto max-w-4xl p-4 sm:p-6">
       <Crumbs items={[['Second Brain', '/brain'], ['Library', '/brain/library'], [`#${n.id}`]]} />
+      <ProposalBanner noteId={nid} />
       {modal === 'file' && <FileNoteModal n={n} onClose={() => setModal(null)} />}
       {modal === 'task' && <NewTaskFromNoteModal n={n} onClose={() => setModal(null)} />}
       {modal === 'reminder' && <NewReminderFromNoteModal n={n} onClose={() => setModal(null)} />}

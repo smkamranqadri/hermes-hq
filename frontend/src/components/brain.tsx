@@ -3,11 +3,11 @@
  * "New reminder" create linked items and the note stays a note. */
 import { useEffect, useState } from 'react'
 import { Link, NavLink } from 'react-router-dom'
-import { useQueryClient } from '@tanstack/react-query'
+import { useQuery, useQueryClient } from '@tanstack/react-query'
 import clsx from 'clsx'
-import { ago, post, useAreas, useNotesTree, useProjects, useRoster, type Area, type Note, type NoteFull } from '../api'
+import { ago, get, post, useAreas, useNotesTree, useProjects, useRoster, type Area, type Note, type NoteFull, type Proposal, type SplitPart } from '../api'
 import { Btn, Field, Modal, SelectInput, TextArea, TextInput } from './Modal'
-import { Chip } from './ui'
+import { Chip, Label } from './ui'
 import { useToast } from './Toast'
 
 /** Heading-row pill nav: Home · Library · Review. */
@@ -243,6 +243,88 @@ export function CaptureBox({ compact = false }: { compact?: boolean }) {
         <span className="text-[11px] text-muted">{text.trim() ? `${text.trim().split('\n').length} line${text.trim().split('\n').length === 1 ? '' : 's'}` : 'Photo & voice capture land in Phase 2'}</span>
         <Btn className="ml-auto" onClick={() => void capture()} busy={busy} disabled={!text.trim()}>Capture</Btn>
       </div>
+    </div>
+  )
+}
+
+/** Pending librarian proposals for ONE note — the note page banner. The
+ * decision buttons live here too so the owner can decide wherever they are. */
+export function ProposalBanner({ noteId }: { noteId: number }) {
+  const qc = useQueryClient(); const toast = useToast()
+  const areas = useAreas(); const projects = useProjects()
+  const q = useQuery({
+    queryKey: ['note-proposals', noteId],
+    queryFn: () => get<{ proposals: Proposal[] }>(`/api/proposals?status=pending&note_id=${noteId}`),
+    enabled: Number.isFinite(noteId),
+  })
+  const [busy, setBusy] = useState(false)
+  const [rejecting, setRejecting] = useState<number | null>(null)
+  const [feedback, setFeedback] = useState('')
+  const rows = q.data?.proposals ?? []
+  if (!rows.length) return null
+  const dest = (p: { area_id?: number; project_id?: number; tags?: string[]; type?: string }) => {
+    const area = areaLabel(areas.data?.areas, p.area_id ?? null)
+    const proj = p.project_id ? (projects.data?.projects ?? []).find(x => x.id === p.project_id) : null
+    return (
+      <>
+        {area && <Chip tone="accent">{area}</Chip>}
+        {proj && <Chip tone="accent">{proj.name}</Chip>}
+        {p.type && p.type !== 'note' && <Chip>{p.type}</Chip>}
+        {(p.tags ?? []).map(t => <Chip key={t}>{t}</Chip>)}
+      </>
+    )
+  }
+  const decide = async (id: number, action: 'approve' | 'reject') => {
+    setBusy(true)
+    try {
+      await post(`/api/proposal/${id}/${action}`, action === 'reject' ? { feedback } : undefined)
+      toast(action === 'approve' ? 'Proposal applied' : 'Rejected — feedback saved for the librarian')
+      setRejecting(null); setFeedback(''); qc.invalidateQueries()
+    } catch (e) { toast(e instanceof Error ? e.message : String(e), 'err') } finally { setBusy(false) }
+  }
+  return (
+    <div className="mb-4 flex flex-col gap-3">
+      {rows.map(p => (
+        <div key={p.id} className="rounded-xl border border-working/50 bg-working/10 p-3" data-proposal-banner>
+          <div className="flex flex-wrap items-center gap-2">
+            <Label>Librarian proposed · {p.kind}</Label>
+            <span className="ml-auto font-mono text-[10px] text-muted">#{p.id}</span>
+          </div>
+          {p.summary && <p className="mt-1 text-sm">{p.summary}</p>}
+          {p.kind === 'file' && p.payload && (
+            <div className="mt-2 flex flex-wrap items-center gap-1.5">{dest(p.payload)}</div>
+          )}
+          {p.kind === 'split' && (
+            <ol className="mt-2 flex flex-col gap-1.5">
+              {(p.payload?.parts ?? []).map((part: SplitPart, i: number) => (
+                <li key={i} className="rounded-lg border border-line-subtle bg-inset px-3 py-1.5">
+                  <div className="flex flex-wrap items-center gap-1.5 text-xs">
+                    <span className="font-medium">{part.title}</span>{dest(part)}
+                  </div>
+                </li>
+              ))}
+            </ol>
+          )}
+          {rejecting === p.id ? (
+            <div className="mt-3 flex flex-col gap-2">
+              <TextArea rows={2} value={feedback} onChange={e => setFeedback(e.target.value)}
+                placeholder="Why not? The librarian reads this before re-proposing." />
+              <div className="flex gap-2">
+                <Btn kind="warn" onClick={() => void decide(p.id, 'reject')} busy={busy}>Reject proposal</Btn>
+                <Btn kind="ghost" onClick={() => setRejecting(null)}>Cancel</Btn>
+              </div>
+            </div>
+          ) : (
+            <div className="mt-3 flex flex-wrap gap-2">
+              <Btn onClick={() => void decide(p.id, 'approve')} busy={busy}>
+                {p.kind === 'split' ? `Approve split (${p.payload?.parts?.length ?? 0} notes)` : 'Approve filing'}
+              </Btn>
+              <Btn kind="ghost" onClick={() => { setRejecting(p.id); setFeedback('') }}>Reject…</Btn>
+              <Link to="/brain/review" className="ml-auto self-center text-[11px] text-accent-2 hover:underline">Review queue →</Link>
+            </div>
+          )}
+        </div>
+      ))}
     </div>
   )
 }
