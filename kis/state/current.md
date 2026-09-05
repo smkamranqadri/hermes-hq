@@ -8,6 +8,7 @@ Task: **gated-ready fix SHIPPED 2026-09-04** (`intent/GatedReadyFixPlan.md`, com
 
 ## Next
 **Second Brain: Phase 1 SHIPPED + owner-reviewed 2026-09-05 — next is Phase 2a (librarian core + split proposals)** on branch `worktree-second-brain-plan` (worktree kept; owner chose direct in-session build over pipeline intake for this feature). P1 live on :9010: capture (full text = body), inbox → File/Refile, Library tree + Urdu-capable FTS, Thoughts append-log, +Task (owner assignee, dispatcher-skipped, one-step close, back-linked) and +Reminder incl. **one-time** (`one_shot`). Three owner-review cycles same day, all fixed→verified→deployed (`54327b0`, `e2e796e`, `27446b3` — ship record + re-sliced Phase 2a/2b/2c in `intent/SecondBrainPlan.md`; suite **145 passed 0 failed**; mockup https://claude.ai/code/artifact/28097e1a-2343-442f-a21e-ed014e507eb3). Deferred by owner: Library project/tag filters inside an area → 2b.
+Parked 2026-09-05: **DocsPlan** — user docs for future users (MkDocs Material served at `/help`, docs-update DoD gate), interviewed + approved then parked because the owner is mid second-brain build. Plan: `intent/DocsPlan.md` on **unmerged branch `worktree-docs-plan`**; resume = merge that branch + `/kis:act`.
 Also: **Owner clicks "Approve → queue" on #183** (launches the independent verify run through the pipeline, review required), then decides #175 (starts LinkedIn/Medium file review) and #176/#177. Still uninterviewed candidates: persist login sessions across restarts, task-first intake variant.
 
 ## Blocker
