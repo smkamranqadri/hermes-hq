@@ -151,6 +151,7 @@ export type Note = {
   id: number; title: string; body: string; body_truncated?: boolean; type: 'note' | 'playbook' | 'wiki'
   status: 'inbox' | 'active' | 'archived'; area_id: number | null; project_id: number | null
   tags: string[]; authored_by: string; pinned: number; created_at: number; updated_at: number | null; entry_count?: number
+  pending_proposal_id?: number | null
 }
 export type NoteEntry = { id: number; note_id: number; body: string; created_at: number }
 export type NoteFull = Note & {

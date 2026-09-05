@@ -4384,6 +4384,9 @@ def list_notes(status=None, area_id=None, project_id=None, note_type=None,
     conn = _connect(db_path)
     try:
         rows = [_decode_note(r) for r in conn.execute(sql, params).fetchall()]
+        pending = {r["note_id"]: r["pid"] for r in conn.execute(
+            "SELECT note_id, MAX(id) AS pid FROM proposals "
+            "WHERE status='pending' GROUP BY note_id")}
         for r in rows:
             if r["body"] and len(r["body"]) > 400:
                 r["body"] = r["body"][:400]
@@ -4391,6 +4394,9 @@ def list_notes(status=None, area_id=None, project_id=None, note_type=None,
             r["entry_count"] = conn.execute(
                 "SELECT COUNT(*) AS n FROM note_entries WHERE note_id=?",
                 (r["id"],)).fetchone()["n"]
+            # the review queue owns the decision: lists surface that a note is
+            # already in the librarian's hands so the owner isn't double-filing
+            r["pending_proposal_id"] = pending.get(r["id"])
         return rows
     finally:
         conn.close()

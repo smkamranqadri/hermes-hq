@@ -24,6 +24,15 @@ export function BrainSubNav({ inbox, review }: { inbox?: number; review?: number
 
 export const TYPE_TONE: Record<Note['type'], string> = { note: 'text-muted', playbook: 'text-accent-2', wiki: 'text-queued' }
 
+/** An inbox note the librarian has already triaged — the decision lives in
+ * the Review queue, so lists say so instead of inviting a double-filing.
+ * `link=false` renders a plain span for use inside row-links (no nested <a>). */
+export function PendingProposalChip({ link = true }: { link?: boolean }) {
+  const cls = 'inline-flex items-center rounded-full border border-working/60 px-2 py-0.5 font-mono text-[10px] uppercase tracking-wider text-working'
+  if (!link) return <span className={cls}>librarian proposed</span>
+  return <Link to="/brain/review" className={`${cls} hover:bg-working/10`}>librarian proposed → review</Link>
+}
+
 export function areaLabel(areas: Area[] | undefined, id: number | null) {
   if (!id || !areas) return null
   const a = areas.find(x => x.id === id)
@@ -49,6 +58,7 @@ export function NoteRow({ n, areas, showBody = true }: { n: Note; areas?: Area[]
         {area && <Chip tone="accent">{area}</Chip>}
         {n.tags.slice(0, 4).map(t => <Chip key={t}>{t}</Chip>)}
         {n.status === 'archived' && <Chip>archived</Chip>}
+        {!!n.pending_proposal_id && <PendingProposalChip link={false} />}
       </div>
     </Link>
   )
