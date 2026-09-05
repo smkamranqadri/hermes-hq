@@ -645,6 +645,11 @@ def cmd_note_show(args):
                        + area["name"] if area else "-"))
     _p("  project: %s" % (n["project"]["slug"] if n.get("project") else "-"))
     _p("  tags: %s" % (", ".join(n["tags"]) or "-"))
+    if n.get("disputed"):
+        others = ["#%s" % l["target_id"] for l in (n.get("links") or [])
+                  if l["kind"] == "note"]
+        _p("  DISPUTED: conflicts with %s — the owner already adjudicated this "
+           "pair; do not re-propose it" % (", ".join(others) or "another note"))
     _p("  body:")
     for line in (n["body"] or "").splitlines():
         _p("    | " + line)

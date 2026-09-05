@@ -255,25 +255,11 @@ def approve_routine():
 def triage_now():
     """Owner's impatience button: fire the librarian ingest schedule right now.
 
-    Honest about money — if the heartbeat says there's nothing untriaged, or
-    the previous ingest task is still open, no task is minted and the response
-    says why instead of quietly spending a model run.
+    All gating lives in the store (trigger_heartbeat_schedule), sharing
+    fire_due's policy — heartbeat idle and the schedule's overlap setting —
+    so a click can never quietly spend a model run.
     """
-    rows = [r for r in store.list_schedules(db_path=_db())
-            if r.get("heartbeat") == "librarian_ingest" and r["enabled"]]
-    if not rows:
-        raise HTTPException(409, "no enabled librarian ingest schedule — "
-                                 "create or resume one under Schedules")
-    row = rows[0]
-    has_work, detail = store.heartbeat_check("librarian_ingest", db_path=_db())
-    if not has_work:
-        return {"queued": False, "detail": "nothing to triage (%s)" % detail}
-    if row.get("last_task_id") and row.get("last_task_status") in store.OPEN_TASK_STATUSES:
-        return {"queued": False, "task_id": row["last_task_id"],
-                "detail": "ingest task #%s is already %s"
-                          % (row["last_task_id"], row["last_task_status"])}
-    tid = _engine(store.run_schedule_now, row["id"])
-    return {"queued": True, "task_id": tid, "detail": detail}
+    return _engine(store.trigger_heartbeat_schedule, "librarian_ingest")
 
 
 @router.get("/project/{slug}/notes")

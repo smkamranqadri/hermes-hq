@@ -7,9 +7,9 @@ import { useState } from 'react'
 import { Link } from 'react-router-dom'
 import { useQueryClient } from '@tanstack/react-query'
 import clsx from 'clsx'
-import { ago, post, useAreas, useProjects, useProposals, useRoster, type Area, type Proposal, type ProposalPayload, type SplitPart } from '../api'
+import { ago, post, useAreas, useProjects, useProposals, useRoster, type Proposal, type ProposalPayload, type SplitPart } from '../api'
 import { GlassCard, PageHeader } from '../components/GlassCard'
-import { BrainSubNav, KIND_LABEL, ProposalPayloadView, approveLabel, useBrainCounts } from '../components/brain'
+import { AreaSelect, BrainSubNav, KIND_LABEL, ProjectSelect, ProposalPayloadView, approveLabel, tagsFrom, useBrainCounts } from '../components/brain'
 import { Btn, ConfirmModal, Field, Modal, SelectInput, TextArea, TextInput } from '../components/Modal'
 import { Chip, Empty, Loading, Select } from '../components/ui'
 import { useToast } from '../components/Toast'
@@ -18,7 +18,9 @@ import { usePageTitle } from '../usePageTitle'
 const KIND_TONE: Record<Proposal['kind'], string> = {
   split: 'text-accent-2', file: 'text-queued', contradiction: 'text-needsyou', new_task: 'text-working',
 }
-const EDITABLE_KINDS: Proposal['kind'][] = ['file', 'split', 'new_task']
+// Record-keyed (not an array) so a new kind can't compile without deciding
+// whether it is owner-editable before approval.
+const EDITABLE: Record<Proposal['kind'], boolean> = { split: true, file: true, contradiction: false, new_task: true }
 
 export function BrainReview() {
   usePageTitle('Review — Second Brain')
@@ -37,9 +39,10 @@ export function BrainReview() {
     catch (e) { toast(e instanceof Error ? e.message : String(e), 'err') }
     finally { setBusy(null) }
   }
-  const approvedToast = (p: Proposal) =>
-    p.kind === 'split' ? 'Split applied' : p.kind === 'file' ? (p.payload?.archive ? 'Archived' : 'Filed')
-      : p.kind === 'contradiction' ? 'Both notes flagged disputed' : 'Task created & linked'
+  const approvedToast = (p: Proposal) => ({
+    split: 'Split applied', file: p.payload?.archive ? 'Archived' : 'Filed',
+    contradiction: 'Both notes flagged disputed', new_task: 'Task created & linked',
+  } satisfies Record<Proposal['kind'], string>)[p.kind]
   const counts = proposals.data?.counts
   const rows = proposals.data?.proposals ?? []
   return (
@@ -95,7 +98,7 @@ export function BrainReview() {
                 <Btn busy={busy === p.id} onClick={() => void act(p.id, () => post(`/api/proposal/${p.id}/approve`), approvedToast(p))}>
                   {approveLabel(p)}
                 </Btn>
-                {EDITABLE_KINDS.includes(p.kind) && <Btn kind="ghost" onClick={() => setEditing(p)}>Edit…</Btn>}
+                {EDITABLE[p.kind] && <Btn kind="ghost" onClick={() => setEditing(p)}>Edit…</Btn>}
                 <Btn kind="ghost" onClick={() => setRejecting(p)}>Reject…</Btn>
               </div>
             ) : (
@@ -145,23 +148,6 @@ function RejectModal({ p, onClose }: { p: Proposal; onClose: () => void }) {
   )
 }
 
-const tagsFrom = (s: string) => s.split(',').map(t => t.trim()).filter(Boolean)
-
-function AreaSelect({ value, onChange, areas }: { value: string; onChange: (v: string) => void; areas: Area[] }) {
-  const roots = areas.filter(a => !a.parent_id)
-  return (
-    <SelectInput value={value} onChange={e => onChange(e.target.value)} aria-label="Area">
-      <option value="">— no area —</option>
-      {roots.map(r => (
-        <optgroup key={r.id} label={r.name}>
-          <option value={r.id}>{r.name}</option>
-          {areas.filter(a => a.parent_id === r.id).map(a => <option key={a.id} value={a.id}>{r.name} / {a.name}</option>)}
-        </optgroup>
-      ))}
-    </SelectInput>
-  )
-}
-
 /** Edit-before-approve: adjust the librarian's payload, then approve in one
  * step. The server re-validates and persists the edited payload on the row,
  * so the record shows what was actually approved. */
@@ -207,19 +193,14 @@ function EditProposalModal({ p, onClose }: { p: Proposal; onClose: () => void })
       toast('Approved with your edits'); qc.invalidateQueries(); onClose()
     } catch (e) { toast(e instanceof Error ? e.message : String(e), 'err') } finally { setBusy(false) }
   }
-  const projectOptions = (value: string, onChange: (v: string) => void) => (
-    <SelectInput value={value} onChange={e => onChange(e.target.value)} aria-label="Project">
-      <option value="">— no project —</option>
-      {(projects.data?.projects ?? []).map(x => <option key={x.id} value={x.id}>{x.name}</option>)}
-    </SelectInput>
-  )
+  const projectList = projects.data?.projects ?? []
   return (
     <Modal title={`Edit ${KIND_LABEL[p.kind]} proposal #${p.id}`} onClose={onClose}>
       <div className="flex flex-col gap-3">
         {p.kind === 'file' && (
           <>
             <Field label="Area"><AreaSelect value={file.area_id} onChange={v => setFile(x => ({ ...x, area_id: v }))} areas={areas.data?.areas ?? []} /></Field>
-            <Field label="Project">{projectOptions(file.project_id, v => setFile(x => ({ ...x, project_id: v })))}</Field>
+            <Field label="Project"><ProjectSelect value={file.project_id} onChange={v => setFile(x => ({ ...x, project_id: v }))} projects={projectList} /></Field>
             <Field label="Tags" hint="Comma-separated."><TextInput value={file.tags} onChange={e => setFile(x => ({ ...x, tags: e.target.value }))} /></Field>
             <label className="flex items-center gap-2 text-sm">
               <input type="checkbox" checked={file.archive} onChange={e => setFile(x => ({ ...x, archive: e.target.checked }))} />
@@ -231,7 +212,7 @@ function EditProposalModal({ p, onClose }: { p: Proposal; onClose: () => void })
           <>
             <Field label="Title"><TextInput value={task.title} onChange={e => setTask(x => ({ ...x, title: e.target.value }))} /></Field>
             <Field label="Description"><TextArea rows={2} value={task.description} onChange={e => setTask(x => ({ ...x, description: e.target.value }))} /></Field>
-            <Field label="Project" hint="Defaults to the note's project when left empty.">{projectOptions(task.project_id, v => setTask(x => ({ ...x, project_id: v })))}</Field>
+            <Field label="Project" hint="Defaults to the note's project when left empty."><ProjectSelect value={task.project_id} onChange={v => setTask(x => ({ ...x, project_id: v }))} projects={projectList} /></Field>
             <Field label="Assignee" hint="owner = your own todo; agents get dispatched.">
               <SelectInput value={task.assignee} onChange={e => setTask(x => ({ ...x, assignee: e.target.value }))}>
                 {(roster.data?.assignees ?? ['owner']).map(a => <option key={a}>{a}</option>)}
@@ -254,6 +235,7 @@ function EditProposalModal({ p, onClose }: { p: Proposal; onClose: () => void })
                   {part.body && <p className="mt-1 line-clamp-1 text-[11px] text-muted">{part.body}</p>}
                   <div className="mt-2 flex flex-col gap-2 sm:flex-row">
                     <div className="min-w-0 flex-1"><AreaSelect value={part.area_id ? String(part.area_id) : ''} onChange={v => setPart(i, { area_id: v ? Number(v) : undefined })} areas={areas.data?.areas ?? []} /></div>
+                    <div className="min-w-0 flex-1"><ProjectSelect value={part.project_id ? String(part.project_id) : ''} onChange={v => setPart(i, { project_id: v ? Number(v) : undefined })} projects={projectList} /></div>
                     <div className="min-w-0 flex-1"><TextInput value={(part.tags ?? []).join(', ')} onChange={e => setPart(i, { tags: tagsFrom(e.target.value) })} placeholder="tags, comma-separated" aria-label={`Part ${i + 1} tags`} /></div>
                   </div>
                 </div>
