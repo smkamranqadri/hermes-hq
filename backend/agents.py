@@ -44,6 +44,12 @@ def load_template(name):
     meta["path"] = p
     with open(os.path.join(p, meta["soul"])) as f:
         meta["soul_text"] = f.read()
+    # Optional hand-authored memory SEED (memories/MEMORY.md). Installed only
+    # when the profile has no MEMORY.md yet — a live agent's learned memory is
+    # runtime state and must never be clobbered (the extractor still never
+    # copies live memories back; seeds are written in the template by hand).
+    mem = os.path.join(p, "memories", "MEMORY.md")
+    meta["memory_text"] = open(mem).read() if os.path.isfile(mem) else None
     return meta
 
 
@@ -203,6 +209,11 @@ def _copy_template_into(meta, home):
         if os.path.isdir(dst):
             shutil.rmtree(dst)
         shutil.copytree(src, dst)
+    mem = os.path.join(home, "memories", "MEMORY.md")
+    if meta.get("memory_text") and not os.path.isfile(mem):
+        os.makedirs(os.path.dirname(mem), exist_ok=True)
+        with open(mem, "w") as f:
+            f.write(meta["memory_text"])
 
 
 def install(template, hermes=None, force=False, db_path=None, timeout=120):
