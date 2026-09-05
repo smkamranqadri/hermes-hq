@@ -187,6 +187,31 @@ def test_new_reminder_from_note(env):
     assert links[0]["kind"] == "schedule" and links[0]["target"]["id"] == sid
 
 
+def test_one_shot_reminder_fires_once_then_retires(env):
+    c, store, db = env
+    h = login(c)
+    p = store.get_project(slug="alpha", db_path=db)
+    nid = c.post("/api/notes", json={"title": "Dentist Tuesday", "project_id": p["id"]}, headers=h).json()["id"]
+    r = c.post("/api/note/%d/new-reminder" % nid,
+               json={"cron": "0 15 1 1 *", "one_shot": True}, headers=h)
+    assert r.status_code == 200
+    sid = r.json()["id"]
+    assert store.get_schedule(sid, db_path=db)["one_shot"] == 1
+    # pretend the moment arrived
+    conn = store._connect(db)
+    with conn:
+        conn.execute("UPDATE schedules SET next_fire_at=? WHERE id=?", (1.0, sid))
+    conn.close()
+    fired = store.fire_due(db_path=db)
+    assert [(x[0], x[1]) for x in fired] == [(sid, "late")]
+    tid = fired[0][2]
+    t = store.get_task(tid, db_path=db)
+    assert t["assignee_profile"] == "owner"
+    s = store.get_schedule(sid, db_path=db)
+    assert s["enabled"] == 0 and s["next_fire_at"] is None   # retired, not deleted
+    assert store.fire_due(db_path=db) == []                  # never fires again
+
+
 # ---- project surface ---------------------------------------------------
 
 def test_project_notes(env):

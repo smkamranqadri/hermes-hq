@@ -87,6 +87,7 @@ class NoteReminderIn(BaseModel):
     zone: str | None = None
     project: str | None = None       # slug; defaults to the note's project
     title: str | None = None         # task title the schedule mints
+    one_shot: bool = False           # one-time reminder: fires once, then disables
 
 
 @router.get("/notes")
@@ -187,7 +188,8 @@ def new_reminder(note_id: int, body: NoteReminderIn):
     name = (body.name or n["title"]).strip()
     title = (body.title or n["title"]).strip()
     kwargs = {"assignee_profile": store.OWNER_ASSIGNEE,
-              "description": "Reminder from note #%d" % note_id}
+              "description": "Reminder from note #%d" % note_id,
+              "one_shot": body.one_shot}
     if body.zone:
         kwargs["zone"] = body.zone
     sid = _engine(store.create_schedule, name, body.cron, slug, title, **kwargs)
