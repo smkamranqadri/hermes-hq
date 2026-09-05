@@ -4,7 +4,7 @@ import { useState } from 'react'
 import { Link } from 'react-router-dom'
 import { useAreas, useNotes, type Note } from '../api'
 import { GlassCard, PageHeader } from '../components/GlassCard'
-import { BrainSubNav, CaptureBox, FileNoteModal, NoteRow, useBrainCounts } from '../components/brain'
+import { BrainSubNav, CaptureBox, FileNoteModal, NoteRow, PendingProposalChip, useBrainCounts } from '../components/brain'
 import { Empty, Label, Loading } from '../components/ui'
 import { usePageTitle } from '../usePageTitle'
 
@@ -38,8 +38,10 @@ export function SecondBrain() {
                   <span className="font-mono text-[10px] text-muted">{new Date((n.created_at) * 1000).toLocaleString([], { month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit' })}</span>
                 </div>
                 {n.body && <p className="mt-1 line-clamp-2 text-xs text-muted">{n.body}</p>}
-                <div className="mt-2 flex gap-2">
-                  <button onClick={() => setFiling(n)} className="rounded-full border border-working/60 px-3 py-1 font-mono text-[10px] uppercase tracking-wider text-working hover:bg-working/10">File…</button>
+                <div className="mt-2 flex flex-wrap items-center gap-2">
+                  {n.pending_proposal_id
+                    ? <PendingProposalChip />
+                    : <button onClick={() => setFiling(n)} className="rounded-full border border-working/60 px-3 py-1 font-mono text-[10px] uppercase tracking-wider text-working hover:bg-working/10">File…</button>}
                   <Link to={`/brain/note/${n.id}`} className="rounded-full border border-line px-3 py-1 font-mono text-[10px] uppercase tracking-wider text-muted hover:text-fg">Open</Link>
                 </div>
               </div>

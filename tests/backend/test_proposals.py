@@ -102,6 +102,24 @@ def test_new_proposal_supersedes_pending_same_kind(env):
     assert store.get_proposal(p2, db_path=db)["status"] == "pending"
 
 
+def test_inbox_list_marks_pending_proposal(env):
+    """Note lists carry pending_proposal_id so the UI can say 'librarian
+    proposed' instead of inviting a double-filing (owner confusion, 2026-09-06)."""
+    c, store, db = env
+    h = login(c)
+    covered = store.create_note("covered", db_path=db)
+    bare = store.create_note("bare", db_path=db)
+    pid = store.create_proposal("file", covered, {"area_id": area_id(store, db, "Work")}, db_path=db)
+    rows = {n["title"]: n for n in c.get("/api/notes", params={"status": "inbox"}).json()["notes"]}
+    assert rows["covered"]["pending_proposal_id"] == pid
+    assert rows["bare"]["pending_proposal_id"] is None
+    # deciding the proposal clears the mark
+    c.post("/api/proposal/%d/approve" % pid, headers=h)
+    rows = {n["title"]: n for n in c.get("/api/notes", params={"status": "inbox"}).json()["notes"]}
+    assert "covered" not in rows                       # filed out of the inbox
+    assert rows["bare"]["pending_proposal_id"] is None
+
+
 def test_proposal_notifies_owner(env):
     c, store, db = env
     h = login(c)
