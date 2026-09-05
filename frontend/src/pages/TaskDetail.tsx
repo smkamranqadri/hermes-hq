@@ -1,7 +1,7 @@
 import { Link, useParams } from 'react-router-dom'
 import clsx from 'clsx'
 import { useQuery } from '@tanstack/react-query'
-import { get, useTask, useSystem, useWrite, ApiError, ago, when, markNotificationsRead, type TaskArtifact } from '../api'
+import { get, useTask, useTaskNotes, useSystem, useWrite, ApiError, ago, when, markNotificationsRead, type TaskArtifact } from '../api'
 import { Markdown } from '../components/chat/Markdown'
 import { GlassCard } from '../components/GlassCard'
 import { StatusBadge } from '../components/StatusBadge'
@@ -122,6 +122,7 @@ function Fold({ title, children, desk = true }: { title: string; children: React
 export function TaskDetail() {
   const id = Number(useParams().id)
   const q = useTask(id)
+  const srcNotes = useTaskNotes(id)
   const sys = useSystem()
   const t = q.data
   usePageTitle(t ? `#${t.id} ${t.title}` : `Task #${id}`)
@@ -162,6 +163,7 @@ export function TaskDetail() {
             <GateChip taskId={t.id} on={!!t.owner_approval} canEdit={canEdit} />
             {t.goal_title && <span>· goal #{t.goal_id} {t.goal_title}</span>}
             {t.schedule_id != null && <Link to="/schedules" className="text-accent-2 hover:underline">· ⟳ created by a schedule</Link>}
+            {(srcNotes.data?.notes ?? []).map(n => <Link key={n.id} to={`/brain/note/${n.id}`} className="text-accent-2 hover:underline" title="This task was created from a Second Brain note">· ✎ from note “{n.title.length > 40 ? n.title.slice(0, 40) + '…' : n.title}”</Link>)}
           </div>
         </div>
         {t.human.reason && t.human.reason.includes(':') && <p className="basis-full text-sm text-needsyou">{t.human.reason.slice(t.human.reason.indexOf(':') + 1).trim()}</p>}

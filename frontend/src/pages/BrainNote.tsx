@@ -79,7 +79,7 @@ export function BrainNote() {
           </div>
         ) : (
           <>
-            {n.body ? <div className="text-sm"><Markdown text={n.body} /></div> : <p className="text-sm text-muted">No body — captured as a title only.</p>}
+            {n.body ? <div className="text-sm"><Markdown text={n.body} /></div> : <p className="text-sm text-muted">No body yet — Edit to add one.</p>}
             <div className="mt-3 flex flex-wrap gap-2 border-t border-line-subtle pt-3">
               <Btn kind="ghost" onClick={() => { setBodyDraft(n.body); setEditing(true) }}>Edit</Btn>
               <Btn kind="ghost" busy={busy === 'pin'} onClick={() => void act('pin', () => post(`/api/note/${n.id}/edit`, { pinned: !n.pinned }), n.pinned ? 'Unpinned' : 'Pinned')}>{n.pinned ? 'Unpin' : 'Pin'}</Btn>
@@ -92,9 +92,9 @@ export function BrainNote() {
       </GlassCard>
 
       <GlassCard className="mb-4">
-        <div className="flex items-center justify-between"><Label>Entries · {n.entries.length}</Label></div>
-        <form className="mt-2 flex gap-2" onSubmit={e => { e.preventDefault(); if (!entry.trim()) return; void act('entry', async () => { await post(`/api/note/${n.id}/entries`, { body: entry.trim() }); setEntry('') }, 'Entry added') }}>
-          <TextArea rows={2} value={entry} onChange={e => setEntry(e.target.value)} placeholder="Add a dated entry — meeting outcome, follow-up, thought…" />
+        <div className="flex items-center justify-between"><Label>Thoughts · {n.entries.length}</Label></div>
+        <form className="mt-2 flex gap-2" onSubmit={e => { e.preventDefault(); if (!entry.trim()) return; void act('entry', async () => { await post(`/api/note/${n.id}/entries`, { body: entry.trim() }); setEntry('') }, 'Thought added') }}>
+          <TextArea rows={2} value={entry} onChange={e => setEntry(e.target.value)} placeholder="Add a dated thought — meeting outcome, follow-up, idea…" />
           <Btn busy={busy === 'entry'} disabled={!entry.trim()} className="self-end">Add</Btn>
         </form>
         <div className="mt-3 flex flex-col gap-3">
@@ -104,7 +104,7 @@ export function BrainNote() {
               <div className="mt-0.5 text-sm"><Markdown text={e.body} /></div>
             </div>
           ))}
-          {n.entries.length === 0 && <p className="text-xs text-muted">No entries yet — use them as an append log (1:1s, running topics).</p>}
+          {n.entries.length === 0 && <p className="text-xs text-muted">No thoughts yet — use them as an append log (1:1s, running topics).</p>}
         </div>
       </GlassCard>
 
