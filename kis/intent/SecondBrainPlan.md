@@ -25,13 +25,22 @@ A second brain inside hermes-hq: capture anything (text/photo/voice, incl. batch
 
 ## Phases
 
-### Phase 1 — Foundation (no librarian) — BUILT 2026-09-04 (branch `worktree-second-brain-plan`; owner click-through pending merge + deploy)
+### Phase 1 — Foundation (no librarian) — SHIPPED 2026-09-05 ✅
+Live since 2026-09-05 (build `97ff496`+`eaf635e`, merged + deployed). Owner clicked through on desktop + phone; **three same-day review cycles**, each fixed → verified (scratch Playwright) → deployed:
+1. `54327b0` — entries renamed **Thoughts**; capture keeps the FULL text as body (first line only names the note); TaskDetail "✎ from note" back-link.
+2. `e2e796e` — **one-time reminders** (`schedules.one_shot`, retires after firing; modal defaults to `once` with date+time); Library Inbox row shows the inbox LIST; "Refile…" + clickable chips edit filing any time.
+3. `27446b3` — reminder modal layout: stacked fields, wrapped date/time, hq-select chevron on modal selects; 390px overflow measured zero.
+Suite ended at **145 passed 0 failed**. Deferred with owner sign-off: combined Library filters (project/tag inside an area) → Phase 2b.
 Schema + migrations (`notes`, `areas`, `note_entries`, `note_revisions`, FTS5 index; task/schedule link columns), `backend/notes.py` API (CRUD, entries append, search, tree counts; **agent-session write refusal** from day one), owner-assignee groundwork (reserved `owner` assignee + dispatcher skip + "mine" filter), frontend: navbar change, Second Brain Home (capture editor: text first; inbox list; recent), Library (tree + search + note preview), Note Detail (body, entries, tags, manual file/edit/archive, New task / New reminder create-and-link), project-page Notes section. Manual filing only.
 **DoD:** suite green incl. new `test_notes.py` (agent write refusal, owner-task skip predicate, entries, FTS); Playwright 390px + desktop proofs; owner captures, files, searches, and creates a linked task + reminder live.
 
-### Phase 2 — Librarian + Review Queue
-`proposals` table + endpoints, librarian profile + skill (schema doc, orientation reads, page thresholds, tag-taxonomy discipline), scheduled ingest + lint with early-exit, Review Queue UI (filters, routine bulk-approve, split/file/wiki-update/contradiction/new-task cards, per-item edit/defer/reject, feedback field), phone triage screen, photo + voice capture.
-**DoD:** batch dump → split proposal → approve-all round trip live; librarian direct-write refused (test); lint report lands as notification; a contradiction pair gets `disputed` and renders.
+### Phase 2 — Librarian + Review Queue (re-sliced 2026-09-05 after P1 learnings: ship in small owner-reviewable slices, split proposals are the highest-value piece — batch dumps are the owner's real capture pattern)
+**2a — Librarian core + split/file proposals.** `proposals` table + propose-* endpoints (agent-writable, note-tables still owner-only), librarian profile + skill (schema doc, orientation reads, page thresholds, tag-taxonomy discipline, note content = data), scheduled ingest with heartbeat early-exit, minimal Review queue (list + approve/reject per item + approve-all-routine), phone triage screen.
+**DoD 2a:** batch dump → split proposal → approve round trip live on the owner's phone; librarian direct note-write refused (test); ingest run with nothing new spends no model call.
+**2b — Review polish + Library filters.** wiki-update (diff preview) + contradiction (`disputed`, keep-both) + new-task proposal kinds, per-item edit/defer + human-feedback field the librarian reads on revision, lint lane (deterministic checks → notification), and the deferred Library filters: project/tag within an area (list_notes tag param).
+**DoD 2b:** a planted contradiction pair gets `disputed` and renders; lint report lands as a notification; area+tag filter returns the right subset.
+**2c — Photo + voice capture.** Photo attach (upload infra exists) + voice memo stored untranscribed + flagged for the owner (Urdu voice is an intended input; transcription stays out of scope).
+**DoD 2c:** photo and voice captured from the phone PWA land on notes and render; voice flagged for owner processing.
 
 ### Phase 3 — Import
 Importer job (per-source parsers, dedupe by hash + title heuristics, museum auto-archive, empties dropped, secrets quarantine), triage sessions through the Review Queue for the living set, coverage stat on Home.
