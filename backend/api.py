@@ -89,6 +89,18 @@ def agent(name: str, history: int = Query(120, ge=1, le=1000)):
         raise HTTPException(404, "no such agent")
 
 
+@router.get("/agent/{name}/model")
+def agent_model(name: str):
+    """The profile's DEFAULT model assignment (config.yaml via the bridge) —
+    what dispatched runs and new sessions use. Picker options come from
+    /api/chat/models?profile=<name>."""
+    from backend import memory, skills
+    if name not in wm_store.ASSIGNEE_PROFILES:
+        raise HTTPException(404, "no such agent")
+    prof, home = memory.home_of(name)
+    return skills._ok(memory.bridge(home, "model_get"))
+
+
 @router.get("/agent/{name}/sessions")
 def agent_sessions(name: str, limit: int = Query(100, ge=1, le=500)):
     try:
