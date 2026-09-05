@@ -731,7 +731,7 @@ def cmd_note_propose_contradiction(args):
         payload["explanation"] = args.explain
     pid = store.create_proposal(
         "contradiction", args.id, payload, summary=args.summary,
-        classification="routine" if args.routine else "needs_attention")
+        classification="needs_attention")     # always — enforced in the store too
     _proposal_result(pid, args.summary)
     return 0
 
@@ -750,7 +750,7 @@ def cmd_note_propose_task(args):
         payload["assignee"] = args.assignee
     pid = store.create_proposal(
         "new_task", args.id, payload, summary=args.summary,
-        classification="routine" if args.routine else "needs_attention")
+        classification="needs_attention")     # always — enforced in the store too
     _proposal_result(pid, args.summary)
     return 0
 
@@ -1244,7 +1244,6 @@ def build_parser():
     pc.add_argument("--explain", default=None,
                     help="what disagrees with what (the owner reads this)")
     pc.add_argument("--summary", required=True)
-    pc.add_argument("--routine", action="store_true")
     pc.set_defaults(fn=cmd_note_propose_contradiction)
     pt = note_sub.add_parser("propose-task",
                              help="a note describes real work: propose creating "
@@ -1257,7 +1256,6 @@ def build_parser():
     pt.add_argument("--assignee", default=None,
                     help="assignee profile (default: owner — Kamran's own todo)")
     pt.add_argument("--summary", required=True)
-    pt.add_argument("--routine", action="store_true")
     pt.set_defaults(fn=cmd_note_propose_task)
     psp = note_sub.add_parser("propose-split",
                               help="propose splitting one capture into N notes; "
