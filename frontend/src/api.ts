@@ -169,6 +169,8 @@ export const useNote = (id: number) =>
   useQuery({ queryKey: ['note', id], queryFn: () => get<NoteFull>(`/api/note/${id}`), enabled: Number.isFinite(id) })
 export const useProjectNotes = (slug: string) =>
   useQuery({ queryKey: ['project-notes', slug], queryFn: () => get<{ notes: Note[] }>(`/api/project/${slug}/notes`) })
+export const useTaskNotes = (id: number) =>
+  useQuery({ queryKey: ['task-notes', id], queryFn: () => get<{ notes: Note[] }>(`/api/task/${id}/notes`), enabled: Number.isFinite(id) })
 export const markNotificationsRead = (ids?: number[], source_key?: string) => post<{ marked: number }>('/api/notifications/read', source_key ? { source_key } : ids ? { ids } : {})
 export const addNotification = (n: { kind: 'chat' | 'question'; title: string; body?: string; href?: string; source_key?: string }) => post<{ id: number | null }>('/api/notifications', n)
 

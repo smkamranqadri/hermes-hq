@@ -40,7 +40,7 @@ export function NoteRow({ n, areas, showBody = true }: { n: Note; areas?: Area[]
         {n.type !== 'note' && <span className={clsx('font-mono text-[10px] uppercase tracking-wider', TYPE_TONE[n.type])}>{n.type}</span>}
         {!!n.pinned && <span className="font-mono text-[10px] text-needsyou" title="Pinned">★</span>}
         <span className="min-w-0 flex-1 truncate text-sm font-medium">{n.title}</span>
-        {(n.entry_count ?? 0) > 0 && <span className="font-mono text-[10px] text-muted">{n.entry_count} entr{n.entry_count === 1 ? 'y' : 'ies'}</span>}
+        {(n.entry_count ?? 0) > 0 && <span className="font-mono text-[10px] text-muted">{n.entry_count} thought{n.entry_count === 1 ? '' : 's'}</span>}
         <span className="font-mono text-[10px] text-muted">{ago(n.updated_at ?? n.created_at)}</span>
       </div>
       {showBody && n.body && <p className="mt-1 line-clamp-2 text-xs text-muted">{n.body}</p>}
@@ -210,10 +210,10 @@ export function CaptureBox({ compact = false }: { compact?: boolean }) {
   const capture = async () => {
     const t = text.trim()
     if (!t) return
-    const [first, ...rest] = t.split('\n')
     setBusy(true)
     try {
-      await post('/api/notes', { title: first.slice(0, 300), body: rest.join('\n').trim() })
+      // the FULL capture is the body; the first line only NAMES the note
+      await post('/api/notes', { title: t.split('\n')[0].slice(0, 120), body: t })
       setText(''); toast('Captured to inbox'); qc.invalidateQueries()
     } catch (e) { toast(e instanceof Error ? e.message : String(e), 'err') } finally { setBusy(false) }
   }
