@@ -538,6 +538,15 @@ CREATE TABLE IF NOT EXISTS proposals (
 CREATE INDEX IF NOT EXISTS idx_proposals_status ON proposals(status);
 CREATE INDEX IF NOT EXISTS idx_proposals_note   ON proposals(note_id);
 
+-- 2b-ii: closed tag taxonomy. The OWNER is the authority: owner/import writes
+-- auto-register their tags; agent proposals must use registered tags or
+-- explicitly declare coinage (payload new_tags), registered at owner approval.
+CREATE TABLE IF NOT EXISTS note_tag_taxonomy (
+    tag        TEXT PRIMARY KEY,
+    added_by   TEXT DEFAULT 'owner',
+    created_at REAL
+);
+
 CREATE INDEX IF NOT EXISTS idx_notes_status   ON notes(status);
 CREATE INDEX IF NOT EXISTS idx_notes_area     ON notes(area_id);
 CREATE INDEX IF NOT EXISTS idx_notes_project  ON notes(project_id);
@@ -615,6 +624,20 @@ def _migrate(conn):
     # disputed (keep-both; the owner clears the flag once resolved).
     if "disputed" not in _table_columns(conn, "notes"):
         conn.execute("ALTER TABLE notes ADD COLUMN disputed INTEGER DEFAULT 0")
+    # Second Brain P2b-ii: seed the closed taxonomy from tags already in use
+    # (idempotent: only when the taxonomy is empty and notes carry tags).
+    if conn.execute("SELECT 1 FROM note_tag_taxonomy LIMIT 1").fetchone() is None:
+        seen = set()
+        for r in conn.execute("SELECT tags FROM notes"):
+            try:
+                seen.update(t.strip() for t in json.loads(r["tags"] or "[]")
+                            if isinstance(t, str) and t.strip())
+            except ValueError:
+                continue
+        now = time.time()
+        for t in sorted(seen):
+            conn.execute("INSERT OR IGNORE INTO note_tag_taxonomy(tag, added_by, created_at) "
+                         "VALUES(?, 'owner', ?)", (t, now))
 
 
 def init_db(db_path=None):
@@ -3915,7 +3938,7 @@ OVERLAPS = ("skip", "always")
 # Named pre-fire heartbeat checks a schedule may carry ("" = none). Each name
 # maps to a deterministic predicate in heartbeat_check(); adding a check means
 # adding it BOTH places. Kept closed so a typo cannot silently disable a run.
-SCHEDULE_HEARTBEATS = ("", "librarian_ingest")
+SCHEDULE_HEARTBEATS = ("", "librarian_ingest", "librarian_lint")
 OPEN_TASK_STATUSES = ("planned", "waiting_approval", "ready", "running", "needs_review", "rework", "stalled", "blocked", "manual")
 
 
@@ -4319,6 +4342,7 @@ def create_note(title, body="", note_type="note", status="inbox", area_id=None,
                 (title.strip(), body or "", note_type, status, area_id,
                  project_id, tags_json, authored_by, content_hash, now, now))
             nid = cur.lastrowid
+            _register_tags(conn, tags, authored_by)
             _fts_sync(conn, nid)
     finally:
         conn.close()
@@ -4379,13 +4403,20 @@ def _note_links(conn, note_id):
 
 
 def list_notes(status=None, area_id=None, project_id=None, note_type=None,
-               authored_by=None, limit=200, offset=0, db_path=None):
-    """Filtered note list, newest-updated first. Bodies truncated for lists."""
+               authored_by=None, tag=None, limit=200, offset=0, db_path=None):
+    """Filtered note list, newest-updated first. Bodies truncated for lists.
+    Filters compose (2b-ii: tag/project within an area selection)."""
     sql, params = "SELECT * FROM notes WHERE 1=1", []
     if status is not None:
         if status not in NOTE_STATUSES:
             raise ValueError("invalid status filter %r" % status)
         sql += " AND status=?"; params.append(status)
+    if tag is not None:
+        if not isinstance(tag, str) or not tag.strip():
+            raise ValueError("invalid tag filter %r" % (tag,))
+        sql += (" AND EXISTS (SELECT 1 FROM json_each(notes.tags) "
+                "WHERE json_each.value = ?)")
+        params.append(tag.strip())
     if area_id is not None:
         sql += (" AND (area_id=? OR area_id IN "
                 "(SELECT id FROM areas WHERE parent_id=?))")
@@ -4452,6 +4483,7 @@ def update_note(note_id, edited_by="owner", note_type=None, status=None,
             sets, params = [], []
             for k, v in fields.items():
                 if k == "tags":
+                    _register_tags(conn, v, edited_by)
                     v = _encode_tags(v)
                 if k == "area_id" and v is not None and conn.execute(
                         "SELECT id FROM areas WHERE id=?", (v,)).fetchone() is None:
@@ -4593,13 +4625,34 @@ def notes_tree(db_path=None):
         conn.close()
 
 
-def list_note_tags(db_path=None):
-    """Distinct tags in use with counts — the librarian's taxonomy orientation
-    read (2a ships tag DISCIPLINE: reuse what exists, coin sparingly; the
-    enforced closed taxonomy lands with 2b)."""
+def _register_tags(conn, tags, added_by):
+    """Idempotently add tags to the closed taxonomy. Owner/import writes call
+    this on every save (the owner IS the taxonomy authority); librarian tags
+    arrive here only through owner-approved proposals."""
+    now = time.time()
+    for t in tags or []:
+        s = t.strip()
+        if s:
+            conn.execute("INSERT OR IGNORE INTO note_tag_taxonomy(tag, added_by, created_at) "
+                         "VALUES(?,?,?)", (s, added_by, now))
+
+
+def taxonomy_tags(db_path=None):
     conn = _connect(db_path)
     try:
-        counts = {}
+        return {r["tag"] for r in conn.execute("SELECT tag FROM note_tag_taxonomy")}
+    finally:
+        conn.close()
+
+
+def list_note_tags(db_path=None):
+    """The taxonomy with in-use counts — the librarian's orientation read.
+    2b-ii: the taxonomy is CLOSED for agents (registered tags only; coinage
+    must be declared via new_tags and lands at owner approval), so zero-count
+    registered tags are listed too."""
+    conn = _connect(db_path)
+    try:
+        counts = {r["tag"]: 0 for r in conn.execute("SELECT tag FROM note_tag_taxonomy")}
         for r in conn.execute("SELECT tags FROM notes WHERE status != 'archived'"):
             try:
                 for t in json.loads(r["tags"] or "[]"):
@@ -4630,9 +4683,11 @@ PROPOSAL_CLASSES = ("routine", "needs_attention")
 MAX_SPLIT_PARTS = 50
 
 
-def _validate_filing(conn, part, where):
+def _validate_filing(conn, part, where, new_tags=frozenset()):
     """Validate the optional filing fields (area_id/project_id/tags/type) of a
-    file payload or a split part. Raises ValueError with a located message."""
+    file payload or a split part. Raises ValueError with a located message.
+    2b-ii: tags must be in the closed taxonomy unless declared in the
+    payload's new_tags (agent coinage lands only via owner approval)."""
     if not isinstance(part, dict):
         raise ValueError("%s must be an object" % where)
     unknown = set(part) - {"title", "body", "area_id", "project_id", "tags", "type"}
@@ -4648,6 +4703,36 @@ def _validate_filing(conn, part, where):
         raise ValueError("%s: invalid note type %r" % (where, part["type"]))
     if "tags" in part:
         _encode_tags(part.get("tags"))          # raises on bad shape
+        known = {r["tag"] for r in conn.execute("SELECT tag FROM note_tag_taxonomy")}
+        bad = sorted({t.strip() for t in (part.get("tags") or [])
+                      if isinstance(t, str) and t.strip()
+                      and t.strip() not in known and t.strip() not in new_tags})
+        if bad:
+            raise ValueError("%s: tag(s) not in the taxonomy: %s — reuse an existing "
+                             "tag (wm note tags) or declare coinage with new_tags"
+                             % (where, ", ".join(bad)))
+
+
+def _validate_new_tags(payload, used_tags):
+    """Validate an agent's declared tag coinage. Every declared tag must be
+    non-empty, short, and actually used by the payload. Returns the set."""
+    nt = payload.get("new_tags")
+    if nt is None:
+        return frozenset()
+    if not isinstance(nt, (list, tuple)):
+        raise ValueError("new_tags must be a list of strings")
+    out = set()
+    for t in nt:
+        if not isinstance(t, str) or not t.strip():
+            raise ValueError("new_tags must be non-empty strings, got %r" % (t,))
+        if len(t) > 60:
+            raise ValueError("new tag too long (max 60): %r" % t[:70])
+        out.add(t.strip())
+    unused = out - used_tags
+    if unused:
+        raise ValueError("new_tags declared but not used on anything: %s"
+                         % ", ".join(sorted(unused)))
+    return frozenset(out)
 
 
 def _validate_proposal_payload(conn, kind, payload, note_id=None):
@@ -4655,8 +4740,11 @@ def _validate_proposal_payload(conn, kind, payload, note_id=None):
         # `archive` (2b-i) marks a junk/museum capture: filing straight to
         # Archive instead of the Library. No separate kind — same review flow.
         archive = payload.get("archive")
-        _validate_filing(conn, {k: v for k, v in payload.items() if k != "archive"},
-                         "file payload")
+        used = {t.strip() for t in (payload.get("tags") or []) if isinstance(t, str)}
+        new_tags = _validate_new_tags(payload, used)
+        _validate_filing(conn, {k: v for k, v in payload.items()
+                                if k not in ("archive", "new_tags")},
+                         "file payload", new_tags=new_tags)
         if archive is not None and not isinstance(archive, bool):
             raise ValueError("file payload: archive must be true/false")
         if payload.get("title") is not None or payload.get("body") is not None:
@@ -4672,12 +4760,15 @@ def _validate_proposal_payload(conn, kind, payload, note_id=None):
             raise ValueError("split payload needs a non-empty parts list")
         if len(parts) > MAX_SPLIT_PARTS:
             raise ValueError("split payload has %d parts (max %d)" % (len(parts), MAX_SPLIT_PARTS))
-        unknown = set(payload) - {"parts", "archive_original"}
+        unknown = set(payload) - {"parts", "archive_original", "new_tags"}
         if unknown:
             raise ValueError("split payload has unknown fields: %s" % ", ".join(sorted(unknown)))
+        used = {t.strip() for part in parts if isinstance(part, dict)
+                for t in (part.get("tags") or []) if isinstance(t, str)}
+        new_tags = _validate_new_tags(payload, used)
         for i, part in enumerate(parts):
             where = "split part %d" % (i + 1)
-            _validate_filing(conn, part, where)
+            _validate_filing(conn, part, where, new_tags=new_tags)
             title = part.get("title")
             if not isinstance(title, str) or not title.strip():
                 raise ValueError("%s needs a title" % where)
@@ -4886,6 +4977,19 @@ def approve_proposal(pid, payload_override=None, db_path=None):
         if not isinstance(payload_override, dict):
             raise ValueError("edited payload must be an object")
         payload = payload_override
+        # The OWNER wrote this payload: their tags are taxonomy authority, so
+        # register them before validation (agents still need new_tags).
+        owner_tags = list(payload.get("tags") or []) + [
+            t for part in (payload.get("parts") or []) if isinstance(part, dict)
+            for t in (part.get("tags") or [])]
+        if owner_tags:
+            conn = _connect(db_path)
+            try:
+                with conn:
+                    _register_tags(conn, [t for t in owner_tags if isinstance(t, str)],
+                                   "owner")
+            finally:
+                conn.close()
     # Re-validate the whole payload up front so a stale area/project (or a bad
     # owner edit) fails the approval BEFORE any note is touched. The edited
     # payload is persisted only AFTER the apply succeeds — a failed approval
@@ -5023,6 +5127,16 @@ def heartbeat_check(name, db_path=None):
         finally:
             conn.close()
         return (n > 0, "%d untriaged inbox note(s)" % n)
+    if name == "librarian_lint":
+        # Deterministic hygiene sweep (2b-ii lint lane): a clean library skips
+        # the run entirely; findings mint a librarian fix-via-proposals run AND
+        # land as one daily-deduped owner notification (inside lint_library).
+        findings = lint_library(notify=True, db_path=db_path)
+        by = {}
+        for f in findings:
+            by[f["check"]] = by.get(f["check"], 0) + 1
+        detail = ", ".join("%s ×%d" % (k, v) for k, v in sorted(by.items()))
+        return (len(findings) > 0, detail or "library clean")
     # Unknown names fail OPEN (the run happens) — a heartbeat must never be
     # able to silently kill a schedule. create/update validate the closed set.
     return (True, "unknown heartbeat %r" % name)
@@ -5050,6 +5164,68 @@ def nudge_heartbeat_schedules(name, delay=HEARTBEAT_NUDGE_SECONDS, db_path=None)
             return cur.rowcount
     finally:
         conn.close()
+
+
+LINT_STALE_INBOX_DAYS = 7
+LINT_OVERSIZED_BODY = 20000
+
+
+def lint_library(notify=False, db_path=None):
+    """Deterministic Library hygiene checks (2b-ii lint lane) — pure SQL/code,
+    never a model call. Returns findings as {check, note_id, title, detail}.
+    The librarian reads this via `wm note lint` and fixes ONLY via proposals.
+    With notify=True a non-empty report lands as one needs_you notification,
+    deduped per day through source_key."""
+    conn = _connect(db_path)
+    findings = []
+    add = lambda check, note_id, title, detail: findings.append(
+        {"check": check, "note_id": note_id, "title": title, "detail": detail})
+    try:
+        now = time.time()
+        for r in conn.execute("SELECT id, title FROM notes WHERE status='active' "
+                              "AND area_id IS NULL AND project_id IS NULL ORDER BY id"):
+            add("orphan", r["id"], r["title"], "active note filed nowhere (no area, no project)")
+        cutoff = now - LINT_STALE_INBOX_DAYS * 86400
+        for r in conn.execute("SELECT id, title FROM notes WHERE status='inbox' "
+                              "AND created_at < ? ORDER BY id", (cutoff,)):
+            add("stale_inbox", r["id"], r["title"],
+                "sitting untriaged in the inbox for over %d days" % LINT_STALE_INBOX_DAYS)
+        for kind, table in (("task", "tasks"), ("schedule", "schedules"), ("note", "notes")):
+            for r in conn.execute(
+                    "SELECT l.note_id, l.target_id FROM note_links l "
+                    "LEFT JOIN %s t ON t.id = l.target_id "
+                    "WHERE l.kind=? AND t.id IS NULL" % table, (kind,)):
+                add("dangling_link", r["note_id"], None,
+                    "linked %s #%s no longer exists" % (kind, r["target_id"]))
+        if NOTES_FTS:
+            for r in conn.execute("SELECT n.id, n.title FROM notes n WHERE NOT EXISTS "
+                                  "(SELECT 1 FROM notes_fts f WHERE f.rowid = n.id) ORDER BY n.id"):
+                add("missing_fts", r["id"], r["title"], "note absent from the search index")
+        for r in conn.execute("SELECT id, title, LENGTH(body) AS n FROM notes "
+                              "WHERE status != 'archived' AND LENGTH(body) > ? ORDER BY id",
+                              (LINT_OVERSIZED_BODY,)):
+            add("oversized", r["id"], r["title"],
+                "body is %d chars — probably an unsplit dump" % r["n"])
+        by_norm = {}
+        for r in conn.execute("SELECT tag FROM note_tag_taxonomy"):
+            norm = r["tag"].strip().lower().rstrip("s")
+            by_norm.setdefault(norm, []).append(r["tag"])
+        for norm, group in sorted(by_norm.items()):
+            if len(group) > 1:
+                add("tag_duplicates", None, None,
+                    "near-duplicate tags in the taxonomy: %s" % ", ".join(sorted(group)))
+    finally:
+        conn.close()
+    if notify and findings:
+        by = {}
+        for f in findings:
+            by[f["check"]] = by.get(f["check"], 0) + 1
+        day = time.strftime("%Y-%m-%d")
+        add_notification(
+            "needs_you", "Library lint: %d finding(s)" % len(findings),
+            body=", ".join("%s ×%d" % (k, v) for k, v in sorted(by.items())),
+            href="/brain/library", source_key="lint:%s" % day, db_path=db_path)
+    return findings
 
 
 def trigger_heartbeat_schedule(name, db_path=None):
