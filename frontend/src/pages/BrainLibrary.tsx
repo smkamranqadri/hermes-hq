@@ -28,7 +28,7 @@ export function BrainLibrary() {
   const areaSel = sp.get('area'); const projSel = sp.get('project'); const typeSel = sp.get('type'); const view = sp.get('view')
   const q = sp.get('q') ?? ''
   const [draft, setDraft] = useState(q)
-  const { inbox } = useBrainCounts()
+  const { inbox, review } = useBrainCounts()
   const tree = useNotesTree()
   const areas = useAreas()
   const pick = (k: 'area' | 'project' | 'type' | 'view', v: string | null) => {
@@ -50,7 +50,7 @@ export function BrainLibrary() {
     <section className="mx-auto max-w-6xl p-4 sm:p-6">
       <PageHeader crumb="second-brain // library" title="Library" right={
         <div className="flex flex-wrap items-center gap-2">
-          <BrainSubNav inbox={inbox} />
+          <BrainSubNav inbox={inbox} review={review} />
           <form onSubmit={e => { e.preventDefault(); const n = new URLSearchParams(sp); draft ? n.set('q', draft) : n.delete('q'); setSp(n, { replace: true }) }}>
             <Input value={draft} onChange={e => setDraft(e.target.value)} placeholder="Search everything…" className="w-full sm:w-56" />
           </form>

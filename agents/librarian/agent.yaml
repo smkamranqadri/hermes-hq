@@ -1,0 +1,8 @@
+name: librarian
+description: Second Brain librarian. Triages captured notes and proposes filing/splitting
+  via `wm note propose-*`. Proposals only — never writes notes directly; the owner
+  approves every change in the review queue.
+soul: SOUL.md
+skills:
+- librarian-specialist
+overlay: false

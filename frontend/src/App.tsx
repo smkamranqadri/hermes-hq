@@ -27,6 +27,7 @@ import { Chat } from './pages/Chat'
 import { SecondBrain } from './pages/SecondBrain'
 const BrainLibrary = lazy(() => import('./pages/BrainLibrary').then(m => ({ default: m.BrainLibrary })))
 const BrainNote = lazy(() => import('./pages/BrainNote').then(m => ({ default: m.BrainNote })))
+const BrainReview = lazy(() => import('./pages/BrainReview').then(m => ({ default: m.BrainReview })))
 const Files = lazy(() => import('./pages/Files').then(m => ({ default: m.Files })))
 const Schedules = lazy(() => import('./pages/Schedules').then(m => ({ default: m.Schedules })))
 const Mcp = lazy(() => import('./pages/Mcp').then(m => ({ default: m.Mcp })))
@@ -172,6 +173,7 @@ export default function App() {
             <Route path="/brain" element={<SecondBrain />} />
             <Route path="/brain/library" element={<Suspense fallback={<section className="mx-auto max-w-6xl p-4 sm:p-6"><Loading rows={8} /></section>}><BrainLibrary /></Suspense>} />
             <Route path="/brain/note/:id" element={<Suspense fallback={<section className="mx-auto max-w-4xl p-4 sm:p-6"><Loading rows={6} /></section>}><BrainNote /></Suspense>} />
+            <Route path="/brain/review" element={<Suspense fallback={<section className="mx-auto max-w-4xl p-4 sm:p-6"><Loading rows={6} /></section>}><BrainReview /></Suspense>} />
             <Route path="/agents" element={<Agents />} />
             <Route path="/agents/:name" element={<AgentDetail />} />
             <Route path="/chat" element={<Chat />} />

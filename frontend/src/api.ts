@@ -171,6 +171,20 @@ export const useProjectNotes = (slug: string) =>
   useQuery({ queryKey: ['project-notes', slug], queryFn: () => get<{ notes: Note[] }>(`/api/project/${slug}/notes`) })
 export const useTaskNotes = (id: number) =>
   useQuery({ queryKey: ['task-notes', id], queryFn: () => get<{ notes: Note[] }>(`/api/task/${id}/notes`), enabled: Number.isFinite(id) })
+
+// ---- librarian proposals (Phase 2a) ------------------------------------
+export type SplitPart = { title: string; body?: string; area_id?: number; project_id?: number; tags?: string[]; type?: Note['type'] }
+export type Proposal = {
+  id: number; kind: 'split' | 'file'; note_id: number
+  payload: { parts?: SplitPart[]; archive_original?: boolean; area_id?: number; project_id?: number; tags?: string[]; type?: Note['type'] } | null
+  summary: string; classification: 'routine' | 'needs_attention'
+  status: 'pending' | 'approved' | 'rejected' | 'superseded'
+  author: string; feedback: string | null; result: { note_ids?: number[]; filed?: boolean } | null
+  created_at: number; decided_at: number | null; note_title: string | null; note_status: string | null
+}
+export type ProposalCounts = { pending: number; routine: number; needs_attention: number }
+export const useProposals = (status?: string) =>
+  useQuery({ queryKey: ['proposals', status ?? 'pending'], queryFn: () => get<{ proposals: Proposal[]; counts: ProposalCounts }>(`/api/proposals${status ? `?status=${status}` : ''}`) })
 export const markNotificationsRead = (ids?: number[], source_key?: string) => post<{ marked: number }>('/api/notifications/read', source_key ? { source_key } : ids ? { ids } : {})
 export const addNotification = (n: { kind: 'chat' | 'question'; title: string; body?: string; href?: string; source_key?: string }) => post<{ id: number | null }>('/api/notifications', n)
 

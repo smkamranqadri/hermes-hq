@@ -197,6 +197,47 @@ def new_reminder(note_id: int, body: NoteReminderIn):
     return {"id": sid, "note": store.get_note(note_id, db_path=_db())}
 
 
+# ---- librarian proposals (Phase 2a) ------------------------------------
+# The OWNER's side of the proposal loop: list, approve, reject, bulk-approve.
+# Agents file proposals through `wm note propose-*` (CLI) — they can never
+# reach these session-guarded routes, and these routes are the only place a
+# proposal turns into an actual Library change.
+class RejectIn(BaseModel):
+    feedback: str = ""
+
+
+@router.get("/proposals")
+def proposals(status: str | None = "pending", classification: str | None = None,
+              limit: int = Query(100, ge=1, le=500)):
+    rows = _engine(store.list_proposals, status=status or None,
+                   classification=classification, limit=limit)
+    return {"proposals": rows, "counts": store.proposal_counts(db_path=_db())}
+
+
+@router.get("/proposals/counts")
+def proposals_counts():
+    return store.proposal_counts(db_path=_db())
+
+
+@router.post("/proposal/{pid}/approve")
+def approve_proposal(pid: int):
+    p = _engine(store.approve_proposal, pid)
+    return {"ok": True, "proposal": p, "counts": store.proposal_counts(db_path=_db())}
+
+
+@router.post("/proposal/{pid}/reject")
+def reject_proposal(pid: int, body: RejectIn):
+    p = _engine(store.reject_proposal, pid, feedback=body.feedback)
+    return {"ok": True, "proposal": p, "counts": store.proposal_counts(db_path=_db())}
+
+
+@router.post("/proposals/approve-routine")
+def approve_routine():
+    res = _engine(store.approve_routine_proposals)
+    res["counts"] = store.proposal_counts(db_path=_db())
+    return res
+
+
 @router.get("/project/{slug}/notes")
 def project_notes(slug: str):
     p = store.get_project(slug=slug, db_path=_db())

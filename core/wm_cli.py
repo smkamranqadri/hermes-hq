@@ -604,6 +604,143 @@ def cmd_reviews(args):
     return 0
 
 
+# ---------------------------------------------------------------------------
+# Second Brain `wm note` group (Phase 2a) — the LIBRARIAN'S surface.
+# Reads (inbox/show/areas/tags/proposals) orient the librarian; the only
+# writes are propose-file / propose-split, which touch the proposals table
+# alone. There is deliberately NO note-writing command here: notes change
+# only when the owner approves a proposal in the dashboard.
+# ---------------------------------------------------------------------------
+def _note_line(n, pending_ids):
+    tags = (" [%s]" % ", ".join(n["tags"])) if n.get("tags") else ""
+    mark = "  (pending proposal — skip)" if n["id"] in pending_ids else ""
+    return "  #%-4d %s%s%s" % (n["id"], n["title"], tags, mark)
+
+
+def cmd_note_inbox(args):
+    notes = store.list_notes(status="inbox", limit=args.limit)
+    if not notes:
+        _p("Inbox is empty — nothing to triage.")
+        return 0
+    pending = {p["note_id"] for p in store.list_proposals(status="pending", limit=500)}
+    _p("Inbox notes (%d):" % len(notes))
+    for n in notes:
+        _p(_note_line(n, pending))
+        if args.full:
+            full = store.get_note(n["id"])
+            for line in (full["body"] or "").splitlines():
+                _p("      | " + line)
+    return 0
+
+
+def cmd_note_show(args):
+    n = store.get_note(args.id)
+    if n is None:
+        _p("error: no such note: %d" % args.id)
+        return 1
+    area = n.get("area")
+    _p("Note #%d: %s" % (n["id"], n["title"]))
+    _p("  type=%s status=%s authored_by=%s" % (n["type"], n["status"], n["authored_by"]))
+    _p("  area: %s" % ((area["parent"] + " / " if area and area["parent"] else "")
+                       + area["name"] if area else "-"))
+    _p("  project: %s" % (n["project"]["slug"] if n.get("project") else "-"))
+    _p("  tags: %s" % (", ".join(n["tags"]) or "-"))
+    _p("  body:")
+    for line in (n["body"] or "").splitlines():
+        _p("    | " + line)
+    for e in n.get("entries") or []:
+        _p("  entry #%d:" % e["id"])
+        for line in e["body"].splitlines():
+            _p("    | " + line)
+    return 0
+
+
+def cmd_note_areas(args):
+    areas = store.list_areas()
+    top = [a for a in areas if a["parent_id"] is None]
+    kids = {}
+    for a in areas:
+        if a["parent_id"] is not None:
+            kids.setdefault(a["parent_id"], []).append(a)
+    _p("Areas (two-level; use the id in propose payloads):")
+    for a in top:
+        _p("  #%-3d %s" % (a["id"], a["name"]))
+        for k in kids.get(a["id"], []):
+            _p("      #%-3d %s" % (k["id"], k["name"]))
+    return 0
+
+
+def cmd_note_tags(args):
+    tags = store.list_note_tags()
+    if not tags:
+        _p("No tags in use yet.")
+        return 0
+    _p("Tags in use (reuse these; coin new ones sparingly):")
+    for t in tags:
+        _p("  %-30s %d" % (t["tag"], t["count"]))
+    return 0
+
+
+def cmd_note_proposals(args):
+    rows = store.list_proposals(status=args.status)
+    if not rows:
+        _p("No proposals%s." % (" with status %r" % args.status if args.status else ""))
+        return 0
+    for p in rows:
+        _p("  #%-4d %-6s %-16s [%-15s] note #%s: %s"
+           % (p["id"], p["kind"], p["status"], p["classification"],
+              p["note_id"], (p["summary"] or "")[:60]))
+        if p["feedback"]:
+            _p("        owner feedback: %s" % p["feedback"])
+    return 0
+
+
+def _proposal_result(pid, summary):
+    _p("Filed proposal #%d: %s" % (pid, summary or "-"))
+    _p("The owner decides it in the dashboard review queue. Do NOT edit notes "
+       "directly; if this proposal is rejected, read the feedback with "
+       "`wm note proposals --status rejected` before re-proposing.")
+
+
+def cmd_note_propose_file(args):
+    payload = {}
+    if args.area_id is not None:
+        payload["area_id"] = args.area_id
+    if args.project:
+        proj = store.get_project(slug=args.project)
+        if proj is None:
+            _p("error: no such project: %s" % args.project)
+            return 1
+        payload["project_id"] = proj["id"]
+    if args.tags:
+        payload["tags"] = [t.strip() for t in args.tags.split(",") if t.strip()]
+    if args.type:
+        payload["type"] = args.type
+    pid = store.create_proposal(
+        "file", args.id, payload, summary=args.summary,
+        classification="routine" if args.routine else "needs_attention")
+    _proposal_result(pid, args.summary)
+    return 0
+
+
+def cmd_note_propose_split(args):
+    import json as _json
+    raw = sys.stdin.read() if args.parts == "-" else open(args.parts).read()
+    try:
+        parts = _json.loads(raw)
+    except ValueError as e:
+        _p("error: parts file is not valid JSON: %s" % e)
+        return 1
+    if isinstance(parts, dict):
+        parts = parts.get("parts")
+    payload = {"parts": parts, "archive_original": not args.keep_original}
+    pid = store.create_proposal(
+        "split", args.id, payload, summary=args.summary,
+        classification="routine" if args.routine else "needs_attention")
+    _proposal_result(pid, args.summary)
+    return 0
+
+
 def cmd_status(args):
     meta = {k: store.get_meta(k) for k in
             ("schema_version", "concurrency_cap", "stall_seconds", "paused")}
@@ -1030,6 +1167,51 @@ def build_parser():
     rl = sub.add_parser("reviews", help="list review rows (auto-created)")
     rl.add_argument("--task", type=int, default=None)
     rl.set_defaults(fn=cmd_reviews)
+
+    note = sub.add_parser("note", help="Second Brain: read notes, file librarian "
+                                       "proposals (notes themselves are owner-only)")
+    note_sub = note.add_subparsers(dest="sub", required=True)
+    ni = note_sub.add_parser("inbox", help="untriaged captures (the ingest worklist)")
+    ni.add_argument("--full", action="store_true", help="print full bodies")
+    ni.add_argument("--limit", type=int, default=100)
+    ni.set_defaults(fn=cmd_note_inbox)
+    ns = note_sub.add_parser("show", help="one note with body + entries")
+    ns.add_argument("id", type=int)
+    ns.set_defaults(fn=cmd_note_show)
+    note_sub.add_parser("areas", help="area tree with ids").set_defaults(fn=cmd_note_areas)
+    note_sub.add_parser("tags", help="tags in use with counts").set_defaults(fn=cmd_note_tags)
+    np_ = note_sub.add_parser("proposals", help="list proposals (rejected ones "
+                                               "carry owner feedback — read it)")
+    np_.add_argument("--status", default=None,
+                     choices=["pending", "approved", "rejected", "superseded"])
+    np_.set_defaults(fn=cmd_note_proposals)
+    pf = note_sub.add_parser("propose-file",
+                             help="propose filing a note (area/project/tags/type); "
+                                  "the owner approves it in the review queue")
+    pf.add_argument("id", type=int)
+    pf.add_argument("--area-id", dest="area_id", type=int, default=None)
+    pf.add_argument("--project", default=None, help="project slug")
+    pf.add_argument("--tags", default=None, help="comma-separated")
+    pf.add_argument("--type", default=None, choices=["note", "playbook", "wiki"])
+    pf.add_argument("--summary", required=True,
+                    help="one line the owner reads first — say WHY this filing")
+    pf.add_argument("--routine", action="store_true",
+                    help="classify routine (owner can bulk-approve); default "
+                         "needs_attention")
+    pf.set_defaults(fn=cmd_note_propose_file)
+    psp = note_sub.add_parser("propose-split",
+                              help="propose splitting one capture into N notes; "
+                                   "parts JSON from a file or '-' (stdin)")
+    psp.add_argument("id", type=int)
+    psp.add_argument("--parts", required=True,
+                     help="path to JSON list of parts ('-' = stdin): "
+                          '[{"title", "body", "area_id"?, "project_id"?, '
+                          '"tags"?, "type"?}, ...]')
+    psp.add_argument("--summary", required=True)
+    psp.add_argument("--routine", action="store_true")
+    psp.add_argument("--keep-original", action="store_true", dest="keep_original",
+                     help="do not archive the source note on approval")
+    psp.set_defaults(fn=cmd_note_propose_split)
     bk = sub.add_parser("backup", help="write an online backup of wm.db")
     bk.add_argument("--dir", dest="dir", default=None)
     bk.set_defaults(fn=cmd_backup)
