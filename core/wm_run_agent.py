@@ -377,10 +377,9 @@ def main(argv=None):
             brief_text = f.read()
     except Exception as e:
         _out("failed to read brief %s: %s" % (brief_file, e))
-        store.record_completion(run_id, task_id, completed="failed",
-                                summary="", result_paths=[],
-                                blocker="wrapper could not read brief: %s" % e,
-                                exit_code=None, db_path=db_path)
+        store.fail_run(run_id, task_id,
+                       "wrapper could not read brief: %s" % e,
+                       exit_code=None, db_path=db_path)
         return 1
 
     env = os.environ.copy()
