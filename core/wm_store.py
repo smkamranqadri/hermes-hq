@@ -634,10 +634,7 @@ def _migrate(conn):
                             if isinstance(t, str) and t.strip())
             except ValueError:
                 continue
-        now = time.time()
-        for t in sorted(seen):
-            conn.execute("INSERT OR IGNORE INTO note_tag_taxonomy(tag, added_by, created_at) "
-                         "VALUES(?, 'owner', ?)", (t, now))
+        _register_tags(conn, sorted(seen), "owner")
 
 
 def init_db(db_path=None):
@@ -4637,10 +4634,14 @@ def _register_tags(conn, tags, added_by):
                          "VALUES(?,?,?)", (s, added_by, now))
 
 
+def _taxonomy_tags(conn):
+    return {r["tag"] for r in conn.execute("SELECT tag FROM note_tag_taxonomy")}
+
+
 def taxonomy_tags(db_path=None):
     conn = _connect(db_path)
     try:
-        return {r["tag"] for r in conn.execute("SELECT tag FROM note_tag_taxonomy")}
+        return _taxonomy_tags(conn)
     finally:
         conn.close()
 
@@ -4652,7 +4653,7 @@ def list_note_tags(db_path=None):
     registered tags are listed too."""
     conn = _connect(db_path)
     try:
-        counts = {r["tag"]: 0 for r in conn.execute("SELECT tag FROM note_tag_taxonomy")}
+        counts = {t: 0 for t in _taxonomy_tags(conn)}
         for r in conn.execute("SELECT tags FROM notes WHERE status != 'archived'"):
             try:
                 for t in json.loads(r["tags"] or "[]"):
@@ -4683,7 +4684,7 @@ PROPOSAL_CLASSES = ("routine", "needs_attention")
 MAX_SPLIT_PARTS = 50
 
 
-def _validate_filing(conn, part, where, new_tags=frozenset()):
+def _validate_filing(conn, part, where, new_tags=frozenset(), known_tags=None):
     """Validate the optional filing fields (area_id/project_id/tags/type) of a
     file payload or a split part. Raises ValueError with a located message.
     2b-ii: tags must be in the closed taxonomy unless declared in the
@@ -4703,7 +4704,7 @@ def _validate_filing(conn, part, where, new_tags=frozenset()):
         raise ValueError("%s: invalid note type %r" % (where, part["type"]))
     if "tags" in part:
         _encode_tags(part.get("tags"))          # raises on bad shape
-        known = {r["tag"] for r in conn.execute("SELECT tag FROM note_tag_taxonomy")}
+        known = _taxonomy_tags(conn) if known_tags is None else known_tags
         bad = sorted({t.strip() for t in (part.get("tags") or [])
                       if isinstance(t, str) and t.strip()
                       and t.strip() not in known and t.strip() not in new_tags})
@@ -4744,7 +4745,8 @@ def _validate_proposal_payload(conn, kind, payload, note_id=None):
         new_tags = _validate_new_tags(payload, used)
         _validate_filing(conn, {k: v for k, v in payload.items()
                                 if k not in ("archive", "new_tags")},
-                         "file payload", new_tags=new_tags)
+                         "file payload", new_tags=new_tags,
+                         known_tags=_taxonomy_tags(conn))
         if archive is not None and not isinstance(archive, bool):
             raise ValueError("file payload: archive must be true/false")
         if payload.get("title") is not None or payload.get("body") is not None:
@@ -4766,9 +4768,10 @@ def _validate_proposal_payload(conn, kind, payload, note_id=None):
         used = {t.strip() for part in parts if isinstance(part, dict)
                 for t in (part.get("tags") or []) if isinstance(t, str)}
         new_tags = _validate_new_tags(payload, used)
+        known = _taxonomy_tags(conn)          # one read for all parts
         for i, part in enumerate(parts):
             where = "split part %d" % (i + 1)
-            _validate_filing(conn, part, where, new_tags=new_tags)
+            _validate_filing(conn, part, where, new_tags=new_tags, known_tags=known)
             title = part.get("title")
             if not isinstance(title, str) or not title.strip():
                 raise ValueError("%s needs a title" % where)
@@ -4977,26 +4980,23 @@ def approve_proposal(pid, payload_override=None, db_path=None):
         if not isinstance(payload_override, dict):
             raise ValueError("edited payload must be an object")
         payload = payload_override
-        # The OWNER wrote this payload: their tags are taxonomy authority, so
-        # register them before validation (agents still need new_tags).
-        owner_tags = list(payload.get("tags") or []) + [
-            t for part in (payload.get("parts") or []) if isinstance(part, dict)
-            for t in (part.get("tags") or [])]
-        if owner_tags:
-            conn = _connect(db_path)
-            try:
-                with conn:
-                    _register_tags(conn, [t for t in owner_tags if isinstance(t, str)],
-                                   "owner")
-            finally:
-                conn.close()
     # Re-validate the whole payload up front so a stale area/project (or a bad
     # owner edit) fails the approval BEFORE any note is touched. The edited
     # payload is persisted only AFTER the apply succeeds — a failed approval
     # must leave the librarian's original payload intact on the pending row.
     conn = _connect(db_path)
     try:
-        _validate_proposal_payload(conn, p["kind"], payload, note_id=p["note_id"])
+        # The OWNER wrote an edited payload, so their tags ARE the taxonomy
+        # authority (agents still must declare new_tags). Registering inside
+        # the same transaction as validation means a rejected edit registers
+        # nothing.
+        with conn:
+            if edited:
+                _register_tags(conn, [t for t in (
+                    list(payload.get("tags") or []) +
+                    [t for part in (payload.get("parts") or []) if isinstance(part, dict)
+                     for t in (part.get("tags") or [])]) if isinstance(t, str)], "owner")
+            _validate_proposal_payload(conn, p["kind"], payload, note_id=p["note_id"])
     finally:
         conn.close()
     # Revisions/activity name whoever authored the applied payload.
@@ -5132,11 +5132,7 @@ def heartbeat_check(name, db_path=None):
         # the run entirely; findings mint a librarian fix-via-proposals run AND
         # land as one daily-deduped owner notification (inside lint_library).
         findings = lint_library(notify=True, db_path=db_path)
-        by = {}
-        for f in findings:
-            by[f["check"]] = by.get(f["check"], 0) + 1
-        detail = ", ".join("%s ×%d" % (k, v) for k, v in sorted(by.items()))
-        return (len(findings) > 0, detail or "library clean")
+        return (len(findings) > 0, lint_summary(findings) or "library clean")
     # Unknown names fail OPEN (the run happens) — a heartbeat must never be
     # able to silently kill a schedule. create/update validate the closed set.
     return (True, "unknown heartbeat %r" % name)
@@ -5170,6 +5166,15 @@ LINT_STALE_INBOX_DAYS = 7
 LINT_OVERSIZED_BODY = 20000
 
 
+def lint_summary(findings):
+    """One-line "check ×n, check ×n" roll-up — the heartbeat detail and the
+    notification body are the same sentence."""
+    by = {}
+    for f in findings:
+        by[f["check"]] = by.get(f["check"], 0) + 1
+    return ", ".join("%s ×%d" % (k, v) for k, v in sorted(by.items()))
+
+
 def lint_library(notify=False, db_path=None):
     """Deterministic Library hygiene checks (2b-ii lint lane) — pure SQL/code,
     never a model call. Returns findings as {check, note_id, title, detail}.
@@ -5178,8 +5183,11 @@ def lint_library(notify=False, db_path=None):
     deduped per day through source_key."""
     conn = _connect(db_path)
     findings = []
-    add = lambda check, note_id, title, detail: findings.append(
-        {"check": check, "note_id": note_id, "title": title, "detail": detail})
+
+    def add(check, note_id, title, detail):
+        findings.append({"check": check, "note_id": note_id,
+                         "title": title, "detail": detail})
+
     try:
         now = time.time()
         for r in conn.execute("SELECT id, title FROM notes WHERE status='active' "
@@ -5217,14 +5225,10 @@ def lint_library(notify=False, db_path=None):
     finally:
         conn.close()
     if notify and findings:
-        by = {}
-        for f in findings:
-            by[f["check"]] = by.get(f["check"], 0) + 1
-        day = time.strftime("%Y-%m-%d")
         add_notification(
             "needs_you", "Library lint: %d finding(s)" % len(findings),
-            body=", ".join("%s ×%d" % (k, v) for k, v in sorted(by.items())),
-            href="/brain/library", source_key="lint:%s" % day, db_path=db_path)
+            body=lint_summary(findings), href="/brain/library",
+            source_key="lint:%s" % time.strftime("%Y-%m-%d"), db_path=db_path)
     return findings
 
 

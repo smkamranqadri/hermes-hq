@@ -27,8 +27,15 @@ export const TYPE_TONE: Record<Note['type'], string> = { note: 'text-muted', pla
 /** An inbox note the librarian has already triaged — the decision lives in
  * the Review queue, so lists say so instead of inviting a double-filing.
  * `link=false` renders a plain span for use inside row-links (no nested <a>). */
+/** The proposal pill style, one definition per tone. Written out in full —
+ * Tailwind scans source statically, so an interpolated color class would
+ * never be generated. */
+const PILL = 'inline-flex items-center rounded-full border px-2 py-0.5 font-mono text-[10px] uppercase tracking-wider'
+export const pillCls = (tone: 'working' | 'needsyou') =>
+  `${PILL} ${tone === 'working' ? 'border-working/60 text-working' : 'border-needsyou/60 text-needsyou'}`
+
 export function PendingProposalChip({ link = true }: { link?: boolean }) {
-  const cls = 'inline-flex items-center rounded-full border border-working/60 px-2 py-0.5 font-mono text-[10px] uppercase tracking-wider text-working'
+  const cls = pillCls('working')
   if (!link) return <span className={cls}>librarian proposed</span>
   return <Link to="/brain/review" className={`${cls} hover:bg-working/10`}>librarian proposed → review</Link>
 }
@@ -37,8 +44,7 @@ export function PendingProposalChip({ link = true }: { link?: boolean }) {
  * owner resolves it (clear the flag from the note page). */
 export function DisputedChip() {
   return (
-    <span title="Contradiction — both notes kept until you resolve it"
-      className="inline-flex items-center rounded-full border border-needsyou/60 px-2 py-0.5 font-mono text-[10px] uppercase tracking-wider text-needsyou">
+    <span title="Contradiction — both notes kept until you resolve it" className={pillCls('needsyou')}>
       disputed
     </span>
   )
@@ -47,11 +53,7 @@ export function DisputedChip() {
 /** File-to-Archive proposals must read differently from real filings — the
  * owner is approving "this is junk/museum", not "this belongs somewhere". */
 function ArchiveChip() {
-  return (
-    <span className="inline-flex items-center rounded-full border border-needsyou/60 px-2 py-0.5 font-mono text-[10px] uppercase tracking-wider text-needsyou">
-      → archive
-    </span>
-  )
+  return <span className={pillCls('needsyou')}>→ archive</span>
 }
 
 export const KIND_LABEL: Record<Proposal['kind'], string> = { split: 'split', file: 'file', contradiction: 'contradiction', new_task: 'new task' }
@@ -89,7 +91,7 @@ export function ProposalPayloadView({ p, compact = false }: { p: Proposal; compa
   // Declared tag coinage renders loudly — approving registers these in the
   // closed taxonomy, so the owner should notice before clicking.
   const newTags = (p.payload?.new_tags ?? []).map(t => (
-    <span key={t} className="inline-flex items-center rounded-full border border-working/60 px-2 py-0.5 font-mono text-[10px] uppercase tracking-wider text-working">new tag: {t}</span>
+    <span key={t} className={pillCls('working')}>new tag: {t}</span>
   ))
   // A filed note always leaves the inbox, so file gets NO inbox-fallback
   // chip; an unfiled split part genuinely lands back in the inbox, so split

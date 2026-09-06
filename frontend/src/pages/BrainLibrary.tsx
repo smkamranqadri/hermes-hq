@@ -54,9 +54,10 @@ export function BrainLibrary() {
   const notes = useNotes(filters)
   const roots = (tree.data?.areas ?? []).filter(a => !a.parent_id)
   const children = (id: number) => (tree.data?.areas ?? []).filter(a => a.parent_id === id)
-  const baseLabel = q ? `“${q}”` : view === 'archived' ? 'Archive' : view === 'inbox' ? 'Inbox' : typeSel ? typeSel + 's' : projSel && !areaSel ? tree.data?.projects.find(p => String(p.id) === projSel)?.name ?? 'Project' : areaSel ? (tree.data?.areas ?? []).find(a => String(a.id) === areaSel)?.name ?? 'Area' : 'All notes'
+  const projName = projSel ? tree.data?.projects.find(p => String(p.id) === projSel)?.name : undefined
+  const baseLabel = q ? `“${q}”` : view === 'archived' ? 'Archive' : view === 'inbox' ? 'Inbox' : typeSel ? typeSel + 's' : projSel && !areaSel ? projName ?? 'Project' : areaSel ? (tree.data?.areas ?? []).find(a => String(a.id) === areaSel)?.name ?? 'Area' : 'All notes'
   const selLabel = baseLabel
-    + (areaSel && projSel ? ` · ${tree.data?.projects.find(p => String(p.id) === projSel)?.name ?? 'project'}` : '')
+    + (areaSel && projSel ? ` · ${projName ?? 'project'}` : '')
     + (tagSel && !q && !view ? ` · #${tagSel}` : '')
   return (
     <section className="mx-auto max-w-6xl p-4 sm:p-6">
