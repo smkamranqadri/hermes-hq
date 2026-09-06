@@ -63,6 +63,18 @@ function GateChip({ taskId, on, canEdit }: { taskId: number; on: boolean; canEdi
   )
 }
 
+function BlockedRunAnswer({ runId }: { runId: number }) {
+  const toast = useToast()
+  const [text, setText] = useState('')
+  const m = useWrite(`/api/run/${runId}/answer`, {
+    onSuccess: () => { setText(''); toast('Answer delivered — the same run has resumed') },
+  })
+  return <div className="mt-2 flex basis-full flex-wrap items-end gap-2 rounded-lg border border-needsyou/50 bg-needsyou/10 p-3" data-blocked-run-answer>
+    <TextArea rows={2} value={text} onChange={e => setText(e.target.value)} placeholder="Answer the agent's question…" className="min-w-[14rem] flex-1" />
+    <Btn busy={m.isPending} disabled={!text.trim()} onClick={() => m.mutate({ message: text.trim() }, { onError: e => toast(e instanceof ApiError ? e.message : String(e), 'err') })}>Answer &amp; Resume</Btn>
+  </div>
+}
+
 type FileRead = { kind: 'text' | 'image' | 'pdf' | 'binary'; content?: string; too_large?: boolean; name: string }
 
 /** One result_path row: readable inline when it resolves into a files root. */
@@ -173,6 +185,7 @@ export function TaskDetail() {
             {t.question.href && <Link to={t.question.href} onClick={() => void markNotificationsRead([t.question!.id])} className="shrink-0 rounded-full border border-needsyou/60 px-2.5 py-0.5 font-mono text-[10px] uppercase tracking-wider text-needsyou hover:bg-needsyou/20">Answer in session</Link>}
           </div>
         )}
+        {st === 'blocked' && t.question && <BlockedRunAnswer runId={t.question.run_id} />}
         <div className="flex basis-full flex-wrap gap-2">
           {!!t.owner_approval && ['waiting_approval', 'ready', 'rework'].includes(st) && (
             <ActionBtn url={`/api/task/${t.id}/edit`} body={{ owner_approval: false }} label="Approve → queue"
