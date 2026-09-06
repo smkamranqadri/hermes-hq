@@ -679,3 +679,40 @@ def test_lint_heartbeat_schedule(env):
     sid_, kind, tid = store.fire_due(db_path=db)[0]
     assert kind in ("fired", "late")
     assert store.get_task(tid, db_path=db)["assignee_profile"] == "librarian"
+
+
+def test_tag_filter_survives_malformed_tags(env):
+    """One row with corrupt tags JSON must not fail the whole filter query."""
+    c, store, db = env
+    good = store.create_note("good", status="active", tags=["deep"], db_path=db)
+    bad = store.create_note("corrupt", status="active", db_path=db)
+    conn = store._connect(db)
+    with conn:
+        conn.execute("UPDATE notes SET tags='not-json' WHERE id=?", (bad,))
+    conn.close()
+    assert [n["id"] for n in store.list_notes(tag="deep", db_path=db)] == [good]
+
+
+def test_lint_tag_duplicates_only_on_real_plurals(env):
+    """rstrip('s') would collide 'boss' with 'bo' — only ONE plural suffix
+    counts, or the owner gets phantom hygiene findings."""
+    c, store, db = env
+    store.create_note("a", tags=["boss"], db_path=db)
+    store.create_note("b", tags=["bo"], db_path=db)
+    assert not [f for f in store.lint_library(db_path=db) if f["check"] == "tag_duplicates"]
+    store.create_note("c", tags=["finance", "finances"], db_path=db)
+    dups = [f for f in store.lint_library(db_path=db) if f["check"] == "tag_duplicates"]
+    assert len(dups) == 1 and "finances" in dups[0]["detail"]
+
+
+def test_update_note_validates_tag_shape_before_registering(env):
+    """Bad tags raise the store's ValueError (=> HTTP 409), never an
+    AttributeError, and register nothing."""
+    c, store, db = env
+    nid = store.create_note("n", db_path=db)
+    before = store.taxonomy_tags(db_path=db)
+    with pytest.raises(ValueError, match="tags must be non-empty strings"):
+        store.update_note(nid, tags=[123], db_path=db)
+    with pytest.raises(ValueError, match="tags must be a list of strings"):
+        store.update_note(nid, tags="abc", db_path=db)
+    assert store.taxonomy_tags(db_path=db) == before      # no junk letters registered

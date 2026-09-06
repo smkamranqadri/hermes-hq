@@ -1604,7 +1604,7 @@ def next_ready_tasks(cap, db_path=None):
 
 def complete_run(task_id, status="done", result_path=None, summary=None,
                  error=None, session_id=None, result_paths=None,
-                 db_path=None, _conn=None):
+                 db_path=None, _conn=None, run_id=None):
     """Record completion of a task's run + the task's resulting status.
 
     Stores ALL produced artifact paths (not just the first) into
@@ -1637,8 +1637,8 @@ def complete_run(task_id, status="done", result_path=None, summary=None,
         if cur.rowcount > 0:
             conn.execute(
                 "INSERT INTO state_transitions(task_id, run_id, ts, "
-                "from_status, to_status, detail) VALUES(?,NULL,?,?,?,?)",
-                (task_id, time.time(), from_status, status,
+                "from_status, to_status, detail) VALUES(?,?,?,?,?,?)",
+                (task_id, run_id, time.time(), from_status, status,
                  "completion contract"))
 
     if _conn is not None:
@@ -1650,7 +1650,7 @@ def complete_run(task_id, status="done", result_path=None, summary=None,
             "INSERT INTO activity(ts, project_id, goal_id, task_id, run_id, "
             "agent_profile, session_id, action, detail, model) "
             "VALUES(?,?,?,?,?,?,?,?,?,?)",
-            (time.time(), None, None, task_id, None, None, session_id,
+            (time.time(), None, None, task_id, run_id, None, session_id,
              "task_%s" % status,
              error or summary or result_path or status, None))
         return
@@ -1658,7 +1658,7 @@ def complete_run(task_id, status="done", result_path=None, summary=None,
     try:
         with conn:
             _apply(conn)
-        log_activity(action="task_%s" % status, task_id=task_id,
+        log_activity(action="task_%s" % status, task_id=task_id, run_id=run_id,
                      session_id=session_id,
                      detail=error or summary or result_path or status,
                      db_path=db_path)
@@ -1923,6 +1923,87 @@ def running_run_count(db_path=None):
         conn.close()
 
 
+def _append_run_answer(run_id, message):
+    """Append an owner answer after the DB claim has succeeded."""
+    ensure_runs_dir()
+    with open(answer_path(run_id), "a", encoding="utf-8") as f:
+        f.write("[owner %s] %s\n" % (time.strftime("%Y-%m-%d %H:%M:%S"), message))
+
+
+def resume_blocked_run(run_id, message, db_path=None):
+    """Atomically claim a blocked owner-question run and reopen it in place."""
+    message = str(message or "").strip()
+    if not message:
+        raise ValueError("answer message must be non-empty")
+    conn = _connect(db_path)
+    try:
+        with conn:
+            row = conn.execute(
+                "SELECT r.id, r.task_id, r.agent_profile "
+                "FROM runs r JOIN tasks t ON t.id=r.task_id "
+                "JOIN notifications n ON n.run_id=r.id "
+                "WHERE r.id=? AND r.status='blocked' AND t.status='blocked' "
+                "AND n.kind='question' AND n.source_key LIKE 'runq:%' "
+                "AND n.read_at IS NULL AND NOT EXISTS ("
+                " SELECT 1 FROM notifications newer WHERE newer.run_id=n.run_id "
+                " AND newer.kind='question' AND newer.source_key LIKE 'runq:%' "
+                " AND newer.read_at IS NULL AND newer.id>n.id) "
+                "ORDER BY n.id DESC LIMIT 1", (run_id,)).fetchone()
+            if row is None:
+                raise ValueError(
+                    "run %s is not a blocked run with a current unanswered owner question"
+                    % run_id)
+            now = time.time()
+            if conn.execute(
+                    "UPDATE runs SET status='running', finished_at=NULL, completion=NULL, "
+                    "error=NULL, exit_code=NULL, notes=NULL, heartbeat_at=? "
+                    "WHERE id=? AND status='blocked'", (now, run_id)).rowcount != 1:
+                raise ValueError("run %s was resumed concurrently" % run_id)
+            if conn.execute(
+                    "UPDATE tasks SET status='running', updated_at=?, claimed_at=?, "
+                    "heartbeat_at=? WHERE id=? AND status='blocked'",
+                    (now, now, now, row["task_id"])).rowcount != 1:
+                raise ValueError("task %s was changed concurrently" % row["task_id"])
+            _record_transition_conn(
+                conn, row["task_id"], "running", run_id=run_id,
+                from_status="blocked", detail="owner answered; same run resumed")
+            # Consume every open question for this run. A new question created
+            # after the resumed process starts gets a newer unread row.
+            conn.execute(
+                "UPDATE notifications SET read_at=? WHERE run_id=? "
+                "AND kind='question' AND source_key LIKE 'runq:%' AND read_at IS NULL",
+                (now, run_id))
+        _append_run_answer(run_id, message)
+        try:
+            os.unlink(completion_path(run_id))
+        except FileNotFoundError:
+            pass
+        log_activity(action="run_resumed", task_id=row["task_id"], run_id=run_id,
+                     agent_profile=row["agent_profile"], detail="owner answer accepted",
+                     db_path=db_path)
+        return dict(row)
+    finally:
+        conn.close()
+
+
+def fail_run(run_id, task_id, error, db_path=None, session_id=None,
+             exit_code=None):
+    """Finalize a run and its task as failed in one transaction."""
+    conn = _connect(db_path)
+    try:
+        with conn:
+            changed = finish_run(run_id, status="failed", error=error,
+                                 session_id=session_id, exit_code=exit_code,
+                                 db_path=db_path, _conn=conn)
+            if changed:
+                complete_run(task_id, status="failed", error=error,
+                             session_id=session_id, run_id=run_id,
+                             db_path=db_path, _conn=conn)
+        return changed
+    finally:
+        conn.close()
+
+
 def finish_run(run_id, status, session_id=None, completion=None, exit_code=None,
                error=None, notes=None, db_path=None, _conn=None):
     """Finalize a run row. Guarded: only transitions a run still 'running',
@@ -2114,7 +2195,7 @@ def record_completion(run_id, task_id, completed, summary="", result_paths=None,
             complete_run(task_id, status=task_status, result_path=result_path,
                          summary=summary or None, error=blocker,
                          session_id=session_id, result_paths=result_paths,
-                         db_path=db_path, _conn=conn)
+                         db_path=db_path, _conn=conn, run_id=run_id)
             if completed == "manual" and not routed_to_review:
                 # The agent declared an approval gate: make it the task's
                 # truth so the landing reads "Awaiting approval" and the
@@ -4411,8 +4492,11 @@ def list_notes(status=None, area_id=None, project_id=None, note_type=None,
     if tag is not None:
         if not isinstance(tag, str) or not tag.strip():
             raise ValueError("invalid tag filter %r" % (tag,))
-        sql += (" AND EXISTS (SELECT 1 FROM json_each(notes.tags) "
-                "WHERE json_each.value = ?)")
+        # json_valid guard: one row with corrupt tags JSON would otherwise make
+        # json_each raise and fail the WHOLE query (the migration guards the
+        # same dirty-data case).
+        sql += (" AND json_valid(notes.tags) AND EXISTS "
+                "(SELECT 1 FROM json_each(notes.tags) WHERE json_each.value = ?)")
         params.append(tag.strip())
     if area_id is not None:
         sql += (" AND (area_id=? OR area_id IN "
@@ -4480,8 +4564,9 @@ def update_note(note_id, edited_by="owner", note_type=None, status=None,
             sets, params = [], []
             for k, v in fields.items():
                 if k == "tags":
+                    encoded = _encode_tags(v)     # validate shape FIRST
                     _register_tags(conn, v, edited_by)
-                    v = _encode_tags(v)
+                    v = encoded
                 if k == "area_id" and v is not None and conn.execute(
                         "SELECT id FROM areas WHERE id=?", (v,)).fetchone() is None:
                     raise ValueError("no such area: %r" % v)
@@ -5216,7 +5301,10 @@ def lint_library(notify=False, db_path=None):
                 "body is %d chars — probably an unsplit dump" % r["n"])
         by_norm = {}
         for r in conn.execute("SELECT tag FROM note_tag_taxonomy"):
-            norm = r["tag"].strip().lower().rstrip("s")
+            # strip ONE plural suffix, not every trailing s — rstrip("s") would
+            # collide unrelated tags ("boss" -> "bo").
+            low = r["tag"].strip().lower()
+            norm = low[:-1] if len(low) > 1 and low.endswith("s") else low
             by_norm.setdefault(norm, []).append(r["tag"])
         for norm, group in sorted(by_norm.items()):
             if len(group) > 1:

@@ -46,6 +46,7 @@ wm note propose-contradiction <id> --other <id2> --explain "what disagrees" --su
 wm note propose-task <id> --title "..." [--desc "..."] [--project SLUG] [--assignee P] --summary "..."
 wm note lint                    # deterministic hygiene report (lint runs start here)
 ```
+parts JSON: `[{"title": "...", "body": "...", "area_id": 3, "tags": ["x"]}, ...]` (`project_id`/`type` also allowed per part).
 `--new-tags a,b` on propose-file / propose-split declares tag coinage (tags you used that aren't in `wm note tags` yet — say why in the summary).
 
 ## Lint runs (the hygiene lane)
@@ -55,7 +56,6 @@ A lint task means the deterministic sweep found problems. Run `wm note lint` FIR
 - `oversized` → `propose-split` the dump into real notes.
 - `dangling_link` / `missing_fts` / `tag_duplicates` → NOT yours to fix (no write surface): list them precisely in your completion summary for the owner.
 Never invent work when `wm note lint` comes back clean — report clean and finish.
-parts JSON: `[{"title": "...", "body": "...", "area_id": 3, "tags": ["x"]}, ...]` (`project_id`/`type` also allowed per part).
 
 ## Pitfalls
 - **Never** edit notes, the database, or any file under the HQ home. Proposals are your only write. A rejected proposal means propose differently, not act directly.

@@ -1,6 +1,7 @@
 """Write API. Every route is a thin call into core.wm_store — the engine owns
 all policy (release gate, rework path, refusals). ValueError from the engine
 becomes a 409 with the engine's own message, never a fabricated success."""
+import os
 import subprocess
 import urllib.error
 import urllib.request
@@ -225,12 +226,39 @@ def feedback(tid: int, body: Feedback):
 
 @router.post("/run/{rid}/answer")
 def run_answer(rid: int, body: Answer):
-    """Group 10: deliver the owner's answer to a RUNNING dispatched run — appended
-    to <runs_dir>/<rid>.answer.txt, which the brief tells the agent to check
-    between steps. Marks the run's open question notifications read."""
+    """Deliver an answer to a live run, or answer-and-resume a blocked run."""
     run = store.get_run(rid, db_path=_db())
     if run is None:
         raise HTTPException(404, "no such run")
+    if run["status"] == "blocked":
+        try:
+            resumed = store.resume_blocked_run(rid, body.message, db_path=_db())
+        except ValueError as e:
+            raise HTTPException(409, str(e))
+        try:
+            task = store.get_task(resumed["task_id"], db_path=_db())
+            project = store.get_project(task["project_id"], db_path=_db()) if task else None
+            cwd = (run["workdir"] or
+                   (project["primary_path"] if project and project["primary_path"] else None) or
+                   os.getcwd())
+            brief = store.render_brief(rid, db_path=_db())
+            cfg = wm_dispatch._resolve()
+            launched = wm_dispatch._launch(
+                rid, run["agent_profile"], brief, cwd, cfg, _db(),
+                "run_resumed")
+            if not launched:
+                store.complete_run(resumed["task_id"], status="failed",
+                                   error="wrapper spawn failed", run_id=rid,
+                                   db_path=_db())
+                raise HTTPException(502, "resumed run could not be launched")
+            return {"ok": True, "resumed": True,
+                    "task": tq.task_detail(_db(), resumed["task_id"])}
+        except HTTPException:
+            raise
+        except Exception as e:
+            store.fail_run(rid, run["task_id"],
+                           "resumed run setup failed: %s" % e, db_path=_db())
+            raise HTTPException(502, "resumed run setup failed")
     if run["status"] != "running":
         raise HTTPException(409, "run %s is not running (status %s) — use task feedback instead" % (rid, run["status"]))
     import time as _t
