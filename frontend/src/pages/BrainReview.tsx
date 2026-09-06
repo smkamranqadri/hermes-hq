@@ -9,7 +9,7 @@ import { useQueryClient } from '@tanstack/react-query'
 import clsx from 'clsx'
 import { ago, post, useAreas, useProjects, useProposals, useRoster, type Proposal, type ProposalPayload, type SplitPart } from '../api'
 import { GlassCard, PageHeader } from '../components/GlassCard'
-import { AreaSelect, BrainSubNav, KIND_LABEL, ProjectSelect, ProposalPayloadView, approveLabel, tagsFrom, useBrainCounts } from '../components/brain'
+import { AreaSelect, BrainSubNav, KIND_LABEL, ProjectSelect, ProposalPayloadView, approveLabel, pillCls, tagsFrom, useBrainCounts } from '../components/brain'
 import { Btn, ConfirmModal, Field, Modal, SelectInput, TextArea, TextInput } from '../components/Modal'
 import { Chip, Empty, Loading, Select } from '../components/ui'
 import { useToast } from '../components/Toast'
@@ -82,7 +82,7 @@ export function BrainReview() {
             <div className="flex flex-wrap items-center gap-2">
               <span className={clsx('font-mono text-[10px] uppercase tracking-wider', KIND_TONE[p.kind])}>{KIND_LABEL[p.kind]}</span>
               {p.classification === 'needs_attention'
-                ? <span className="inline-flex items-center rounded-full border border-needsyou/60 px-2 py-0.5 font-mono text-[10px] uppercase tracking-wider text-needsyou">needs attention</span>
+                ? <span className={pillCls('needsyou')}>needs attention</span>
                 : <Chip>routine</Chip>}
               <span className="min-w-0 flex-1" />
               <span className="font-mono text-[10px] text-muted">#{p.id} · {ago(p.created_at)}</span>
