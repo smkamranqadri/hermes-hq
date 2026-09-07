@@ -12,4 +12,6 @@
 - **Adding an agent profile includes refreshing the existing specialists' SOUL/MEMORY rosters in the same change** (learned 2026-09-06: the six older specialists predated the Librarian and none of their rosters listed it).
 - **Anything an agent proposes or does that awaits the owner must be visible on EVERY surface the owner naturally lands on** — the list row, the detail page, AND the dedicated queue; a queue alone is not enough. (Learned 2026-09-06: three consecutive owner confusions over one librarian proposal that only the Review queue showed — fixed with the inbox `pending_proposal_id` chip and the note-page ProposalBanner. Apply the same test to future proposal kinds, lint findings, and run questions.)
 
+- **State never carries a volatile counter** (unread notifications, queue depths, run counts) — name the item that needs a decision instead. A number written into State is wrong within hours and reads as work that still exists; the live DB is the authority for counts. (Owner, 2026-09-07: "18 unread notifications" survived a sync after the owner had already cleared them.)
+
 - Never assume hermes-hq runs inside the Hermes docker/s6 container (owner, 2026-08-29). Detect the platform (installed service vs. none) and fall back to owning the process; no hardcoded `/run/service`, `s6-svc`, `/opt/data` or container users in code.
