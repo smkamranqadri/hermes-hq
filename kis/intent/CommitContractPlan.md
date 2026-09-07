@@ -45,7 +45,13 @@ so this is the same idea applied to "your code is actually committed".
 
 ## Slices
 
-### Slice A — the gate and the briefs
+### Slice A — the gate and the briefs — SHIPPED 2026-09-07 ✅
+(`3263043` + `b8dc12d`; deployed, proven on a real dispatched run — see State → Proof. Two
+defects the verification itself caught: `get_run` returns a `sqlite3.Row` with no `.get()`
+(would have crashed `record_completion` in production — caught by the tests before deploy),
+and the refusal could **re-dispatch forever** because `rework` is dispatcher-claimable while
+the review cap only fires for tasks that have a review — task #202 ran three times in six
+minutes before I parked it. Both loop guards now share `_rework_cycles` and park at the cap.)
 1. `record_completion`: when the run has a `workdir` and reports `completed="done"`, run
    `git status --porcelain` there (bounded timeout). Non-empty → override to `rework` with a
    blocker naming the uncommitted paths. Fail open on every error path.
