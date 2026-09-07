@@ -3597,7 +3597,7 @@ def render_brief(run_id, db_path=None):
                  "Do NOT edit wm.db (or any database) directly via SQL — it is "
                  "owned and integrity-checked by the system. Report your result "
                  "ONLY through the Completion contract JSON below (and, for "
-                 "reviews, the `wm review` command). Editing the database "
+                 "reviews, the `hermes-hq wm review` command). Editing the database "
                  "directly triggers a tamper audit.")
     lines.append("")
     lines.append("INSTRUCTIONS")

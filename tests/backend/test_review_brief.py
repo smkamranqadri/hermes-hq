@@ -45,6 +45,10 @@ def test_review_brief_uses_only_current_hq_review_command(env):
     brief = store.render_brief(run_id, db_path=store.DEFAULT_DB_PATH)
     assert "hermes-hq wm review" in brief
     assert "  wm review" not in brief
+    # the two-space form missed the AUTHORIZATION paragraph's prose mention,
+    # which survived the migration and was caught by #192's verify step
+    import re as _re
+    assert not _re.search(r"(?<!hermes-hq )\bwm review\b", brief)
     assert "hermes kanban" not in brief.lower()
 
 
