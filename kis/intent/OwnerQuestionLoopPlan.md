@@ -49,7 +49,12 @@ not close and re-run — and the owner must be able to answer from the UI.**
 
 ## Slices
 
-### Slice A — answer a live question where you already are
+### Slice A — answer a live question where you already are — SHIPPED 2026-09-07 ✅
+(`d5b8616` + `8fb456a`; deployed, DoD proven on a real dispatched run — see State → Proof.
+Live-verification bonus find: an **unterminated hq-options fence** silently asked nobody —
+run 453 emitted a valid block whose closing delimiter was one backtick short, so the strict
+regex matched nothing and the agent polled until it died. Parser is now tolerant, JSON is
+the validator, regression test built from the exact live payload.)
 1. `GET /api/run/{rid}/question` — re-parse the newest hq-options fence from the run's
    session transcript (reuse `questions.py`'s read-only reader) → `{question, mode,
    options[]}`. No schema change; the transcript stays the single source of truth.
