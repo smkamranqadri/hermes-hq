@@ -1,6 +1,6 @@
 # Commit Contract Plan
 
-**Status:** APPROVED 2026-09-07 (owner interview in session). Slice A next.
+**Status:** COMPLETE 2026-09-07 — Slice A gate (`3263043`, bounded by `b8dc12d`) and Slice B cleanup both shipped and verified live.
 **Work mode:** Phase — two slices; the gate ships first because it stops the bleeding.
 
 ## Why

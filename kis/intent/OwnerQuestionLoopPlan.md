@@ -1,6 +1,6 @@
 # Owner Question Loop Plan
 
-**Status:** APPROVED 2026-09-07 (owner interview in session). Slice A next.
+**Status:** COMPLETE 2026-09-07 — Slice A (`d5b8616`+`8fb456a`), the options-always-show fix (`1904406`) and Slice B (`f2e3375`) all shipped, deployed and verified live. Owner walkthrough still pending.
 **Work mode:** Phase — two slices, each deployed and owner-reviewed before the next.
 
 ## Why
@@ -38,9 +38,11 @@ not close and re-run — and the owner must be able to answer from the UI.**
 - **Answer surfaces: Task detail + Inbox.** Chat is explicitly OUT (it doesn't write the
   answer file and making it do so was rejected).
 - **Bounded wait, then park.** The agent polls a bounded window (~10 min) while doing
-  unrelated work; still unanswered → finish `completed="manual"` with the question as the
-  blocker, parking the task "awaiting owner" instead of `blocked`. Not an indefinite wait —
-  a forgotten question must not hold a worktree and a concurrency slot open forever.
+  unrelated work; still unanswered → park with the question as the blocker. Not an indefinite
+  wait — a forgotten question must not hold a worktree and a concurrency slot open forever.
+  *(Corrected during the build: the park signal is `completed="blocked"`, NOT `"manual"` as
+  first planned — `manual` sets the RUN done and routes review-required tasks to REVIEW, while
+  `blocked` already means "stopped, needs the owner" and is what the resume path handles.)*
 - **Answering a parked task resumes the SAME run id** via the existing
   `resume_blocked_run` + relaunch. Accepted with eyes open: the process is respawned, so
   continuity is at the run-id/worktree/artifact level, not a live process.
@@ -71,8 +73,8 @@ and no new process spawned** (verified against run history/pid); suite green; 0 
 build: `completed="manual"` sets the RUN done and routes review-required tasks to REVIEW, so it
 is the wrong park signal — `blocked` already means "stopped, needs the owner" and is what the
 resume path handles, so the brief parks with `blocked` + the question in `blocker`.)
-5. Brief change: bounded poll window, then `completed="manual"` (never `blocked`) with the
-   question as the blocker.
+5. Brief change: bounded poll window, then `completed="blocked"` with the EXACT question as
+   the blocker (see the correction above).
 6. Answering a parked task resumes the same run id (extend `resume_blocked_run` beyond the
    `blocked`-only guard; reuse the relaunch in `writes.run_answer`).
 7. Rework cap: at **4** cycles `review_verdict(changes_requested)` parks the task `manual`
