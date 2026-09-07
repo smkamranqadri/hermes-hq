@@ -76,6 +76,15 @@ Repo layout: `core/` (engine package: wm_store/wm_dispatch/wm_run_agent/wm_cli, 
 
 Hermes v0.20.5 at `/opt/hermes`, `HERMES_HOME=/opt/data`, profiles under `/opt/data/profiles/`, gateway :8642, Hermes dashboard :9119, legacy WM dashboard :9009. Node 26, Python 3.13, no pnpm.
 
+## Never hard-delete engine rows (tasks/runs)
+The engine is append-only by design — there is no delete_task/delete_run, and `id` is a plain
+rowid, so **deleting the newest rows makes SQLite reuse those ids**. Agent sessions are marked
+`wm-run-<id>` in the profile's own `state.db`, which the purge does not touch, so a reused run
+id matches a stale session marker: seen 2026-09-07, a fresh run 453 was immediately stalled by
+the *previous* run 453's idle session ("process alive but session … idle for 2453s"). If
+debris must go, prefer leaving it `done`/annotated; if you truly delete, also rename the stale
+`wm-run-<id>` session titles in every profile `state.db` (that is the repair that unstuck it).
+
 ## Backend test suite
 - **Tests must clear the engine env overrides, not just set `HERMES_HQ_HOME`.** `resolve_db()` is `WM_DB or DEFAULT_DB_PATH`, and the dispatcher exports `WM_DB=<live hq.db>` into every agent run — so a suite run *inside a dispatched agent* reaches the LIVE database through any call that omits `db_path` (e.g. `wm_cli.main(...)`). `tests/backend/conftest.py` clears `WM_DB`/`WM_RUNS_DIR`/`WM_PROFILES_DIR`/`WM_HERMES` autouse for every test; keep it that way, and give new env-driven engine paths the same treatment. (Learned 2026-09-06: 33 phantom proposals written into the owner's live library.)
  (environment note, learned 2026-09-02)

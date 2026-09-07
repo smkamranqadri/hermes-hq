@@ -66,7 +66,11 @@ the validator, regression test built from the exact live payload.)
 at 390×844; answering writes the file, the agent demonstrably acts on it, **run id unchanged
 and no new process spawned** (verified against run history/pid); suite green; 0 page errors.
 
-### Slice B — don't die waiting, and stop runaway loops
+### Slice B — don't die waiting, and stop runaway loops — SHIPPED 2026-09-07 ✅
+(`f2e3375`; deployed, DoD proven live — see State → Proof. Design correction made during the
+build: `completed="manual"` sets the RUN done and routes review-required tasks to REVIEW, so it
+is the wrong park signal — `blocked` already means "stopped, needs the owner" and is what the
+resume path handles, so the brief parks with `blocked` + the question in `blocker`.)
 5. Brief change: bounded poll window, then `completed="manual"` (never `blocked`) with the
    question as the blocker.
 6. Answering a parked task resumes the same run id (extend `resume_blocked_run` beyond the
