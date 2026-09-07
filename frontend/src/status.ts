@@ -16,6 +16,10 @@ export function toHuman(engineStatus: string): Human {
     // owner_approval tasks in ready/rework/waiting_approval arrive from the
     // server as {state:'needsyou', label:'Awaiting approval'} (the dispatcher
     // refuses gated claims); these raw-status fallbacks cover flagless tasks.
+    // Tasks assigned to the reserved `owner` assignee likewise arrive as
+    // {state:'needsyou', label:'Yours to do'} for ready/rework/manual — the
+    // dispatcher never claims them, so queue vocabulary would be a dead end.
+    // toHuman cannot see the assignee, so these fallbacks stay agent-shaped.
     case 'ready': return { state: 'queued' }
     case 'rework': return { state: 'queued', reason: 'rework requested' }
     case 'waiting_approval': return { state: 'queued' }

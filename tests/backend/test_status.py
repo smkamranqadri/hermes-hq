@@ -88,6 +88,63 @@ def test_ui_mirror_agrees():
     assert re.search(r"case 'manual'[^\n]*label: 'Handed over'", ts)
 
 
+def test_owner_assignee_mirrors_the_engine():
+    """Same dependency-free contract as REWORK_CAP_MARKER: status.py keeps its
+    own copy of the reserved human assignee, so it must equal the engine's."""
+    from core import wm_store as store
+    assert hs.OWNER_ASSIGNEE == store.OWNER_ASSIGNEE
+
+
+def test_owner_todo_never_reads_as_agent_queue_work():
+    """The dispatcher excludes the `owner` assignee from both the claim UPDATE
+    and next_ready_tasks, so an owner todo in ready/rework can never be picked
+    up — 'Queued' would promise a pickup that never comes."""
+    for st in ("ready", "rework"):
+        out = hs.classify({"status": st, "owner_approval": 0,
+                           "assignee_profile": "owner"}, [], "released", None)
+        assert out["state"] == "needsyou", st
+        assert out["label"] == "Yours to do", st
+        assert out["reason"] == "yours to do", st
+    # an agent task in the same statuses is untouched
+    for st in ("ready", "rework"):
+        out = hs.classify({"status": st, "owner_approval": 0,
+                           "assignee_profile": "coder"}, [], "released", None)
+        assert out["state"] == "queued", st
+        assert "label" not in out, st
+
+
+def test_owner_todo_on_manual_is_not_buried_under_done():
+    """`manual` groups under done and reads 'Handed over' — which describes
+    taking work OFF an agent. An owner task was never on one, so parking it
+    under done hides an open todo (how the owner's reminders got lost)."""
+    out = hs.classify({"status": "manual", "owner_approval": 0,
+                       "assignee_profile": "owner", "title": "test",
+                       "goal_id": None, "feedback": None}, [], None, None)
+    assert out["state"] == "needsyou"
+    assert out["label"] == "Yours to do"
+    # an agent task taken over by the owner still reads 'Handed over'
+    agent = hs.classify({"status": "manual", "owner_approval": 0,
+                         "assignee_profile": "coder", "title": "BUILD: x",
+                         "goal_id": None, "feedback": None}, [], None, None)
+    assert agent["state"] == "done" and agent["label"] == "Handed over"
+    # a DONE owner task is genuinely done — the owner closed it
+    closed = hs.classify({"status": "done", "owner_approval": 0,
+                          "assignee_profile": "owner"}, [], None, None)
+    assert closed["state"] == "done" and "label" not in closed
+    # backlog stays backlog: a planned owner task is not yet on the desk
+    planned = hs.classify({"status": "planned", "owner_approval": 0,
+                           "assignee_profile": "owner"}, [], None, None)
+    assert planned["state"] == "backlog"
+
+
+def test_gated_outranks_owner_assignee():
+    """Both are needsyou, but 'Awaiting approval' carries a concrete Approve
+    action, so it must win over the generic owner-todo label."""
+    out = hs.classify({"status": "ready", "owner_approval": 1,
+                       "assignee_profile": "owner"}, [], "released", None)
+    assert out["state"] == "needsyou" and out["label"] == "Awaiting approval"
+
+
 def test_rework_cap_marker_mirrors_the_engine():
     """status.py is dependency-free by design, so its copy of the marker must
     be asserted equal to the engine's (same contract as HUMAN_STATE/status.ts)."""
