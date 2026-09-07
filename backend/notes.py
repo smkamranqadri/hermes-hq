@@ -6,10 +6,14 @@ agents use, and Phase 2's librarian gets separate propose-* endpoints —
 agents must never gain a direct note write path. ValueError from the store
 becomes 409 with the store's own message (same contract as writes.py).
 """
-from fastapi import APIRouter, HTTPException, Query
+import os
+
+from fastapi import APIRouter, File, Form, HTTPException, Query, UploadFile
+from fastapi.responses import FileResponse
 from pydantic import BaseModel, Field
 
 from backend import tasks as tq
+from backend.files import UPLOAD_MAX_BYTES   # one cap for every upload path
 from core import wm_store as store
 
 router = APIRouter(prefix="/api")
@@ -266,6 +270,69 @@ def triage_now():
     so a click can never quietly spend a model run.
     """
     return _engine(store.trigger_heartbeat_schedule, "librarian_ingest")
+
+
+# ---- 2c: attachments (photo + voice) -----------------------------------
+#
+# Owner-only like everything else in this module. Agents never reach these:
+# a photo is opaque to the librarian and audio doubly so, and note content is
+# data-not-instructions — bytes from the owner's camera are no exception.
+
+@router.post("/note/{note_id}/attachments")
+async def add_attachment(note_id: int, kind: str = Form("photo"),
+                         duration_ms: int | None = Form(None),
+                         file: UploadFile = File(...)):
+    if store.get_note(note_id, db_path=_db()) is None:
+        raise HTTPException(404, "no such note")
+    if kind not in store.ATTACHMENT_KINDS:
+        raise HTTPException(400, "kind must be one of %s" % (store.ATTACHMENT_KINDS,))
+    # Bounded read: never let a phone stream an unbounded body into memory.
+    data, size = [], 0
+    while True:
+        chunk = await file.read(1 << 20)
+        if not chunk:
+            break
+        size += len(chunk)
+        if size > UPLOAD_MAX_BYTES:
+            raise HTTPException(413, "attachments up to %d MB"
+                                % (UPLOAD_MAX_BYTES // 1_000_000))
+        data.append(chunk)
+    if not size:
+        raise HTTPException(400, "empty file")
+    att = _engine(store.add_attachment, note_id, b"".join(data), kind=kind,
+                  mime=file.content_type, orig_name=file.filename,
+                  duration_ms=duration_ms)
+    return {"ok": True, "attachment": att,
+            "note": store.get_note(note_id, db_path=_db())}
+
+
+@router.get("/attachment/{attachment_id}")
+def read_attachment(attachment_id: int):
+    a = store.get_attachment(attachment_id, db_path=_db())
+    if a is None:
+        raise HTTPException(404, "no such attachment")
+    try:
+        path = store.attachment_path(a["note_id"], a["stored_name"])
+    except ValueError:
+        raise HTTPException(404, "no such attachment")
+    if not os.path.isfile(path):
+        # The row outlived its bytes. Say so plainly instead of serving a
+        # zero-length body that renders as a silently broken image.
+        raise HTTPException(410, "attachment file is missing on disk")
+    # inline: these are the owner's own photos and voice memos, and the point
+    # is to see/hear them in the page. Content-Disposition names the original.
+    name = os.path.basename(a["orig_name"] or a["stored_name"])
+    return FileResponse(path, media_type=a["mime"] or "application/octet-stream",
+                        headers={"Content-Disposition":
+                                 'inline; filename="%s"' % name.replace('"', "")})
+
+
+@router.delete("/attachment/{attachment_id}")
+def remove_attachment(attachment_id: int):
+    """Removing an attachment is NOT note deletion — notes stay archive-only."""
+    if not store.delete_attachment(attachment_id, db_path=_db()):
+        raise HTTPException(404, "no such attachment")
+    return {"ok": True}
 
 
 @router.get("/project/{slug}/notes")

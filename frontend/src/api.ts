@@ -21,6 +21,15 @@ export async function post<T = unknown>(url: string, body?: unknown): Promise<T>
   return parse<T>(r, url)
 }
 
+export async function del<T = unknown>(url: string): Promise<T> {
+  return parse<T>(await fetch(url, { method: 'DELETE', headers: { 'x-csrf': csrf } }), url)
+}
+/** Multipart POST. Deliberately does NOT set content-type — the browser must
+ * add its own multipart boundary, and setting it by hand breaks the parse. */
+export async function postForm<T = unknown>(url: string, form: FormData): Promise<T> {
+  return parse<T>(await fetch(url, { method: 'POST', headers: { 'x-csrf': csrf }, body: form }), url)
+}
+
 /** Mutation that invalidates every list after a write and surfaces the engine's own message. */
 export function useWrite<TBody = unknown>(url: string | ((b: TBody) => string), opts?: { onSuccess?: (d: unknown) => void }) {
   const qc = useQueryClient()
@@ -163,8 +172,17 @@ export type Note = {
   pending_proposal_id?: number | null
 }
 export type NoteEntry = { id: number; note_id: number; body: string; created_at: number }
+export type NoteAttachment = {
+  id: number; note_id: number; kind: 'photo' | 'voice'; stored_name: string
+  orig_name: string | null; mime: string | null; bytes: number
+  duration_ms: number | null; created_at: number
+  /** false for HEIC/HEIF — no browser paints those in an <img>, so the UI
+   *  must offer a download instead of a silently broken picture. */
+  renderable: boolean
+}
+export const attachmentUrl = (id: number) => `/api/attachment/${id}`
 export type NoteFull = Note & {
-  entries: NoteEntry[]; links: NoteLink[]
+  entries: NoteEntry[]; links: NoteLink[]; attachments: NoteAttachment[]
   area: { id: number; name: string; parent: string | null } | null
   project: { slug: string; name: string } | null
 }

@@ -1,11 +1,11 @@
 /** Second Brain shared pieces: sub-nav, note rows, file/edit + graduation
  * modals (intent/SecondBrainPlan.md P1). Notes never convert — "New task" /
  * "New reminder" create linked items and the note stays a note. */
-import { useEffect, useState } from 'react'
+import { useEffect, useRef, useState } from 'react'
 import { Link, NavLink } from 'react-router-dom'
 import { useQuery, useQueryClient } from '@tanstack/react-query'
 import clsx from 'clsx'
-import { ago, get, post, useAreas, useNotesTree, useProjects, useRoster, type Area, type Note, type NoteFull, type Proposal, type SplitPart } from '../api'
+import { ago, attachmentUrl, del, get, post, postForm, useAreas, useNotesTree, useProjects, useRoster, type Area, type Note, type NoteAttachment, type NoteFull, type Proposal, type SplitPart } from '../api'
 import { Btn, Field, Modal, SelectInput, TextArea, TextInput } from './Modal'
 import { Chip, Label } from './ui'
 import { useToast } from './Toast'
@@ -342,28 +342,188 @@ export function NewReminderFromNoteModal({ n, onClose }: { n: NoteFull; onClose:
 
 /** Capture editor: multi-line by design — batch dumps are the normal case.
  * First line becomes the title; the librarian will split batches in P2. */
+/** 2c: staged photo/voice, held in memory until the note exists.
+ *  Capture creates the note first, then uploads — so a file picked before the
+ *  note is written has to wait somewhere. */
+type Pending = { file: Blob; name: string; kind: 'photo' | 'voice'; mime: string; durationMs?: number }
+
+const MEDIA_MIME_CANDIDATES = ['audio/webm;codecs=opus', 'audio/webm', 'audio/mp4']
+/** iOS Safari supports audio/mp4 only; Chrome prefers webm/opus. Pick what
+ *  THIS browser admits to, and let the server store whatever comes out. */
+function pickAudioMime(): string | undefined {
+  const R = (window as unknown as { MediaRecorder?: typeof MediaRecorder }).MediaRecorder
+  if (!R?.isTypeSupported) return undefined
+  return MEDIA_MIME_CANDIDATES.find(m => R.isTypeSupported(m))
+}
+
+export async function uploadAttachment(noteId: number, p: Pending) {
+  const fd = new FormData()
+  fd.append('file', p.file, p.name)
+  fd.append('kind', p.kind)
+  if (p.durationMs) fd.append('duration_ms', String(Math.round(p.durationMs)))
+  return postForm(`/api/note/${noteId}/attachments`, fd)
+}
+
+/** Record / stop, with the elapsed seconds visible so a memo is never a
+ *  mystery blob. Renders nothing where MediaRecorder does not exist. */
+export function VoiceRecorder({ onDone, disabled }: { onDone: (p: Pending) => void; disabled?: boolean }) {
+  const toast = useToast()
+  const [rec, setRec] = useState<MediaRecorder | null>(null)
+  const [secs, setSecs] = useState(0)
+  const startedAt = useRef(0)
+  const supported = typeof window !== 'undefined' &&
+    !!(window as unknown as { MediaRecorder?: unknown }).MediaRecorder &&
+    !!navigator.mediaDevices?.getUserMedia
+  useEffect(() => {
+    if (!rec) return
+    const t = setInterval(() => setSecs(Math.floor((Date.now() - startedAt.current) / 1000)), 250)
+    return () => clearInterval(t)
+  }, [rec])
+  if (!supported) return null
+
+  const start = async () => {
+    try {
+      const stream = await navigator.mediaDevices.getUserMedia({ audio: true })
+      const mimeType = pickAudioMime()
+      const r = new MediaRecorder(stream, mimeType ? { mimeType } : undefined)
+      const chunks: BlobPart[] = []
+      r.ondataavailable = e => { if (e.data.size) chunks.push(e.data) }
+      r.onstop = () => {
+        stream.getTracks().forEach(t => t.stop())          // release the mic light
+        const mime = r.mimeType || mimeType || 'audio/webm'
+        const blob = new Blob(chunks, { type: mime })
+        const ext = mime.includes('mp4') ? 'm4a' : mime.includes('ogg') ? 'ogg' : 'webm'
+        setRec(null); setSecs(0)
+        if (blob.size) onDone({ file: blob, name: `memo.${ext}`, kind: 'voice', mime, durationMs: Date.now() - startedAt.current })
+      }
+      startedAt.current = Date.now()
+      r.start()
+      setRec(r)
+    } catch (e) {
+      // The usual causes are a denied permission and an insecure context —
+      // getUserMedia does not exist over plain http, only over the ts.net URL.
+      const insecure = !window.isSecureContext
+      toast(insecure ? 'Recording needs the https address — open the ts.net link, not http://'
+                     : (e instanceof Error ? e.message : String(e)), 'err')
+    }
+  }
+  return rec
+    ? <Btn kind="warn" type="button" onClick={() => rec.stop()}>
+        ■ Stop {String(Math.floor(secs / 60)).padStart(2, '0')}:{String(secs % 60).padStart(2, '0')}
+      </Btn>
+    : <Btn kind="ghost" type="button" disabled={disabled} onClick={() => void start()}>● Record</Btn>
+}
+
+/** The staged-attachment strip: what will be attached once you hit Capture. */
+function PendingStrip({ items, onRemove }: { items: Pending[]; onRemove: (i: number) => void }) {
+  if (!items.length) return null
+  return (
+    <div className="flex flex-wrap gap-2">
+      {items.map((p, i) => (
+        <span key={i} className="inline-flex items-center gap-1.5 rounded-full border border-line px-2.5 py-1 text-[11px]">
+          {p.kind === 'photo' ? '🖼' : '🎤'} {p.name}
+          {p.durationMs ? ` · ${Math.round(p.durationMs / 1000)}s` : ''}
+          <button type="button" onClick={() => onRemove(i)} className="text-muted hover:text-fg" aria-label={`Remove ${p.name}`}>×</button>
+        </span>
+      ))}
+    </div>
+  )
+}
+
 export function CaptureBox({ compact = false }: { compact?: boolean }) {
   const qc = useQueryClient(); const toast = useToast()
   const [text, setText] = useState('')
   const [busy, setBusy] = useState(false)
+  const [pending, setPending] = useState<Pending[]>([])
+  const photoRef = useRef<HTMLInputElement>(null)
   const capture = async () => {
     const t = text.trim()
-    if (!t) return
+    // 2c: a voice memo or photo alone is a real capture — requiring text would
+    // defeat the point of recording something you have no time to type.
+    if (!t && !pending.length) return
     setBusy(true)
     try {
-      // the FULL capture is the body; the first line only NAMES the note
-      await post('/api/notes', { title: t.split('\n')[0].slice(0, 120), body: t })
-      setText(''); toast('Captured to inbox'); qc.invalidateQueries()
+      // the FULL capture is the body; the first line only NAMES the note.
+      // With no text at all, name it after what it IS so the inbox is legible.
+      const auto = pending[0]?.kind === 'voice' ? 'Voice memo' : 'Photo'
+      const title = t ? t.split('\n')[0].slice(0, 120)
+        : `${auto} · ${new Date().toLocaleString(undefined, { day: 'numeric', month: 'short', hour: '2-digit', minute: '2-digit' })}`
+      const { id } = await post<{ id: number }>('/api/notes', { title, body: t })
+      for (const p of pending) await uploadAttachment(id, p)
+      setText(''); setPending([])
+      toast(pending.length ? `Captured to inbox with ${pending.length} attachment${pending.length === 1 ? '' : 's'}` : 'Captured to inbox')
+      qc.invalidateQueries()
     } catch (e) { toast(e instanceof Error ? e.message : String(e), 'err') } finally { setBusy(false) }
+  }
+  const onPhoto = (e: React.ChangeEvent<HTMLInputElement>) => {
+    const files = Array.from(e.target.files ?? [])
+    setPending(p => [...p, ...files.map(f => ({ file: f, name: f.name, kind: 'photo' as const, mime: f.type }))])
+    e.target.value = ''            // so picking the same photo twice still fires
   }
   return (
     <div className="glass-strong flex flex-col gap-2 rounded-xl p-3 shadow-[0_6px_16px_rgba(0,0,0,0.25)]">
       <TextArea value={text} onChange={e => setText(e.target.value)} rows={compact ? 3 : 4}
         placeholder={'Write or paste anything — a whole meeting dump is fine.\nFirst line becomes the title; file it later from the inbox.'} />
-      <div className="flex items-center gap-2">
-        <span className="text-[11px] text-muted">{text.trim() ? `${text.trim().split('\n').length} line${text.trim().split('\n').length === 1 ? '' : 's'}` : 'Photo & voice capture land in Phase 2'}</span>
-        <Btn className="ml-auto" onClick={() => void capture()} busy={busy} disabled={!text.trim()}>Capture</Btn>
+      <PendingStrip items={pending} onRemove={i => setPending(p => p.filter((_, n) => n !== i))} />
+      <div className="flex flex-wrap items-center gap-2">
+        {/* No `capture` attribute on purpose: iOS then offers Camera AND Photo
+            Library, so an existing photo can be attached, not just a new one. */}
+        <input ref={photoRef} type="file" accept="image/*" multiple hidden onChange={onPhoto} />
+        <Btn kind="ghost" type="button" disabled={busy} onClick={() => photoRef.current?.click()}>+ Photo</Btn>
+        <VoiceRecorder disabled={busy} onDone={p => setPending(q => [...q, p])} />
+        <span className="text-[11px] text-muted">
+          {text.trim() ? `${text.trim().split('\n').length} line${text.trim().split('\n').length === 1 ? '' : 's'}` : 'Text optional when you attach'}
+        </span>
+        <Btn className="ml-auto" onClick={() => void capture()} busy={busy} disabled={!text.trim() && !pending.length}>Capture</Btn>
       </div>
+    </div>
+  )
+}
+
+/** 2c: a note's photos and voice memos. Photos render inline, voice plays in
+ *  place, and an unrenderable format says so rather than showing a broken
+ *  image. `onChange` lets the page refetch after a removal. */
+export function NoteAttachments({ items, onChange }: { items: NoteAttachment[]; onChange?: () => void }) {
+  const toast = useToast(); const qc = useQueryClient()
+  const [busy, setBusy] = useState<number | null>(null)
+  if (!items.length) return null
+  const remove = async (a: NoteAttachment) => {
+    setBusy(a.id)
+    try {
+      await del(`/api/attachment/${a.id}`)
+      toast('Attachment removed'); qc.invalidateQueries(); onChange?.()
+    } catch (e) { toast(e instanceof Error ? e.message : String(e), 'err') } finally { setBusy(null) }
+  }
+  return (
+    <div className="flex flex-col gap-3" data-note-attachments>
+      {items.map(a => (
+        <figure key={a.id} className="flex min-w-0 flex-col gap-1 rounded-lg border border-line p-2">
+          {a.kind === 'photo' ? (
+            a.renderable
+              ? <a href={attachmentUrl(a.id)} target="_blank" rel="noreferrer">
+                  <img src={attachmentUrl(a.id)} alt={a.orig_name ?? 'photo'}
+                       loading="lazy" className="max-h-80 w-full rounded object-contain" />
+                </a>
+              // HEIC/HEIF: no browser paints these. Say so and offer the file
+              // rather than rendering a broken-image icon on the owner's phone.
+              : <div className="rounded bg-glass p-3 text-[13px] text-muted">
+                  This format ({a.mime}) can’t be shown in a browser.{' '}
+                  <a className="underline" href={attachmentUrl(a.id)} download={a.orig_name ?? undefined}>Download</a>
+                </div>
+          ) : (
+            <audio controls preload="metadata" src={attachmentUrl(a.id)} className="w-full" />
+          )}
+          <figcaption className="flex flex-wrap items-center gap-2 text-[11px] text-muted">
+            <span className="min-w-0 truncate">{a.kind === 'voice' ? '🎤' : '🖼'} {a.orig_name ?? a.stored_name}</span>
+            {!!a.duration_ms && <span>{Math.round(a.duration_ms / 1000)}s</span>}
+            <span>{Math.max(1, Math.round(a.bytes / 1024))} KB</span>
+            <button type="button" disabled={busy === a.id} onClick={() => void remove(a)}
+              className="ml-auto underline underline-offset-2 hover:text-fg disabled:opacity-60">
+              {busy === a.id ? 'removing…' : 'remove'}
+            </button>
+          </figcaption>
+        </figure>
+      ))}
     </div>
   )
 }

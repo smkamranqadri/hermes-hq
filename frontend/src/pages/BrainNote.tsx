@@ -7,7 +7,7 @@ import { useQueryClient } from '@tanstack/react-query'
 import { post, useNote, when } from '../api'
 import { GlassCard } from '../components/GlassCard'
 import { Markdown } from '../components/chat/Markdown'
-import { DisputedChip, FileNoteModal, NewReminderFromNoteModal, NewTaskFromNoteModal, ProposalBanner, TYPE_TONE } from '../components/brain'
+import { DisputedChip, FileNoteModal, NewReminderFromNoteModal, NewTaskFromNoteModal, NoteAttachments, ProposalBanner, TYPE_TONE } from '../components/brain'
 import { Btn, ConfirmModal, TextArea } from '../components/Modal'
 import { Chip, Crumbs, Empty, Label, Loading } from '../components/ui'
 import { useToast } from '../components/Toast'
@@ -103,6 +103,13 @@ export function BrainNote() {
           </>
         )}
       </GlassCard>
+
+      {!!n.attachments?.length && (
+        <GlassCard className="mb-4">
+          <div className="mb-2"><Label>Attachments · {n.attachments.length}</Label></div>
+          <NoteAttachments items={n.attachments} onChange={() => void q.refetch()} />
+        </GlassCard>
+      )}
 
       <GlassCard className="mb-4">
         <div className="flex items-center justify-between"><Label>Thoughts · {n.entries.length}</Label></div>
