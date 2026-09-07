@@ -65,7 +65,9 @@ minutes before I parked it. Both loop guards now share `_rework_cycles` and park
 clean passes (both tested); fail-open proven for no-workdir / missing dir / non-repo; a REAL
 dispatched code run that forgets to commit is sent back; suite green.
 
-### Slice B — audit and clean the existing 13
+### Slice B — audit and clean the existing 13 — SHIPPED 2026-09-07 ✅
+(proof in State. Pile had grown to 36 worktrees / 19 dirty by the time it ran, thanks to the
+gate's own verification runs.)
 5. Diff each dirty worktree against `main`; classify landed / unlanded / junk.
 6. Parachute **every** unlanded diff into one tarball before touching anything.
 7. Remove only worktrees passing all three safety tests; report every kept one with its reason.
