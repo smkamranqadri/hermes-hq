@@ -1,6 +1,6 @@
 # Second Brain Plan
 
-**Status:** IN PROGRESS — P1 + 2a + 2b-i + 2b-ii SHIPPED (2026-09-05/06), next **2c** (photo + voice capture) on owner greenlight; 2b-i/2b-ii owner walkthrough still pending. Approved by owner 2026-09-04 (interview + mockup rounds in session; design locked at mockup v3.1).
+**Status:** IN PROGRESS — P1 + 2a + 2b-i + 2b-ii SHIPPED (2026-09-05/06), **2c IN PROGRESS** (photo + voice capture — greenlit by the owner 2026-09-07 after the 2b walkthrough; decisions recorded in the 2c section). Approved by owner 2026-09-04 (interview + mockup rounds in session; design locked at mockup v3.1).
 **Mockup (UI reference):** https://claude.ai/code/artifact/28097e1a-2343-442f-a21e-ed014e507eb3
 **Work mode:** Phase — four phases, each ships something the owner uses that week. Built direct in-session (owner's call — not through the pipeline), owner clicks and reviews exercised live per phase.
 
@@ -41,8 +41,22 @@ Schema + migrations (`notes`, `areas`, `note_entries`, `note_revisions`, FTS5 in
 **DoD 2b-i:** planted contradiction pair → both notes `disputed` and render on note page + queue; approved new-task proposal → linked HQ task exists both ways; reject-with-feedback → a revision run demonstrably reads the feedback; junk capture → file-to-Archive proposed and approved with the ARCHIVE chip visible on inbox row, note banner, and queue; capture pulls `next_fire_at` ≤ ~2 min and a burst debounces to one pull; Triage-now fires immediately; suite green (baseline 168 + new tests); 390×844 scrollWidth 390, 0 page errors; deployed, health 200.
 **2b-ii — Library hygiene. SHIPPED 2026-09-06 ✅** (`a6a711a`+`f1ef1fc`+`b2d66cc`; DoD proven live — see State → Proof). Delivered: lint lane (`lint_library()` → orphan/stale_inbox/dangling_link/missing_fts/oversized/tag_duplicates, `wm note lint`, `librarian_lint` heartbeat that skips free on a clean library and mints the librarian fix run + one daily-deduped notification), Library filters (tag anywhere + project within an area, composing via URL refine), and the enforced **closed tag taxonomy** (`note_tag_taxonomy` seeded from tags in use; owner/import writes auto-register, agent proposals must reuse registered tags or declare coinage via `new_tags`/`--new-tags`, registered only at owner approval).
 **DoD 2b-ii:** lint report lands as a notification; area+tag filter returns the right subset; unknown tag rejected in code.
-**2c — Photo + voice capture.** Photo attach (upload infra exists) + voice memo stored untranscribed + flagged for the owner (Urdu voice is an intended input; transcription stays out of scope).
+**2c — Photo + voice capture.** Photo attach + voice memo stored untranscribed + flagged for the owner (Urdu voice is an intended input; transcription stays out of scope).
 **DoD 2c:** photo and voice captured from the phone PWA land on notes and render; voice flagged for owner processing.
+
+**Decided 2026-09-07 (owner-interviewed; do not relitigate in build tasks):**
+- **Photo = the native picker**, not an in-app camera: `<input type="file" accept="image/*">` opens iOS's own camera *or* photo library, so existing photos attach too. No `getUserMedia` for stills, no permission handling, works in the Home-Screen PWA.
+- **Files on disk, canonical in `hq_home`**: bytes at `hq_home/attachments/<note_id>/<file>`, rows in a new `note_attachments` table. Flat by **note id** because an id never changes — notes are refiled constantly by the review queue, and a path that moves on every approval is a link that eventually breaks. `wm backup` is extended to cover them (it copies the DB only today). **Phase 4's export writes** each file beside its note in the PARA folders, which is where "attachments live with their note" actually becomes true on disk.
+  - Rejected: BLOBs in `hq.db` (bloats every backup); a folder tree mirroring areas/projects with move-on-refile (a crash mid-move orphans a file); **inside the linked project's repo** — briefly chosen by the owner on the premise that the second brain would be a git repo pushed to a private remote, then withdrawn 2026-09-07: the second brain **stays DB-native**, so there is no repo to commit into, and binaries in a live code repo sit where agents work.
+- **The librarian skips voice-only notes** until they have text. It cannot read audio, so it would either propose from a filename or burn a run to say "cannot tell". `wm note show` reports that a note HAS attachments (never bytes) so it never files an apparently-empty body.
+- **Attach from both surfaces**: the capture box AND an existing note page.
+- **Removing an attachment is owner-only and is NOT note deletion** — notes stay archive-only (owner decision, same day). Without it a mis-shot photo would be permanent.
+
+**Out of scope for 2c:** transcription; in-app camera; thumbnails/resizing; offline capture queue; HEIC conversion; note deletion; the export itself (Phase 4 — 2c only shapes the data so that export is a straightforward walk).
+
+**Known limits going in:** HEIC may arrive unrenderable (iPhone "High Efficiency"; Safari usually transcodes on upload but not always) — store as-is and show an honest "preview not supported" card rather than a broken image, no `pillow-heif` dependency. MediaRecorder emits `audio/mp4` on iOS and `audio/webm;codecs=opus` on Chrome — store the blob's real mime/extension, never assume one. **`getUserMedia` needs a secure context**: recording works over the owner's `ts.net` HTTPS address and NOT over plain `http://<vm>:9010`. The iOS recorder path is **not verifiable from this box** — headless Chromium proves the Chrome path with a fake mic; the owner confirms iOS on the phone.
+
+**Slices:** A — `note_attachments` schema, upload/serve/delete endpoints, capture-box photo + voice, rendering on the note. B — attach from an existing note page, librarian skip + `wm note show` awareness, attachment removal, `wm backup` coverage.
 
 ### Phase 3 — Import
 Importer job (per-source parsers, dedupe by hash + title heuristics, museum auto-archive, empties dropped, secrets quarantine), triage sessions through the Review Queue for the living set, coverage stat on Home.
