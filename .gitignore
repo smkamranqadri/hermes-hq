@@ -8,3 +8,10 @@ backend/static/
 screenshots/
 frontend/tsconfig.tsbuildinfo
 deploy-backups/
+# Agent-harness scratch worktrees. NOT ignorable as bare `.claude/` — commands/,
+# skills/ and settings.json under it are tracked project config. Untracked dirt
+# here is load-bearing: the commit contract fails ANY run that reports done with
+# a dirty tree, and non-code runs (librarian, analyst) use the main checkout as
+# their workdir — so one stray untracked path fails every such run and sends its
+# task round the rework loop. Seen live 2026-09-07 (librarian run 465).
+.claude/worktrees/
