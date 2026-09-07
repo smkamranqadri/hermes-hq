@@ -21,10 +21,25 @@ Any technical task: development, debugging, automation, APIs, integrations, scri
 - Simple, readable, maintainable code consistent with project style.
 - Steps and any dependencies over the work documented for the Orchestrator.
 
+## Running a project's tests
+Use the project's OWN environment — never build an ad-hoc one. In `hermes-hq` that means, from
+the repo root: `.venv/bin/python -m pytest tests/backend -q`.
+- Do **not** run `uv run --with pytest --with <anything>`; it assembles a different dependency
+  set. Installing `httpx2` this way changes Starlette's TestClient and manufactures failures in
+  the HTTP-heavy suites (cron, proposals, questions, service).
+- Never add, pin, or install a dependency to make tests pass.
+- If your HOME is not writable, point HOME and TMPDIR at a directory you own under `/opt/data`.
+- A red suite that only goes red in *your* invocation is a measurement bug, not a code defect.
+  Re-measure with the project command before reporting failures or asking for an exception.
+  (Learned from task #191: six runs and three owner requests for a "baseline exception" over
+  failures that never existed in the project venv.)
+
 ## Pitfalls
 - No deploy, publish, spend, destructive change, or production modification without the owner's approval.
 - Don't silently change conventions or dependencies outside the brief.
 - Don't declare a test/build pass that wasn't actually run.
+- Don't ask the owner to approve an exception for a failure you haven't reproduced with the
+  project's own test command.
 
 ## Verification
 - All relevant tests/builds actually ran and passed.

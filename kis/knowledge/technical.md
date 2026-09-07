@@ -76,6 +76,18 @@ Repo layout: `core/` (engine package: wm_store/wm_dispatch/wm_run_agent/wm_cli, 
 
 Hermes v0.20.5 at `/opt/hermes`, `HERMES_HOME=/opt/data`, profiles under `/opt/data/profiles/`, gateway :8642, Hermes dashboard :9119, legacy WM dashboard :9009. Node 26, Python 3.13, no pnpm.
 
+## Run the suite with the PROJECT VENV, never `uv run --with …`
+`cd /opt/data/projects/hermes-hq && .venv/bin/python -m pytest tests/backend -q` is the only
+sanctioned invocation. `uv run --with pytest --with httpx2 pytest …` builds a *different*
+dependency set, and `httpx2` changes Starlette TestClient behaviour — it manufactures failures
+in the HTTP-heavy suites (cron, proposals, questions, service). Task #191 burned six runs on
+this: it reported "9 reproducible failures" and asked the owner three times for a "test-scoped
+baseline exception" for failures that existed only inside its ad-hoc environment. Measured
+properly on 2026-09-07: **197 passed / 0 failed as root**, and **196 / 1 as uid 10000** with
+HOME+TMPDIR under `/opt/data` — the single failure being the documented
+`test_terminal.py::test_shell_user_resize_reattach_close` PTY-HOME artifact. Never add or pin
+dependencies to make tests pass.
+
 ## Never hard-delete engine rows (tasks/runs)
 The engine is append-only by design — there is no delete_task/delete_run, and `id` is a plain
 rowid, so **deleting the newest rows makes SQLite reuse those ids**. Agent sessions are marked
