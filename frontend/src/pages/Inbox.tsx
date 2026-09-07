@@ -6,12 +6,40 @@ import { useNotifications, markNotificationsRead, ago, ApiError, type Notificati
 import { GlassCard } from '../components/GlassCard'
 import { Empty, Loading, Label } from '../components/ui'
 import { Btn } from '../components/Modal'
+import { RunAnswer } from '../components/RunAnswer'
 import { loadPrefs, savePrefs, permission, requestPermission, showBrowserNotification, supportsNotifications, chime, supportsPush, currentPushSubscription, enablePush, disablePush, type NotifyPrefs } from '../components/notify'
 import { getVapid, pushSubscribe, pushUnsubscribe, pushTest } from '../api'
 import { useToast } from '../components/Toast'
 import { usePageTitle } from '../usePageTitle'
 
 const TONE: Record<Notification['kind'], string> = { needs_you: 'bg-needsyou', done: 'bg-working', info: 'bg-queued', chat: 'bg-accent', question: 'bg-needsyou' }
+
+/** One notification. An agent question with a live run answers in place —
+ * that is the phone path, where walking to the task page is the friction that
+ * left #176 spinning for 19 hours. */
+function InboxRow({ n, onOpen }: { n: Notification; onOpen: () => void }) {
+  const [answering, setAnswering] = useState(false)
+  const canAnswer = n.kind === 'question' && typeof n.run_id === 'number'
+  return (
+    <div className={clsx('border-b border-line-subtle last:border-0', !n.read_at && 'bg-raised/50')}>
+      <div className="flex w-full items-start gap-3 px-4 py-3 text-left text-sm">
+        <span className={clsx('mt-2 size-2 shrink-0 rounded-full', TONE[n.kind] ?? 'bg-muted', n.read_at && 'opacity-40')} />
+        <button type="button" onClick={onOpen} className="min-w-0 flex-1 text-left hover:text-accent-2">
+          <span className={clsx('block', !n.read_at && 'font-medium')}>{n.title}</span>
+          {n.body && <span className="mt-0.5 block text-xs text-muted">{n.body}</span>}
+        </button>
+        {canAnswer && (
+          <button type="button" onClick={() => setAnswering(a => !a)} data-inbox-answer
+            className="shrink-0 rounded-full border border-needsyou/60 px-2.5 py-0.5 font-mono text-[10px] uppercase tracking-wider text-needsyou hover:bg-needsyou/20">
+            {answering ? 'Close' : 'Answer'}
+          </button>
+        )}
+        <span className="shrink-0 font-mono text-[10px] text-muted">{ago(n.ts)}</span>
+      </div>
+      {canAnswer && answering && <div className="px-4 pb-3"><RunAnswer runId={n.run_id!} /></div>}
+    </div>
+  )
+}
 
 /** Phone Inbox tab: the bell's list as a page, plus the alert preferences. */
 export function Inbox() {
@@ -50,15 +78,7 @@ export function Inbox() {
       {q.data && rows.length === 0 && <Empty title="Nothing yet" note="Tasks that need you, finished work, chat replies and agent questions land here." />}
       {rows.length > 0 && (
         <GlassCard className="mb-5 p-0">
-          {rows.map(n => (
-            <button key={n.id} type="button" onClick={() => void open(n)} className={clsx('flex w-full items-start gap-3 border-b border-line-subtle px-4 py-3 text-left text-sm last:border-0 hover:bg-raised', !n.read_at && 'bg-raised/50')}>
-              <span className={clsx('mt-2 size-2 shrink-0 rounded-full', TONE[n.kind] ?? 'bg-muted', n.read_at && 'opacity-40')} />
-              <span className="min-w-0 flex-1">
-                <span className={clsx('block', !n.read_at && 'font-medium')}>{n.title}</span>
-                {n.body && <span className="mt-0.5 block text-xs text-muted">{n.body}</span>}
-              </span>
-              <span className="shrink-0 font-mono text-[10px] text-muted">{ago(n.ts)}</span>
-            </button>))}
+          {rows.map(n => <InboxRow key={n.id} n={n} onOpen={() => void open(n)} />)}
         </GlassCard>
       )}
       <Label>Alerts</Label>

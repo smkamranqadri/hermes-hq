@@ -71,6 +71,21 @@ def run_log(run_id: int, offset: int = Query(0, ge=0)):
     return ov.run_log(run_id, offset)
 
 
+@router.get("/run/{run_id}/question")
+def run_question(run_id: int):
+    """The run's newest owner question with its options, for the answer UI.
+
+    Re-parsed from the run's transcript on demand — the scanner's notification
+    only carries a text body, and answering needs the structured options.
+    """
+    from backend import questions as qs
+    run = wm_store.get_run(run_id, db_path=_db())
+    if run is None:
+        raise HTTPException(404, "no such run")
+    return {"run_id": run_id, "run_status": run["status"],
+            "question": qs.latest_question(run, db_path=_db())}
+
+
 @router.get("/agents")
 def agents():
     return {"agents": ag.list_agents(_db()), "templates": ag.list_templates()}

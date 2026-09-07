@@ -11,6 +11,7 @@ import { useToast } from '../components/Toast'
 import { usePageTitle } from '../usePageTitle'
 import { useState } from 'react'
 import { ActionBtn, FeedbackModal } from '../components/forms'
+import { RunAnswer } from '../components/RunAnswer'
 import { RunLog } from '../components/RunLog'
 import { ScopedChat } from '../components/ScopedChat'
 
@@ -61,18 +62,6 @@ function GateChip({ taskId, on, canEdit }: { taskId: number; on: boolean; canEdi
       {on ? '✓ owner gate' : 'owner gate off'}
     </button>
   )
-}
-
-function BlockedRunAnswer({ runId }: { runId: number }) {
-  const toast = useToast()
-  const [text, setText] = useState('')
-  const m = useWrite(`/api/run/${runId}/answer`, {
-    onSuccess: () => { setText(''); toast('Answer delivered — the same run has resumed') },
-  })
-  return <div className="mt-2 flex basis-full flex-wrap items-end gap-2 rounded-lg border border-needsyou/50 bg-needsyou/10 p-3" data-blocked-run-answer>
-    <TextArea rows={2} value={text} onChange={e => setText(e.target.value)} placeholder="Answer the agent's question…" className="min-w-[14rem] flex-1" />
-    <Btn busy={m.isPending} disabled={!text.trim()} onClick={() => m.mutate({ message: text.trim() }, { onError: e => toast(e instanceof ApiError ? e.message : String(e), 'err') })}>Answer &amp; Resume</Btn>
-  </div>
 }
 
 type FileRead = { kind: 'text' | 'image' | 'pdf' | 'binary'; content?: string; too_large?: boolean; name: string }
@@ -180,12 +169,20 @@ export function TaskDetail() {
         </div>
         {t.human.reason && t.human.reason.includes(':') && <p className="basis-full text-sm text-needsyou">{t.human.reason.slice(t.human.reason.indexOf(':') + 1).trim()}</p>}
         {t.question && (
-          <div className="flex basis-full flex-wrap items-center justify-between gap-2 rounded-lg border border-needsyou/50 bg-needsyou/10 px-3 py-2 text-sm" data-run-question>
-            <span className="min-w-0 break-words"><span className="mr-2 font-mono text-[10px] uppercase tracking-wider text-needsyou">question</span>{t.question.body || t.question.title}</span>
-            {t.question.href && <Link to={t.question.href} onClick={() => void markNotificationsRead([t.question!.id])} className="shrink-0 rounded-full border border-needsyou/60 px-2.5 py-0.5 font-mono text-[10px] uppercase tracking-wider text-needsyou hover:bg-needsyou/20">Answer in session</Link>}
+          <div className="flex basis-full flex-col gap-2" data-run-question>
+            <div className="flex flex-wrap items-center gap-2 text-sm">
+              <span className="font-mono text-[10px] uppercase tracking-wider text-needsyou">question</span>
+              <span className="min-w-0 flex-1 break-words">{t.question.body || t.question.title}</span>
+              {t.question.href && (
+                <Link to={t.question.href} onClick={() => void markNotificationsRead([t.question!.id])}
+                  className="shrink-0 rounded-full border border-line px-2.5 py-0.5 font-mono text-[10px] uppercase tracking-wider text-muted hover:text-fg"
+                  title="Open the agent's session transcript (reading only — answer below)">Open session</Link>
+              )}
+            </div>
+            {/* answer right here: running => same session continues, blocked => same run resumes */}
+            <RunAnswer runId={t.question.run_id} blocked={st === 'blocked'} />
           </div>
         )}
-        {st === 'blocked' && t.question && <BlockedRunAnswer runId={t.question.run_id} />}
         <div className="flex basis-full flex-wrap gap-2">
           {!!t.owner_approval && ['waiting_approval', 'ready', 'rework'].includes(st) && (
             <ActionBtn url={`/api/task/${t.id}/edit`} body={{ owner_approval: false }} label="Approve → queue"

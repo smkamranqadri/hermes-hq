@@ -88,6 +88,66 @@ def _fence_question(text):
         return ""
 
 
+def _fence_payload(text):
+    """The full parsed hq-options payload, or None. Options are normalised to
+    {label, detail} dicts and capped — the UI renders one button per option."""
+    m = FENCE_RE.search(text)
+    if not m:
+        return None
+    try:
+        d = json.loads(m.group(1))
+    except Exception:
+        return None
+    if not isinstance(d, dict):
+        return None
+    q = d.get("question")
+    opts = []
+    for o in (d.get("options") or [])[:6]:
+        if isinstance(o, str) and o.strip():
+            opts.append({"label": o.strip()[:120], "detail": ""})
+        elif isinstance(o, dict) and str(o.get("label") or "").strip():
+            opts.append({"label": str(o["label"]).strip()[:120],
+                         "detail": str(o.get("detail") or "").strip()[:300]})
+    return {"question": (q.strip() if isinstance(q, str) else "")[:_MAX_BODY],
+            "mode": "multi" if d.get("mode") == "multi" else "single",
+            "options": opts}
+
+
+def latest_question(run, db_path=None):
+    """The newest hq-options question asked by this run, or None.
+
+    Re-parsed from the run's own transcript on demand (read-only) rather than
+    persisted: the transcript is the single source of truth, and the scanner's
+    notification only ever carried a text body. Never raises — a missing or
+    unreadable session db just means "no question to show".
+    """
+    dbp = store.agent_session_db_path(run["agent_profile"])
+    if not dbp or not os.path.exists(dbp):
+        return None
+    try:
+        con = _connect_ro(dbp)
+    except Exception:
+        return None
+    try:
+        sid = _session_for(con, run)
+        if not sid:
+            return None
+        rows = con.execute(
+            "SELECT * FROM messages WHERE session_id=? AND role='assistant' "
+            "AND (active IS NULL OR active=1) ORDER BY id DESC LIMIT ?",
+            (sid, _MAX_MSGS_PER_SCAN)).fetchall()
+    except Exception:
+        return None
+    finally:
+        con.close()
+    for m in rows:                       # newest first — first fence wins
+        payload = _fence_payload("\n".join(_visible_texts(m))[:_MAX_MSG_CHARS])
+        if payload:
+            payload["message_id"] = m["id"]
+            return payload
+    return None
+
+
 def _scan_one(run, marks, db_path):
     """Scan one running run's new assistant messages. Returns (last_seen_msg_id,
     [new notification ids])."""

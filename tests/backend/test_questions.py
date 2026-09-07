@@ -186,3 +186,56 @@ def test_mark_stalled_label_names_the_origin(env):
         d = con.execute("SELECT detail FROM state_transitions WHERE task_id=? AND to_status='stalled'", (tid,)).fetchone()["detail"]
         con.close()
         assert d == want
+
+
+# ---- Slice A: structured question read + answering a LIVE run -----------
+
+def test_latest_question_returns_structured_options(env):
+    """The API re-parses the fence so the UI can render real buttons — the
+    notification only ever carried a text body."""
+    c, store, gw, root = env
+    from backend import questions
+    db = store.DEFAULT_DB_PATH
+    _seed_state_db(root, "coder", "qs-api", "wm-run-y", [
+        ("assistant", 'old ```hq-options\n{"question": "stale?", "options": [{"label": "x"}]}\n```', None),
+        ("assistant", FENCE, None),                          # newest fence wins
+    ])
+    tid, rid = _mk_run(store, "coder", "demoq-api", session_id="qs-api")
+    h = login(c)
+    r = c.get("/api/run/%d/question" % rid, headers=h)
+    assert r.status_code == 200
+    q = r.json()["question"]
+    assert q["question"] == "Deploy to staging or prod?"
+    assert q["mode"] == "single"
+    assert [o["label"] for o in q["options"]] == ["staging", "prod"]
+    assert r.json()["run_status"] == "running"
+    assert c.get("/api/run/999999/question", headers=h).status_code == 404
+
+
+def test_question_endpoint_is_owner_only_and_survives_no_session(env):
+    c, store, gw, root = env
+    db = store.DEFAULT_DB_PATH
+    tid, rid = _mk_run(store, "coder", "demoq-none")        # no seeded session db
+    assert c.get("/api/run/%d/question" % rid).status_code == 401     # owner wall
+    h = login(c)
+    r = c.get("/api/run/%d/question" % rid, headers=h)
+    assert r.status_code == 200 and r.json()["question"] is None      # never raises
+
+
+def test_answer_live_run_writes_answer_file_without_relaunch(env):
+    """The DoD line: answering a RUNNING run appends to the file the agent
+    polls and leaves the run untouched — same run id, still running."""
+    c, store, gw, root = env
+    db = store.DEFAULT_DB_PATH
+    _seed_state_db(root, "coder", "qs-live", "wm-run-z", [("assistant", FENCE, None)])
+    tid, rid = _mk_run(store, "coder", "demoq-live", session_id="qs-live")
+    h = login(c)
+    r = c.post("/api/run/%d/answer" % rid, json={"message": "staging"}, headers=h)
+    assert r.status_code == 200 and not r.json().get("resumed")
+    with open(store.answer_path(rid)) as f:
+        assert "staging" in f.read()
+    run = store.get_run(rid, db_path=db)
+    assert run["status"] == "running"                       # never respawned
+    con = store._connect(db)
+    assert con.execute("SELECT COUNT(*) FROM runs WHERE task_id=?", (tid,)).fetchone()[0] == 1
+    con.close()

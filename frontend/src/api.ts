@@ -141,7 +141,16 @@ export type SearchHit = { profile: string; id: string; title: string | null; mod
 export const useChatSearch = (q: string) => useQuery({ queryKey: ['chat-search', q], queryFn: () => get<{ results: SearchHit[] }>(`/api/chat/search?q=${encodeURIComponent(q)}`), enabled: q.trim().length >= 2, staleTime: 10000 })
 
 // ---- notifications ------------------------------------------------------
-export type Notification = { id: number; ts: number; kind: 'needs_you' | 'done' | 'info' | 'chat' | 'question'; title: string; body: string | null; href: string | null; task_id: number | null; read_at: number | null }
+export type Notification = { id: number; ts: number; kind: 'needs_you' | 'done' | 'info' | 'chat' | 'question'; title: string; body: string | null; href: string | null; task_id: number | null; run_id?: number | null; read_at: number | null }
+
+// ---- owner question loop (intent/OwnerQuestionLoopPlan.md) --------------
+export type RunQuestion = { question: string; mode: 'single' | 'multi'; options: { label: string; detail: string }[]; message_id: number }
+export const useRunQuestion = (runId: number | null | undefined) =>
+  useQuery({
+    queryKey: ['run-question', runId],
+    queryFn: () => get<{ run_id: number; run_status: string; question: RunQuestion | null }>(`/api/run/${runId}/question`),
+    enabled: typeof runId === 'number' && Number.isFinite(runId),
+  })
 export const useNotifications = () => useQuery({ queryKey: ['notifications'], queryFn: () => get<{ notifications: Notification[]; unread: number }>('/api/notifications?limit=50'), refetchInterval: 15000 })
 
 // ---- Second Brain ------------------------------------------------------
