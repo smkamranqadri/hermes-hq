@@ -2145,6 +2145,20 @@ def promote_dependents(task_id, db_path=None):
 UNCOMMITTED_CHECK_TIMEOUT = 15       # seconds; the check must never hang a completion
 
 
+def _rework_cycles(task_id, db_path=None, conn=None):
+    """How many times this task has been sent back. Both loop guards — the
+    review cap and the commit contract — count the same thing."""
+    sql = ("SELECT COUNT(*) FROM state_transitions WHERE task_id=? "
+           "AND to_status='rework'")
+    if conn is not None:
+        return conn.execute(sql, (task_id,)).fetchone()[0]
+    c = _connect(db_path)
+    try:
+        return c.execute(sql, (task_id,)).fetchone()[0]
+    finally:
+        c.close()
+
+
 def uncommitted_paths(workdir):
     """Paths a run left uncommitted in its worktree, or [] — FAILING OPEN.
 
@@ -2214,7 +2228,18 @@ def record_completion(run_id, task_id, completed, summary="", result_paths=None,
     if completed == "changes_uncommitted":
         # The RUN failed its contract (valid run states exclude 'rework'); the
         # TASK goes back to rework so the same agent can commit and re-report.
-        run_status, task_status = "failed", "rework"
+        # BOUNDED: rework is dispatcher-claimable, and the review cap in
+        # review_verdict never fires for a review_policy='none' task — so an
+        # agent that keeps not committing would loop forever (seen live on
+        # task #202: three runs in six minutes). Same cap, owner's desk.
+        run_status = "failed"
+        cycles = _rework_cycles(task_id, db_path=db_path)
+        if cycles + 1 >= MAX_REWORK_CYCLES:
+            task_status = "manual"
+            blocker = ("%s\n\nStopped re-dispatching after %d attempts — this "
+                       "needs you." % (blocker, cycles + 1))
+        else:
+            task_status = "rework"
     elif completed == "done":
         run_status = "done"
         if task["review_policy"] in ("required", "optional"):
@@ -2566,9 +2591,7 @@ def review_verdict(task_id, verdict, comment=None, db_path=None):
                 # runs, #176 16/34, every #176 review naming the same missing
                 # owner answer. At the cap the task lands on the owner's desk
                 # with the reviewer's words instead of being re-dispatched.
-                cycles = conn.execute(
-                    "SELECT COUNT(*) FROM state_transitions WHERE task_id=? "
-                    "AND to_status='rework'", (task_id,)).fetchone()[0]
+                cycles = _rework_cycles(task_id, conn=conn)
                 if cycles + 1 >= MAX_REWORK_CYCLES:
                     conn.execute(
                         "UPDATE tasks SET status='manual', feedback=?, "

@@ -112,3 +112,21 @@ def test_briefs_carry_the_commit_contract(env):
     brief = store.render_brief(rid, db_path=db)
     assert "COMMIT CONTRACT" in brief
     assert "git status --porcelain" in brief
+
+
+def test_repeated_refusals_stop_re_dispatching(env, tmp_path):
+    """The refusal returns the task to `rework`, which the dispatcher re-claims —
+    and the review cap never fires for a review_policy='none' task. Seen live on
+    #202: three runs in six minutes. The gate bounds itself with the same cap."""
+    c, store, _gw, _root = env
+    db = store.DEFAULT_DB_PATH
+    tid, rid = _mk_run(store, "coder", "cc-loop")
+    wd = _repo(str(tmp_path / "loop"), dirty=True)
+    seen = []
+    for _ in range(store.MAX_REWORK_CYCLES):
+        rid = store.start_run(tid, "coder", db_path=db)
+        seen.append(_finish(store, tid, rid, wd, db)[0])
+    assert seen[:-1] == ["rework"] * (store.MAX_REWORK_CYCLES - 1)
+    assert seen[-1] == "manual"                      # owner's desk, not re-dispatched
+    assert "Stopped re-dispatching" in store.get_run(rid, db_path=db)["error"]
+    assert tid not in [t["id"] for t in store.next_ready_tasks(50, db_path=db)]
