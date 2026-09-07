@@ -260,3 +260,22 @@ def test_unterminated_fence_still_asks(env):
     h = login(c)
     q = c.get("/api/run/%d/question" % rid, headers=h).json()["question"]
     assert [o["label"] for o in q["options"]] == ["violet", "amber"]
+
+
+def test_question_survives_reading_the_notification(env):
+    """Owner ask 2026-09-07: the options must show on the task page whenever the
+    agent asked. Reading the ping in the Inbox marks the notification read — the
+    run's question (what the UI renders from) must be unaffected."""
+    c, store, gw, root = env
+    from backend import questions
+    db = store.DEFAULT_DB_PATH
+    _seed_state_db(root, "coder", "qs-read", "wm-run-r", [("assistant", FENCE, None)])
+    tid, rid = _mk_run(store, "coder", "demoq-read", session_id="qs-read")
+    assert questions.scan_running_runs(db_path=db) == 1
+    h = login(c)
+    store.mark_notifications_read(db_path=db)                 # as the Inbox does
+    detail = c.get("/api/task/%d" % tid, headers=h).json()
+    assert detail["question"] is None                         # the row is read...
+    assert detail["runs"][0]["status"] == "running"           # ...but the run is live
+    q = c.get("/api/run/%d/question" % rid, headers=h).json()["question"]
+    assert q and [o["label"] for o in q["options"]] == ["staging", "prod"]

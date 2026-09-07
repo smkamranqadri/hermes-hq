@@ -22,6 +22,9 @@ export function RunAnswer({ runId, blocked = false, compact = false }: {
   const question: RunQuestion | null = q.data?.question ?? null
   const multi = question?.mode === 'multi'
   const [picked, setPicked] = useState<string[]>([])
+  // A live run with nothing asked has nothing to answer — stay out of the way.
+  // A blocked run always gets a box: it stopped for the owner either way.
+  if (!question && !blocked) return null
 
   const send = async (message: string, key: string) => {
     setBusy(key)

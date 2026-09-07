@@ -132,6 +132,8 @@ export function TaskDetail() {
   if (q.isError || !t) return <section className="mx-auto max-w-6xl p-6"><Empty error title={`Could not load /api/task/${id}`} note={String(q.error ?? '404')} /></section>
   const latest = t.runs[0]
   const st = t.status
+  // the run that can still receive an answer (live, or stopped waiting for one)
+  const liveRun = latest && ['running', 'blocked'].includes(latest.status) ? latest : null
   const canFeedback = ['needs_review', 'rework', 'done', 'blocked', 'failed', 'stalled', 'manual'].includes(st)
   const canEdit = !['running', 'done'].includes(st)
   const canRetry = ['failed', 'stalled', 'blocked', 'rework', 'manual'].includes(st)
@@ -168,19 +170,24 @@ export function TaskDetail() {
           </div>
         </div>
         {t.human.reason && t.human.reason.includes(':') && <p className="basis-full text-sm text-needsyou">{t.human.reason.slice(t.human.reason.indexOf(':') + 1).trim()}</p>}
-        {t.question && (
+        {/* The agent's question + its options, driven by the RUN (not by an
+            unread notification): reading the ping in the Inbox must never hide
+            the choices while the agent is still waiting. RunAnswer renders
+            nothing when a live run has asked nothing. */}
+        {liveRun && (
           <div className="flex basis-full flex-col gap-2" data-run-question>
-            <div className="flex flex-wrap items-center gap-2 text-sm">
-              <span className="font-mono text-[10px] uppercase tracking-wider text-needsyou">question</span>
-              <span className="min-w-0 flex-1 break-words">{t.question.body || t.question.title}</span>
-              {t.question.href && (
-                <Link to={t.question.href} onClick={() => void markNotificationsRead([t.question!.id])}
-                  className="shrink-0 rounded-full border border-line px-2.5 py-0.5 font-mono text-[10px] uppercase tracking-wider text-muted hover:text-fg"
-                  title="Open the agent's session transcript (reading only — answer below)">Open session</Link>
-              )}
-            </div>
-            {/* answer right here: running => same session continues, blocked => same run resumes */}
-            <RunAnswer runId={t.question.run_id} blocked={st === 'blocked'} />
+            {t.question && (
+              <div className="flex flex-wrap items-center gap-2 text-sm">
+                <span className="font-mono text-[10px] uppercase tracking-wider text-needsyou">question</span>
+                <span className="min-w-0 flex-1 break-words">{t.question.body || t.question.title}</span>
+                {t.question.href && (
+                  <Link to={t.question.href} onClick={() => void markNotificationsRead([t.question!.id])}
+                    className="shrink-0 rounded-full border border-line px-2.5 py-0.5 font-mono text-[10px] uppercase tracking-wider text-muted hover:text-fg"
+                    title="Open the agent's session transcript (reading only — answer below)">Open session</Link>
+                )}
+              </div>
+            )}
+            <RunAnswer runId={liveRun.id} blocked={st === 'blocked'} />
           </div>
         )}
         <div className="flex basis-full flex-wrap gap-2">
