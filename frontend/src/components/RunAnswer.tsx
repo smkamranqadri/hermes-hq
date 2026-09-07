@@ -12,8 +12,12 @@ import { post, useRunQuestion, type RunQuestion } from '../api'
 import { Btn, TextArea } from './Modal'
 import { useToast } from './Toast'
 
-export function RunAnswer({ runId, blocked = false, compact = false }: {
+export function RunAnswer({ runId, blocked = false, compact = false, fallbackQuestion }: {
   runId: number; blocked?: boolean; compact?: boolean
+  /** What the run stopped on when it never used an hq-options fence — its
+   * blocker IS the question, and it must be readable IN FULL here (the
+   * board's one-line reason is truncated to 120 chars by design). */
+  fallbackQuestion?: string | null
 }) {
   const qc = useQueryClient(); const toast = useToast()
   const q = useRunQuestion(runId)
@@ -25,6 +29,7 @@ export function RunAnswer({ runId, blocked = false, compact = false }: {
   // A live run with nothing asked has nothing to answer — stay out of the way.
   // A blocked run always gets a box: it stopped for the owner either way.
   if (!question && !blocked) return null
+  const asked = question?.question || (fallbackQuestion || '').trim()
 
   const send = async (message: string, key: string) => {
     setBusy(key)
@@ -40,7 +45,7 @@ export function RunAnswer({ runId, blocked = false, compact = false }: {
 
   return (
     <div className={`flex basis-full flex-col gap-2 rounded-lg border border-needsyou/50 bg-needsyou/10 p-3 ${compact ? 'text-sm' : ''}`} data-run-answer>
-      {question?.question && <p className="break-words text-sm font-medium">{question.question}</p>}
+      {asked && <p className="whitespace-pre-wrap break-words text-sm font-medium">{asked}</p>}
       {!!question?.options.length && (
         <div className="flex flex-wrap gap-2">
           {question.options.map(o => (

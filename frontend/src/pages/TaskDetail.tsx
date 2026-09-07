@@ -169,7 +169,11 @@ export function TaskDetail() {
             {(srcNotes.data?.notes ?? []).map(n => <Link key={n.id} to={`/brain/note/${n.id}`} className="text-accent-2 hover:underline" title="This task was created from a Second Brain note">· ✎ from note “{n.title.length > 40 ? n.title.slice(0, 40) + '…' : n.title}”</Link>)}
           </div>
         </div>
-        {t.human.reason && t.human.reason.includes(':') && <p className="basis-full text-sm text-needsyou">{t.human.reason.slice(t.human.reason.indexOf(':') + 1).trim()}</p>}
+        {/* the board's reason is deliberately clipped to 120 chars; when the
+            panel below shows the same blocker IN FULL, don't print the stub */}
+        {t.human.reason && t.human.reason.includes(':') && !(liveRun && liveRun.error) && (
+          <p className="basis-full text-sm text-needsyou">{t.human.reason.slice(t.human.reason.indexOf(':') + 1).trim()}</p>
+        )}
         {/* The agent's question + its options, driven by the RUN (not by an
             unread notification): reading the ping in the Inbox must never hide
             the choices while the agent is still waiting. RunAnswer renders
@@ -187,7 +191,7 @@ export function TaskDetail() {
                 )}
               </div>
             )}
-            <RunAnswer runId={liveRun.id} blocked={st === 'blocked'} />
+            <RunAnswer runId={liveRun.id} blocked={st === 'blocked'} fallbackQuestion={liveRun.error} />
           </div>
         )}
         <div className="flex basis-full flex-wrap gap-2">
