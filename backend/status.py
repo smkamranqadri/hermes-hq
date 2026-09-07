@@ -71,7 +71,7 @@ def classify(task, deps=(), goal_status=None, last_run=None):
         # The owner's own todo. The dispatcher excludes the `owner` assignee
         # from both the claim UPDATE and next_ready_tasks, so "Queued" promises
         # a pickup that can never come — it reads as agent work in flight.
-        state, reason, label = "needsyou", "yours to do", "Yours to do"
+        state, label = "needsyou", "Yours to do"
     elif st == "rework":
         reason = "rework requested"
     elif st == "needs_review":
@@ -107,7 +107,7 @@ def classify(task, deps=(), goal_status=None, last_run=None):
             # "Handed over" describes taking work OFF an agent. An owner task
             # was never on one — parking it under done hides an open todo,
             # which is exactly how the owner's Second Brain reminders got lost.
-            state, reason, label = "needsyou", "yours to do", "Yours to do"
+            state, label = "needsyou", "Yours to do"
         else:
             label = "Handed over"
     elif st not in HUMAN_STATE:

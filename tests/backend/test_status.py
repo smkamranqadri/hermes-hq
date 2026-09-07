@@ -104,7 +104,8 @@ def test_owner_todo_never_reads_as_agent_queue_work():
                            "assignee_profile": "owner"}, [], "released", None)
         assert out["state"] == "needsyou", st
         assert out["label"] == "Yours to do", st
-        assert out["reason"] == "yours to do", st
+        # the label says it; a "yours to do · yours to do" chip is noise
+        assert out["reason"] is None, st
     # an agent task in the same statuses is untouched
     for st in ("ready", "rework"):
         out = hs.classify({"status": st, "owner_approval": 0,
@@ -121,7 +122,7 @@ def test_owner_todo_on_manual_is_not_buried_under_done():
                        "assignee_profile": "owner", "title": "test",
                        "goal_id": None, "feedback": None}, [], None, None)
     assert out["state"] == "needsyou"
-    assert out["label"] == "Yours to do"
+    assert out["label"] == "Yours to do" and out["reason"] is None
     # an agent task taken over by the owner still reads 'Handed over'
     agent = hs.classify({"status": "manual", "owner_approval": 0,
                          "assignee_profile": "coder", "title": "BUILD: x",
