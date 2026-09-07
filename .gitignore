@@ -7,3 +7,4 @@ backend/static/
 .env
 screenshots/
 frontend/tsconfig.tsbuildinfo
+deploy-backups/

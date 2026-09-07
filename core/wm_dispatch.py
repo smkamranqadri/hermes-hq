@@ -155,8 +155,18 @@ def _launch(run_id, agent, brief_text, cwd, cfg, db_path, log_action):
     env = os.environ.copy()
     path = env.get("PATH", "")
     hbin = os.path.dirname(cfg["hermes"])
-    if ("/opt/hermes/bin" not in path) and (hbin not in path):
-        env["PATH"] = hbin + os.pathsep + path
+    resolve_hq_cli = getattr(store, "resolve_hq_cli", None)
+    hq_cli = (resolve_hq_cli() if resolve_hq_cli else
+              os.environ.get("HERMES_HQ_CLI") or
+              os.path.join(os.environ.get("HERMES_HQ_REPO", os.getcwd()),
+                           ".venv", "bin", "hermes-hq"))
+    qbin = os.path.dirname(hq_cli)
+    for bindir in (hbin, qbin):
+        if bindir and bindir not in env.get("PATH", "").split(os.pathsep):
+            env["PATH"] = bindir + os.pathsep + env.get("PATH", "")
+    resolve_hq_repo = getattr(store, "resolve_hq_repo", None)
+    env["HERMES_HQ_REPO"] = (resolve_hq_repo() if resolve_hq_repo else
+                              os.environ.get("HERMES_HQ_REPO", os.getcwd()))
     env["WM_DB"] = db_path
     env["WM_RUNS_DIR"] = cfg["runs_dir"]
     env["WM_PROFILES_DIR"] = cfg["profiles_dir"]

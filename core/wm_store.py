@@ -223,6 +223,23 @@ def resolve_hermes():
     return os.environ.get("WM_HERMES") or HERMES
 
 
+def resolve_hq_repo():
+    """The checkout whose current Hermes HQ CLI agents must invoke."""
+    return os.environ.get("HERMES_HQ_REPO") or os.path.dirname(_THIS_DIR)
+
+
+def resolve_hq_cli():
+    """Resolve the installed CLI, preferring this checkout's venv."""
+    candidates = (
+        os.environ.get("HERMES_HQ_CLI"),
+        os.path.join(resolve_hq_repo(), ".venv", "bin", "hermes-hq"),
+        os.path.join(os.path.dirname(sys.executable), "hermes-hq"),
+        shutil.which("hermes-hq"),
+    )
+    return next((p for p in candidates if p and os.path.exists(p)),
+                os.path.join(resolve_hq_repo(), ".venv", "bin", "hermes-hq"))
+
+
 def resolve_py():
     return os.environ.get("WM_PY") or HERMES_PY
 
@@ -3482,7 +3499,7 @@ def render_brief(run_id, db_path=None):
                 rpaths = []
         delim = "=" * 40
         rl = [
-            "WORK MANAGER REVIEW BRIEF (auto-created by the system)",
+            "HERMES HQ REVIEW BRIEF (auto-created by the system)",
             delim,
             "Reviewing task #%s: %s" % (task["id"], task["title"] or "-"),
             "This review was automatically created because the task's "
@@ -3509,8 +3526,8 @@ def render_brief(run_id, db_path=None):
             "Inspect the deliverable(s) at the result_path(s) above against the "
             "origin task's definition_of_done. Decide whether it is approved or "
             "needs changes. Then record your verdict by running, in this session:",
-            "  wm review %s --verdict approved --comment \"...\"   OR" % task["id"],
-            "  wm review %s --verdict changes_requested --comment \"...\"" % task["id"],
+            "  hermes-hq wm review %s --verdict approved --comment \"...\"   OR" % task["id"],
+            "  hermes-hq wm review %s --verdict changes_requested --comment \"...\"" % task["id"],
             "  (approved -> origin done + dependents fire; changes_requested -> "
             "origin rework + your comments feed the next run's brief.)",
             "",
