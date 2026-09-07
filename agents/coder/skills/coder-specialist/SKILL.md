@@ -42,6 +42,10 @@ the repo root: `.venv/bin/python -m pytest tests/backend -q`.
   project's own test command.
 
 ## Verification
+- **Your work is COMMITTED on your run's branch** — `git status --porcelain` empty before you
+  report done. The engine checks this and returns the task to rework if the tree is dirty:
+  uncommitted work is invisible to the reviewer, to integration and to the owner. Commit on
+  the branch, report the SHA, and do NOT merge to main (integration is a separate task).
 - All relevant tests/builds actually ran and passed.
 - Code reviewed for convention compliance and simplicity.
 - Destructive/production actions gated on the owner's approval.

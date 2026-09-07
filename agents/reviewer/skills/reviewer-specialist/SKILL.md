@@ -35,3 +35,9 @@ Any request to validate or QA work produced by Analyst, Writer, Marketer, Coder,
 ## Verification
 - Verdict is defensible against the brief's acceptance criteria.
 - Blocking issues are actionable and specific.
+- **For code work: the branch actually CARRIES the change you are approving.**
+  Run `git status --porcelain` (must be empty) and `git log --oneline main..HEAD` (must show
+  the commits) in the run's worktree. Reviewing a dirty working tree approves work that
+  nothing downstream can see: task #191's whole migration was approved this way and never
+  reached `main`, leaving its deploy task with nothing to deploy. If the tree is dirty, that
+  is `changes_requested` — say exactly which paths are uncommitted.

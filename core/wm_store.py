@@ -2142,6 +2142,35 @@ def promote_dependents(task_id, db_path=None):
 # ---------------------------------------------------------------------------
 # T2 — completion contract + liveness + session capture
 # ---------------------------------------------------------------------------
+UNCOMMITTED_CHECK_TIMEOUT = 15       # seconds; the check must never hang a completion
+
+
+def uncommitted_paths(workdir):
+    """Paths a run left uncommitted in its worktree, or [] — FAILING OPEN.
+
+    Agents get an isolated branch per code run and, until 2026-09-07, were
+    never told to commit: 13 of 31 worktrees held work from runs marked `done`
+    (#191's whole migration was approved off an uncommitted tree and never
+    reached main). This is the check behind that contract.
+
+    Every failure mode returns [] on purpose — no workdir, missing directory,
+    not a repo, git absent, timeout. A broken check must never strand a
+    finished task; the worst case is the status quo.
+    """
+    if not workdir or not os.path.isdir(workdir):
+        return []
+    try:
+        import subprocess
+        r = subprocess.run(["git", "status", "--porcelain"], cwd=workdir,
+                           capture_output=True, text=True,
+                           timeout=UNCOMMITTED_CHECK_TIMEOUT)
+        if r.returncode != 0:                       # not a repo, or git unhappy
+            return []
+        return [ln[3:].strip() for ln in r.stdout.splitlines() if ln.strip()]
+    except Exception:                               # noqa: BLE001 - fail open
+        return []
+
+
 def record_completion(run_id, task_id, completed, summary="", result_paths=None,
                       blocker=None, session_id=None, exit_code=None, db_path=None):
     """Apply the Completion contract for a finished run.
@@ -2164,7 +2193,29 @@ def record_completion(run_id, task_id, completed, summary="", result_paths=None,
     task = store_get_task_or_none(task_id, db_path=db_path)
     if task is None:
         raise ValueError("no task with id %s" % task_id)
+    # COMMIT CONTRACT (intent/CommitContractPlan.md): a code run that leaves
+    # work uncommitted has not finished — the branch is the only way that work
+    # reaches anyone. Engine-enforced, like the review and approval gates, so
+    # it cannot be forgotten. Dirty tree ONLY: a clean tree with no commits is
+    # a legitimate investigate/verify run.
     if completed == "done":
+        run_row = get_run(run_id, db_path=db_path)   # sqlite3.Row — no .get()
+        workdir = run_row["workdir"] if run_row is not None else None
+        dirty = uncommitted_paths(workdir)
+        if dirty:
+            branch = (run_row["branch"] if run_row is not None else None) or "your run branch"
+            shown = ", ".join(dirty[:8]) + ("…" if len(dirty) > 8 else "")
+            completed = "changes_uncommitted"      # falls through to the rework path
+            blocker = ("You reported done but left %d file(s) uncommitted in %s: %s. "
+                       "Commit your work on branch %s — until you do it exists only "
+                       "in your worktree and nothing downstream (review, integration, "
+                       "deploy) can see it. Do not merge to main; commit on the branch "
+                       "and report the SHA." % (len(dirty), workdir, shown, branch))
+    if completed == "changes_uncommitted":
+        # The RUN failed its contract (valid run states exclude 'rework'); the
+        # TASK goes back to rework so the same agent can commit and re-report.
+        run_status, task_status = "failed", "rework"
+    elif completed == "done":
         run_status = "done"
         if task["review_policy"] in ("required", "optional"):
             task_status = "needs_review"
@@ -3260,6 +3311,12 @@ def _render_orchestrator_planning_brief(run, task, project, primary_path,
     if run["branch"]:
         lines.append("Git branch/worktree: %s (isolated run — do not touch "
                      "other branches)" % run["branch"])
+        lines.append("COMMIT CONTRACT: commit your work on THIS branch before "
+                     "you finish. Uncommitted changes are invisible to the "
+                     "reviewer, to integration and to the owner — the engine "
+                     "checks `git status --porcelain` when you report done and "
+                     "sends the task back to rework if it is not clean. Do not "
+                     "merge to main; commit on the branch and report the SHA.")
     lines.append("")
     lines.append("AUTHORIZATION")
     lines.append("-" * 40)
@@ -3489,6 +3546,10 @@ def render_brief(run_id, db_path=None):
     if run["branch"]:
         lines.append("Git branch/worktree: %s (isolated code run — do not "
                      "touch other branches)" % run["branch"])
+        lines.append("COMMIT CONTRACT: commit your work on THIS branch before "
+                     "you finish. The engine checks `git status --porcelain` "
+                     "when you report done and returns the task to rework if "
+                     "the tree is dirty. Do not merge to main.")
     lines.append("")
     lines.append("AUTHORIZATION")
     lines.append("-" * 40)
