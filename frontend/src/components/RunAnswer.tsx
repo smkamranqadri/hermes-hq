@@ -31,6 +31,19 @@ export function RunAnswer({ runId, blocked = false, compact = false, fallbackQue
   // a dead button — so they tap again, and every tap appends another line to
   // the answer file. Seen live 2026-09-07 (run 466 received C,C,C,C,B).
   const [sent, setSent] = useState<{ message: string; resumed: boolean } | null>(null)
+  // A lapsed session 401s this fetch, and returning null below would erase the
+  // whole panel — the owner taps nothing because there is nothing to tap, with
+  // no hint why. That is how an answer went missing on 2026-09-07 (run 468: no
+  // POST ever reached the server). Say so instead of vanishing.
+  if (q.isError && !question) return (
+    <div className="flex basis-full flex-col gap-1 rounded-lg border border-needsyou/50 bg-needsyou/10 p-3 text-sm">
+      <p className="font-medium">The agent may be waiting on you.</p>
+      <p className="text-[11px] text-muted">
+        Its question could not be loaded — usually a signed-out session (restarts clear them).
+        Reload the page, signing in again if asked, to answer.
+      </p>
+    </div>
+  )
   // A live run with nothing asked has nothing to answer — stay out of the way.
   // A blocked run always gets a box: it stopped for the owner either way.
   if (!question && !blocked) return null

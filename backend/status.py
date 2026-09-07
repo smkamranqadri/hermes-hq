@@ -72,6 +72,14 @@ def classify(task, deps=(), goal_status=None, last_run=None):
         # from both the claim UPDATE and next_ready_tasks, so "Queued" promises
         # a pickup that can never come — it reads as agent work in flight.
         state, label = "needsyou", "Yours to do"
+    elif st == "running" and last_run is not None and _get(last_run, "awaiting_answer"):
+        # The agent is parked on the owner, not making progress — and "Working"
+        # is indistinguishable from a healthy run, so the only signal was the
+        # Inbox ping. Standing rule: anything awaiting the owner shows on the
+        # list row, the detail page AND the queue. The reason carries the
+        # question itself, so the row says what is being asked.
+        state, label = "needsyou", "Asked you"
+        reason = str(_get(last_run, "awaiting_answer"))[:160]
     elif st == "rework":
         reason = "rework requested"
     elif st == "needs_review":

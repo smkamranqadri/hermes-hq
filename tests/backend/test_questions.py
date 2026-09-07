@@ -279,3 +279,50 @@ def test_question_survives_reading_the_notification(env):
     assert detail["runs"][0]["status"] == "running"           # ...but the run is live
     q = c.get("/api/run/%d/question" % rid, headers=h).json()["question"]
     assert q and [o["label"] for o in q["options"]] == ["staging", "prod"]
+
+
+def test_asking_run_shows_as_needs_you_on_row_and_detail(env):
+    """Owner 2026-09-07: "205 status didnt change how do i know there is question".
+    A run parked on the owner's answer classified as plain "Working" — identical
+    to a run making progress — so the Inbox ping was the ONLY signal. The row,
+    the detail page and the queue must all say the agent is waiting."""
+    c, store, gw, root = env
+    from backend import questions, tasks
+    db = store.DEFAULT_DB_PATH
+    _seed_state_db(root, "coder", "qs-wait", "wm-run-w", [("assistant", FENCE, None)])
+    tid, rid = _mk_run(store, "coder", "demoq-wait", session_id="qs-wait")
+    # the dispatcher moves the task to running when it claims it; _mk_run only
+    # starts the run, so mirror production before classifying
+    con = store._connect(db)
+    with con:
+        con.execute("UPDATE tasks SET status='running' WHERE id=?", (tid,))
+    con.close()
+    assert questions.scan_running_runs(db_path=db) == 1
+
+    detail = tasks.task_detail(db, tid)
+    assert detail["human"]["state"] == "needsyou"
+    assert detail["human"]["label"] == "Asked you"
+    assert detail["human"]["reason"] == "Deploy to staging or prod?"
+
+    row = [r for r in tasks.list_tasks(db)["tasks"] if r["id"] == tid][0]
+    assert row["human"]["state"] == "needsyou" and row["human"]["label"] == "Asked you"
+
+    # answering clears it: the row goes back to Working while the run continues
+    with open(store.answer_path(rid), "w") as fh:
+        fh.write("[owner] staging\n")
+    os.utime(store.answer_path(rid), (time.time() + 5, time.time() + 5))
+    assert tasks.task_detail(db, tid)["human"]["state"] == "working"
+
+
+def test_awaiting_answer_is_read_only_and_total(env):
+    """It runs on every list row, so it must never break a list endpoint."""
+    c, store, gw, root = env
+    from backend import questions
+    from backend.readers import connect_ro
+    con = connect_ro(store.DEFAULT_DB_PATH)
+    try:
+        assert questions.awaiting_answer(con, []) == {}
+        assert questions.awaiting_answer(con, [None]) == {}
+        assert questions.awaiting_answer(con, [999999]) == {}
+    finally:
+        con.close()

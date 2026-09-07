@@ -48,6 +48,15 @@ def _enrich(con, rows):
             "SELECT r.* FROM runs r JOIN (SELECT task_id, MAX(id) AS mid FROM runs "
             "WHERE task_id IN (%s) GROUP BY task_id) m ON m.mid = r.id" % marks, ids):
         last_run[r["task_id"]] = dict(r)
+    # A run parked on the owner's answer must not read as "Working" — see
+    # questions.awaiting_answer. Only running runs can be waiting; blocked ones
+    # already classify as needsyou through their status.
+    from backend import questions as _q
+    waiting = _q.awaiting_answer(con, [lr["id"] for lr in last_run.values()
+                                       if lr.get("status") == "running"])
+    for lr in last_run.values():
+        if lr["id"] in waiting:
+            lr["awaiting_answer"] = waiting[lr["id"]] or "the agent asked you a question"
     for r in rows:
         r["deps"] = deps.get(r["id"], [])
         lr = last_run.get(r["id"])
@@ -88,6 +97,14 @@ def task_detail(db_path, task_id):
     con = connect_ro(db_path)
     try:
         g = con.execute("SELECT status FROM goals WHERE id=?", (t["goal_id"],)).fetchone() if t.get("goal_id") else None
+        # Same waiting-on-you signal as the list, so the detail page and the row
+        # can never disagree about whether the agent is asking something.
+        newest = t["runs"][0] if t.get("runs") else None
+        if newest is not None and newest.get("status") == "running":
+            from backend import questions as _q
+            waiting = _q.awaiting_answer(con, [newest["id"]])
+            if newest["id"] in waiting:
+                newest["awaiting_answer"] = waiting[newest["id"]] or "the agent asked you a question"
     finally:
         con.close()
     t["deps"] = [{"id": d["task_id"], "status": d["status"], "title": d["title"]} for d in t["deps"]]

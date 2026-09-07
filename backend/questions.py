@@ -235,3 +235,49 @@ def scan_running_runs(db_path=None):
         except Exception:
             log.exception("pushing question notifications failed")
     return len(new_ids)
+
+
+def awaiting_answer(con, run_ids):
+    """{run_id: question_text} for runs that asked the owner and are unanswered.
+
+    The BOARD-level signal. `latest_question` opens a foreign profile state.db
+    and is far too expensive per list row; this reads the notification the scan
+    already wrote (its body IS the parsed question) plus one stat of the answer
+    file — cheap enough to run on every task in the list.
+
+    Waiting means the newest `question` notification is NEWER than the answer
+    file's mtime, so a second question asked after an earlier answer still
+    counts. Read-only and total: any failure yields {} rather than breaking a
+    list endpoint.
+
+    Why this exists (2026-09-07): a run parked on the owner's answer classified
+    as plain "Working", identical to a run making progress — the owner had no
+    way to know he was being asked anything except the Inbox ping. That breaks
+    the standing rule that anything awaiting the owner must show on the list
+    row, the detail page AND the queue.
+    """
+    ids = [int(r) for r in run_ids if r]
+    if not ids:
+        return {}
+    try:
+        marks = ",".join("?" * len(ids))
+        rows = con.execute(
+            "SELECT n.run_id, n.ts, n.body FROM notifications n JOIN ("
+            "  SELECT run_id, MAX(id) AS mid FROM notifications"
+            "  WHERE kind='question' AND run_id IN (%s) GROUP BY run_id"
+            ") m ON m.mid = n.id" % marks, ids).fetchall()
+    except Exception:
+        log.exception("awaiting_answer query failed")
+        return {}
+    out = {}
+    for r in rows:
+        try:
+            rid = int(r["run_id"])
+            asked_at = float(r["ts"] or 0)
+            path = store.answer_path(rid)
+            answered_at = os.path.getmtime(path) if os.path.exists(path) else 0.0
+            if asked_at > answered_at:
+                out[rid] = (r["body"] or "").strip() or None
+        except Exception:
+            log.exception("awaiting_answer check failed for run %s", r["run_id"])
+    return out

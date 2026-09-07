@@ -88,6 +88,26 @@ def test_ui_mirror_agrees():
     assert re.search(r"case 'manual'[^\n]*label: 'Handed over'", ts)
 
 
+def test_running_run_waiting_on_the_owner_is_not_just_working():
+    """A run parked on the owner's answer looks identical to a healthy run —
+    'Working' either way — so the Inbox ping was the only signal it was asking
+    anything. Standing rule: anything awaiting the owner shows on the row too."""
+    asked = hs.classify({"status": "running"}, [], None,
+                        {"id": 9, "status": "running",
+                         "awaiting_answer": "Which lifecycle should we use?"})
+    assert asked["state"] == "needsyou"
+    assert asked["label"] == "Asked you"
+    assert asked["reason"] == "Which lifecycle should we use?"
+    # a run that asked nothing is untouched, and so is a run with no row at all
+    assert hs.classify({"status": "running"}, [], None,
+                       {"id": 9, "status": "running"})["state"] == "working"
+    assert hs.classify({"status": "running"}, [], None, None)["state"] == "working"
+    # the question is the reason, so an essay gets bounded like every other one
+    long = hs.classify({"status": "running"}, [], None,
+                       {"id": 9, "awaiting_answer": "x" * 400})
+    assert len(long["reason"]) == 160
+
+
 def test_owner_assignee_mirrors_the_engine():
     """Same dependency-free contract as REWORK_CAP_MARKER: status.py keeps its
     own copy of the reserved human assignee, so it must equal the engine's."""
