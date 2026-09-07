@@ -34,7 +34,12 @@ from core import wm_store as store
 log = logging.getLogger("backend.questions")
 
 META_KEY = "question_scan_watermarks"
-FENCE_RE = re.compile(r"```hq-options\s*\n(.*?)```", re.S)
+# An UNTERMINATED fence still counts. Observed live 2026-09-07 (run 453): the
+# coder emitted a complete hq-options block whose closing delimiter was stored
+# as ``` minus a backtick, so a strict regex found nothing, no notification
+# fired, and the agent polled its answer file until the run died — the exact
+# failure this loop exists to prevent. The JSON parse is the real validator.
+FENCE_RE = re.compile(r"```hq-options\s*\n(.*?)(?:```|\Z)", re.S)
 _MAX_MSG_CHARS = 20000   # bound what we regex per message
 _MAX_MSGS_PER_SCAN = 200  # bound one run's catch-up batch per tick
 _MAX_BODY = 500
@@ -74,6 +79,11 @@ def _visible_texts(m):
     return [t for t in out if t]
 
 
+def _fence_body(match):
+    """The JSON body of a fence match, minus any partial closing delimiter."""
+    return match.group(1).strip().rstrip("`").strip()
+
+
 def _fence_question(text):
     """The question string from an hq-options fence, or None (no/garbled fence
     is reported by the caller with a generic body — a fence is always intent)."""
@@ -81,7 +91,7 @@ def _fence_question(text):
     if not m:
         return None
     try:
-        d = json.loads(m.group(1))
+        d = json.loads(_fence_body(m))
         q = d.get("question")
         return q.strip() if isinstance(q, str) and q.strip() else ""
     except Exception:
@@ -95,7 +105,7 @@ def _fence_payload(text):
     if not m:
         return None
     try:
-        d = json.loads(m.group(1))
+        d = json.loads(_fence_body(m))
     except Exception:
         return None
     if not isinstance(d, dict):

@@ -239,3 +239,24 @@ def test_answer_live_run_writes_answer_file_without_relaunch(env):
     con = store._connect(db)
     assert con.execute("SELECT COUNT(*) FROM runs WHERE task_id=?", (tid,)).fetchone()[0] == 1
     con.close()
+
+
+UNTERMINATED = ('```hq-options\n{"question": "Which colour?", "mode": "single", '
+                '"options": [{"label": "violet"}, {"label": "amber"}]}\n``')
+
+
+def test_unterminated_fence_still_asks(env):
+    """Observed live (run 453): a complete hq-options block whose closing
+    delimiter lost a backtick found no match, so no notification fired and the
+    agent polled until it died. The JSON is the validator, not the delimiter."""
+    c, store, gw, root = env
+    from backend import questions
+    db = store.DEFAULT_DB_PATH
+    _seed_state_db(root, "coder", "qs-open", "wm-run-o", [("assistant", UNTERMINATED, None)])
+    tid, rid = _mk_run(store, "coder", "demoq-open", session_id="qs-open")
+    assert questions.scan_running_runs(db_path=db) == 1
+    rows = _rows(store)
+    assert len(rows) == 1 and rows[0]["body"] == "Which colour?"
+    h = login(c)
+    q = c.get("/api/run/%d/question" % rid, headers=h).json()["question"]
+    assert [o["label"] for o in q["options"]] == ["violet", "amber"]
