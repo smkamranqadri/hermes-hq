@@ -80,6 +80,17 @@ def _agent_env(agent, env):
     the ROOT home explicitly, from the same canonical mapping.
     """
     env = dict(env or {})
+    resolve_hq_cli = getattr(store, "resolve_hq_cli", None)
+    hq_cli = (resolve_hq_cli() if resolve_hq_cli else
+              os.environ.get("HERMES_HQ_CLI") or
+              os.path.join(os.environ.get("HERMES_HQ_REPO", os.getcwd()),
+                           ".venv", "bin", "hermes-hq"))
+    qbin = os.path.dirname(hq_cli)
+    if qbin and qbin not in env.get("PATH", "").split(os.pathsep):
+        env["PATH"] = qbin + os.pathsep + env.get("PATH", "")
+    resolve_hq_repo = getattr(store, "resolve_hq_repo", None)
+    env["HERMES_HQ_REPO"] = (resolve_hq_repo() if resolve_hq_repo else
+                              os.environ.get("HERMES_HQ_REPO", os.getcwd()))
     if agent == store.ORCHESTRATOR_AGENT:
         env["HERMES_HOME"] = store.hermes_root_home()
     return env
