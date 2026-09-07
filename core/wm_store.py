@@ -2229,7 +2229,16 @@ def record_completion(run_id, task_id, completed, summary="", result_paths=None,
     # reaches anyone. Engine-enforced, like the review and approval gates, so
     # it cannot be forgotten. Dirty tree ONLY: a clean tree with no commits is
     # a legitimate investigate/verify run.
-    if completed == "done":
+    #
+    # is_code ONLY (owner decision 2026-09-07, task #205 option A). A non-code
+    # run gets no worktree — wm_dispatch hands it the project's primary_path,
+    # the SHARED checkout — so it was being failed for dirt anyone might have
+    # left there, with no branch of its own to commit to. Seen live: librarian
+    # run 465 filed its proposal correctly, reported done, and was failed for an
+    # untracked agent-harness directory it never touched; the task bounced to
+    # rework and re-dispatched, heading for MAX_REWORK_CYCLES. Falsy/missing
+    # is_code skips the gate, which matches this block's fail-open rule.
+    if completed == "done" and bool(task["is_code"]):
         run_row = get_run(run_id, db_path=db_path)   # sqlite3.Row — no .get()
         workdir = run_row["workdir"] if run_row is not None else None
         dirty = uncommitted_paths(workdir)
@@ -3449,6 +3458,13 @@ def _ask_owner_lines(run_id):
         "when it appears, its contents are the owner's answer/guidance. Act on "
         "it. If no answer arrives, continue with your best-judgment default and "
         "note it in your summary." % answer_path(run_id),
+        "THE ANSWER FILE IS APPEND-ONLY AND THE LAST LINE WINS. Re-read the "
+        "WHOLE file every time you check it, and act on the LAST line: earlier "
+        "lines may be stray taps or a choice the owner then changed, and a "
+        "correction is always appended BELOW what it corrects. Never act on the "
+        "first line you recognise, and say in your summary which line you used. "
+        "(2026-09-07: a run quoted an earlier line and recorded an answer the "
+        "owner never chose.)",
         "If you truly cannot proceed without the answer, WAIT for it before "
         "giving up: poll the file about every 30s for roughly %d minutes, doing "
         "any work that does not depend on it in between. Only when that window "

@@ -32,6 +32,20 @@ def _repo(path, dirty=False, untracked=False):
     return path
 
 
+def _mk_code_run(store, slug):
+    """A CODE run. The contract is scoped to is_code (owner decision 2026-09-07,
+    task #205): a non-code run has no worktree — it is handed the project's
+    SHARED checkout — so gating it failed runs for dirt they never created.
+    `_mk_run` builds a non-code task by default, so these tests must say so."""
+    db = store.DEFAULT_DB_PATH
+    tid, rid = _mk_run(store, "coder", slug)
+    con = store._connect(db)
+    with con:
+        con.execute("UPDATE tasks SET is_code=1 WHERE id=?", (tid,))
+    con.close()
+    return tid, rid
+
+
 def _finish(store, tid, rid, workdir, db):
     con = store._connect(db)
     with con:
@@ -45,7 +59,7 @@ def _finish(store, tid, rid, workdir, db):
 def test_dirty_worktree_refuses_done_and_names_the_paths(env, tmp_path):
     c, store, _gw, _root = env
     db = store.DEFAULT_DB_PATH
-    tid, rid = _mk_run(store, "coder", "cc-dirty")
+    tid, rid = _mk_code_run(store, "cc-dirty")
     wd = _repo(str(tmp_path / "dirty"), dirty=True)
     task_status, run_status = _finish(store, tid, rid, wd, db)
     assert (task_status, run_status) == ("rework", "failed")
@@ -58,7 +72,7 @@ def test_untracked_source_counts_as_uncommitted(env, tmp_path):
     """The new test file #191 wrote was untracked — that is real work too."""
     c, store, _gw, _root = env
     db = store.DEFAULT_DB_PATH
-    tid, rid = _mk_run(store, "coder", "cc-untracked")
+    tid, rid = _mk_code_run(store, "cc-untracked")
     wd = _repo(str(tmp_path / "untracked"), untracked=True)
     assert _finish(store, tid, rid, wd, db)[0] == "rework"
     assert "new_source.py" in store.get_run(rid, db_path=db)["error"]
@@ -69,7 +83,7 @@ def test_clean_worktree_with_no_commits_still_passes(env, tmp_path):
     run (#183, #192) — the gate is on DIRT, never on 'has commits'."""
     c, store, _gw, _root = env
     db = store.DEFAULT_DB_PATH
-    tid, rid = _mk_run(store, "coder", "cc-clean")
+    tid, rid = _mk_code_run(store, "cc-clean")
     wd = _repo(str(tmp_path / "clean"))
     assert _finish(store, tid, rid, wd, db) == ("done", "done")
 
@@ -80,7 +94,7 @@ def test_clean_worktree_with_no_commits_still_passes(env, tmp_path):
 def test_gate_fails_open(env, tmp_path, kind):
     c, store, _gw, _root = env
     db = store.DEFAULT_DB_PATH
-    tid, rid = _mk_run(store, "coder", "cc-open-" + kind.replace("_", "-"))
+    tid, rid = _mk_code_run(store, "cc-open-" + kind.replace("_", "-"))
     if kind == "missing_dir":
         wd = str(tmp_path / "gone")
     elif kind == "not_a_repo":
@@ -104,7 +118,7 @@ def test_uncommitted_paths_helper_is_total(tmp_path):
 def test_briefs_carry_the_commit_contract(env):
     c, store, _gw, _root = env
     db = store.DEFAULT_DB_PATH
-    tid, rid = _mk_run(store, "coder", "cc-brief")
+    tid, rid = _mk_code_run(store, "cc-brief")
     con = store._connect(db)
     with con:
         con.execute("UPDATE runs SET branch='wm/run-b', workdir='/tmp' WHERE id=?", (rid,))
@@ -120,7 +134,7 @@ def test_repeated_refusals_stop_re_dispatching(env, tmp_path):
     #202: three runs in six minutes. The gate bounds itself with the same cap."""
     c, store, _gw, _root = env
     db = store.DEFAULT_DB_PATH
-    tid, rid = _mk_run(store, "coder", "cc-loop")
+    tid, rid = _mk_code_run(store, "cc-loop")
     wd = _repo(str(tmp_path / "loop"), dirty=True)
     seen = []
     for _ in range(store.MAX_REWORK_CYCLES):
@@ -130,3 +144,41 @@ def test_repeated_refusals_stop_re_dispatching(env, tmp_path):
     assert seen[-1] == "manual"                      # owner's desk, not re-dispatched
     assert "Stopped re-dispatching" in store.get_run(rid, db_path=db)["error"]
     assert tid not in [t["id"] for t in store.next_ready_tasks(50, db_path=db)]
+
+
+def test_non_code_run_is_not_gated_on_the_shared_checkout(env, tmp_path):
+    """Owner decision 2026-09-07 (task #205, option A): scope the gate to code.
+
+    A non-code run (librarian, analyst, writer) gets no worktree — wm_dispatch
+    hands it the project's primary_path, the SHARED checkout — and has no branch
+    to commit to. Gating it means ANY untracked file anyone leaves in that
+    checkout fails the run. Proven live: librarian run 465 filed its proposal
+    correctly, reported done, and was failed for `.claude/worktrees/`, an
+    agent-harness directory it never touched; the task bounced to rework and
+    re-dispatched, heading for MAX_REWORK_CYCLES.
+    """
+    c, store, _gw, _root = env
+    db = store.DEFAULT_DB_PATH
+    tid, rid = _mk_run(store, "librarian", "cc-noncode")      # is_code stays 0
+    wd = _repo(str(tmp_path / "noncode"), dirty=True, untracked=True)
+    task_status, run_status = _finish(store, tid, rid, wd, db)
+    assert (task_status, run_status) != ("rework", "failed")
+    assert run_status == "done"
+    assert not (store.get_run(rid, db_path=db)["error"] or "")
+
+    # ...while the identical dirty tree still stops a CODE run
+    tid2, rid2 = _mk_code_run(store, "cc-code-still-gated")
+    assert _finish(store, tid2, rid2, wd, db) == ("rework", "failed")
+
+
+def test_brief_says_the_last_line_of_the_answer_file_wins(env):
+    """The answer file is append-only, and the brief used to say only that its
+    "contents are the owner's answer" — so an agent picked a line by judgment.
+    Run 466 quoted an earlier line and recorded an answer the owner never chose
+    (he tapped C,C,C,C,B while the UI gave no feedback, then corrected to A)."""
+    c, store, _gw, _root = env
+    _tid, rid = _mk_code_run(store, "cc-answer-brief")
+    brief = store.render_brief(rid, db_path=store.DEFAULT_DB_PATH)
+    assert "APPEND-ONLY" in brief and "LAST LINE WINS" in brief
+    assert "act on the LAST line" in brief
+    assert "which line you used" in brief
