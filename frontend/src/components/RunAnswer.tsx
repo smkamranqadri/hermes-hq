@@ -72,25 +72,35 @@ export function RunAnswer({ runId, blocked = false, compact = false, fallbackQue
           {question.options.map(o => (
             <button key={o.label} type="button" title={o.detail || undefined}
               disabled={!!busy} aria-pressed={picked.includes(o.label)}
-              // Single mode used to send WITHOUT recording the choice, so the
-              // selected styling below was dead code and every tap looked
-              // identical to no tap. Record first, then send.
-              onClick={() => { if (multi) { toggle(o.label) } else { setPicked([o.label]); void send(o.label, o.label) } }}
+              // Tapping SELECTS. It used to send immediately in single mode, so
+              // an exploratory tap irreversibly answered the agent and every
+              // further tap appended another line — the owner sent A,A,B,A,B,A
+              // in 18s on run 468 while trying to work out what was selected.
+              // Both modes now select here and commit through the button below.
+              onClick={() => toggle(o.label)}
               className={`inline-flex items-center gap-2 rounded-full border px-3 py-1 text-left text-[13px] disabled:opacity-60 ${
                 picked.includes(o.label)
                   ? 'border-needsyou bg-needsyou/25 text-fg'
                   : 'border-needsyou/60 text-needsyou hover:bg-needsyou/20'}`}>
-              {busy === o.label && <span className="inline-block size-3 shrink-0 animate-spin rounded-full border-2 border-current border-t-transparent" />}
+              {picked.includes(o.label) && <span aria-hidden="true" className="shrink-0">✓</span>}
               {o.label}
               {o.detail && <span className="ml-2 text-[11px] text-muted">{o.detail}</span>}
             </button>
           ))}
         </div>
       )}
-      {multi && picked.length > 0 && (
-        <Btn busy={busy === 'multi'} onClick={() => void send(picked.join(', '), 'multi')}>
-          Send {picked.length} choice{picked.length === 1 ? '' : 's'}
-        </Btn>
+      {picked.length > 0 && (
+        <div className="flex flex-wrap items-center gap-2">
+          <Btn busy={busy === 'choice'} onClick={() => void send(picked.join(', '), 'choice')}>
+            {multi ? `Send ${picked.length} choice${picked.length === 1 ? '' : 's'}`
+                   : `Send “${picked[0]}”`}
+          </Btn>
+          <button type="button" disabled={!!busy} onClick={() => setPicked([])}
+            className="text-[11px] text-muted underline underline-offset-2 disabled:opacity-60">
+            clear
+          </button>
+          <span className="text-[11px] text-muted">Nothing is sent until you press send.</span>
+        </div>
       )}
       <div className="flex flex-wrap items-end gap-2">
         <TextArea rows={2} value={text} onChange={e => setText(e.target.value)}
