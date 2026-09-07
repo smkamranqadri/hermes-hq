@@ -1931,7 +1931,16 @@ def _append_run_answer(run_id, message):
 
 
 def resume_blocked_run(run_id, message, db_path=None):
-    """Atomically claim a blocked owner-question run and reopen it in place."""
+    """Atomically claim a blocked run and reopen it in place with the answer.
+
+    A run must have ASKED to be answerable — a run that blocked on an external
+    problem takes owner feedback + retry, not an answer. That guard stays. What
+    no longer gates it is the notification's READ state: tapping the question in
+    the Inbox marks it read, and that must never make the answer
+    un-deliverable (the same defect the task-detail panel had). The run must
+    also still be its task's latest, so an old run cannot be resurrected
+    underneath a live one.
+    """
     message = str(message or "").strip()
     if not message:
         raise ValueError("answer message must be non-empty")
@@ -1941,18 +1950,16 @@ def resume_blocked_run(run_id, message, db_path=None):
             row = conn.execute(
                 "SELECT r.id, r.task_id, r.agent_profile "
                 "FROM runs r JOIN tasks t ON t.id=r.task_id "
-                "JOIN notifications n ON n.run_id=r.id "
                 "WHERE r.id=? AND r.status='blocked' AND t.status='blocked' "
-                "AND n.kind='question' AND n.source_key LIKE 'runq:%' "
-                "AND n.read_at IS NULL AND NOT EXISTS ("
-                " SELECT 1 FROM notifications newer WHERE newer.run_id=n.run_id "
-                " AND newer.kind='question' AND newer.source_key LIKE 'runq:%' "
-                " AND newer.read_at IS NULL AND newer.id>n.id) "
-                "ORDER BY n.id DESC LIMIT 1", (run_id,)).fetchone()
+                "AND r.id=(SELECT MAX(id) FROM runs WHERE task_id=r.task_id) "
+                "AND EXISTS (SELECT 1 FROM notifications n WHERE n.run_id=r.id "
+                " AND n.kind='question' AND n.source_key LIKE 'runq:%')",
+                (run_id,)).fetchone()
             if row is None:
                 raise ValueError(
-                    "run %s is not a blocked run with a current unanswered owner question"
-                    % run_id)
+                    "run %s is not the task's current blocked run with an owner "
+                    "question — it cannot take an answer (use task feedback "
+                    "instead)" % run_id)
             now = time.time()
             if conn.execute(
                     "UPDATE runs SET status='running', finished_at=NULL, completion=NULL, "
@@ -2478,6 +2485,7 @@ def review_verdict(task_id, verdict, comment=None, db_path=None):
         raise ValueError("no task with id %s" % task_id)
     if verdict not in ("approved", "changes_requested"):
         raise ValueError("verdict must be 'approved' or 'changes_requested'")
+    capped = 0
     review = get_open_review(task_id, db_path=db_path)
     if review is None:
         raise ValueError("no open (undecided) review for task %s" % task_id)
@@ -2502,11 +2510,33 @@ def review_verdict(task_id, verdict, comment=None, db_path=None):
                     detail="review approved" if final == "done"
                     else "review approved — awaiting owner approval")
             else:
-                conn.execute("UPDATE tasks SET status='rework', feedback=?, "
-                             "updated_at=? WHERE id=?", (comment or "", now, task_id))
-                _record_transition_conn(conn, task_id, "rework",
-                                        from_status="needs_review",
-                                        detail="changes requested")
+                # Circuit breaker: build->review->build is claimable by the
+                # dispatcher, so nothing bounded it. #98 ran 31 cycles / 63
+                # runs, #176 16/34, every #176 review naming the same missing
+                # owner answer. At the cap the task lands on the owner's desk
+                # with the reviewer's words instead of being re-dispatched.
+                cycles = conn.execute(
+                    "SELECT COUNT(*) FROM state_transitions WHERE task_id=? "
+                    "AND to_status='rework'", (task_id,)).fetchone()[0]
+                if cycles + 1 >= MAX_REWORK_CYCLES:
+                    conn.execute(
+                        "UPDATE tasks SET status='manual', feedback=?, "
+                        "updated_at=? WHERE id=?",
+                        ("%s stopped after %d rework cycles — decide the way "
+                         "forward. Last reviewer comment: %s"
+                         % (REWORK_CAP_MARKER, cycles + 1, comment or "(none)"),
+                         now, task_id))
+                    _record_transition_conn(
+                        conn, task_id, "manual", from_status="needs_review",
+                        detail="rework cap: %d cycles — handed to the owner"
+                               % (cycles + 1))
+                    capped = cycles + 1
+                else:
+                    conn.execute("UPDATE tasks SET status='rework', feedback=?, "
+                                 "updated_at=? WHERE id=?", (comment or "", now, task_id))
+                    _record_transition_conn(conn, task_id, "rework",
+                                            from_status="needs_review",
+                                            detail="changes requested")
     finally:
         conn.close()
     review_status = reviews_status
@@ -2517,8 +2547,16 @@ def review_verdict(task_id, verdict, comment=None, db_path=None):
                  agent_profile="reviewer",
                  detail="review #%d %s: %s" % (review["id"], verdict, comment or ""),
                  db_path=db_path)
-    return ((("manual" if t["owner_approval"] else "done")
-             if verdict == "approved" else "rework"), review_status, promoted)
+    if capped:
+        add_notification(
+            "needs_you", "Task #%d stopped after %d rework cycles" % (task_id, capped),
+            body=("The reviewer keeps requesting changes. Last comment: %s"
+                  % (comment or "")[:300]),
+            href="/tasks/%d" % task_id, task_id=task_id,
+            source_key="reworkcap:%d" % task_id, db_path=db_path)
+    if verdict == "approved":
+        return ("manual" if t["owner_approval"] else "done"), review_status, promoted
+    return ("manual" if capped else "rework"), review_status, promoted
 
 
 def waive_review(task_id, comment=None, db_path=None):
@@ -3286,6 +3324,14 @@ def _render_orchestrator_planning_brief(run, task, project, primary_path,
 # completed parents (task_deps) — automatic handoff context (their result_path,
 # summary, and a --resume line for their latest sessioned run).
 # ---------------------------------------------------------------------------
+OWNER_ANSWER_WAIT_SECONDS = 600      # how long an agent waits before parking
+MAX_REWORK_CYCLES = 4                # review ping-pong stops here (see review_verdict)
+# A capped task parks in `manual`, which otherwise reads as "the owner shelved
+# this" and groups under done. This marker on the task's feedback is how
+# backend.status tells the two apart and surfaces the cap under needs-you.
+REWORK_CAP_MARKER = "[rework cap]"
+
+
 def _ask_owner_lines(run_id):
     return [
         "ASKING THE OWNER",
@@ -3305,9 +3351,17 @@ def _ask_owner_lines(run_id):
         "answer, and CHECK THE FILE %s between steps — it may not exist yet; "
         "when it appears, its contents are the owner's answer/guidance. Act on "
         "it. If no answer arrives, continue with your best-judgment default and "
-        "note it in your summary. If you truly cannot proceed without the "
-        "answer, finish with completed=\"blocked\" and a precise blocker "
-        "instead." % answer_path(run_id),
+        "note it in your summary." % answer_path(run_id),
+        "If you truly cannot proceed without the answer, WAIT for it before "
+        "giving up: poll the file about every 30s for roughly %d minutes, doing "
+        "any work that does not depend on it in between. Only when that window "
+        "passes with no answer, finish with completed=\"blocked\" and put the "
+        "EXACT question in `blocker` — that parks the task on the owner's desk "
+        "with your question attached, and their answer resumes THIS run where "
+        "it stopped (same run id, your artifacts intact). Never end the run the "
+        "moment you ask: an unanswered question is worth waiting out, and a "
+        "run that dies immediately is the one failure this loop exists to "
+        "prevent." % int(OWNER_ANSWER_WAIT_SECONDS // 60),
         "",
     ]
 

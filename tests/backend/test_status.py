@@ -86,3 +86,26 @@ def test_ui_mirror_agrees():
         assert m.group(1) == human, "%s: ts=%s py=%s" % (eng, m.group(1), human)
     # display-label parity: manual carries the distinct chip text in both layers
     assert re.search(r"case 'manual'[^\n]*label: 'Handed over'", ts)
+
+
+def test_rework_cap_marker_mirrors_the_engine():
+    """status.py is dependency-free by design, so its copy of the marker must
+    be asserted equal to the engine's (same contract as HUMAN_STATE/status.ts)."""
+    from core import wm_store as store
+    assert hs.REWORK_CAP_MARKER == store.REWORK_CAP_MARKER
+
+
+def test_capped_task_surfaces_as_needs_you_not_done():
+    """A capped task parks in `manual`, which otherwise groups under done and
+    reads 'Handed over' — burying the very loop the cap exists to surface."""
+    from core import wm_store as store
+    capped = {"status": "manual", "owner_approval": 0, "assignee_profile": "coder",
+              "title": "BUILD: something", "goal_id": None,
+              "feedback": "%s stopped after 4 rework cycles — decide the way "
+                          "forward. Last reviewer comment: fix the count"
+                          % store.REWORK_CAP_MARKER}
+    out = hs.classify(capped, [], None, None)
+    assert out["state"] == "needsyou" and out["label"] == "Needs you"
+    assert "4 rework cycles" in out["reason"]
+    shelved = dict(capped, feedback="owner parked this")
+    assert hs.classify(shelved, [], None, None)["state"] == "done"

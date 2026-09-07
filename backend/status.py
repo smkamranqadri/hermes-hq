@@ -4,6 +4,10 @@ status.ts mirrors HUMAN_STATE and a test asserts they agree.
 Human states (in display order): needsyou, working, queued, backlog, done.
 """
 
+# Mirrors core.wm_store.REWORK_CAP_MARKER (this module stays dependency-free —
+# a test asserts the two agree, same contract as HUMAN_STATE vs status.ts).
+REWORK_CAP_MARKER = "[rework cap]"
+
 HUMAN_STATE = {
     "planned": "backlog", "draft": "backlog",
     "ready": "queued", "rework": "queued", "waiting_approval": "queued",
@@ -82,6 +86,11 @@ def classify(task, deps=(), goal_status=None, last_run=None):
         elif _get(task, "owner_approval"):
             state, reason, label = "needsyou", "awaiting your approval", \
                 "Awaiting approval"
+        elif str(_get(task, "feedback") or "").startswith(REWORK_CAP_MARKER):
+            # The rework cap parked this — the owner did NOT shelve it, and
+            # burying it under "done" is how a stuck loop goes unnoticed.
+            state, label = "needsyou", "Needs you"
+            reason = str(task["feedback"])[len(REWORK_CAP_MARKER):].strip()[:160]
         else:
             label = "Handed over"
     elif st not in HUMAN_STATE:
