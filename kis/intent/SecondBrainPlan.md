@@ -1,6 +1,6 @@
 # Second Brain Plan
 
-**Status:** IN PROGRESS — P1 + 2a + 2b-i + 2b-ii SHIPPED (2026-09-05/06), **2c IN PROGRESS** (photo + voice capture — greenlit by the owner 2026-09-07 after the 2b walkthrough; decisions recorded in the 2c section). Approved by owner 2026-09-04 (interview + mockup rounds in session; design locked at mockup v3.1).
+**Status:** IN PROGRESS — P1 + 2a + 2b-i + 2b-ii SHIPPED (2026-09-05/06), **2c SHIPPED 2026-09-08** (`a808d27` slice A + `d73c2e2` slice B; owner confirmed photo AND voice capture working from both devices). Next: **Phase 3 — Import**. Approved by owner 2026-09-04 (interview + mockup rounds in session; design locked at mockup v3.1).
 **Mockup (UI reference):** https://claude.ai/code/artifact/28097e1a-2343-442f-a21e-ed014e507eb3
 **Work mode:** Phase — four phases, each ships something the owner uses that week. Built direct in-session (owner's call — not through the pipeline), owner clicks and reviews exercised live per phase.
 
@@ -56,7 +56,8 @@ Schema + migrations (`notes`, `areas`, `note_entries`, `note_revisions`, FTS5 in
 
 **Known limits going in:** HEIC may arrive unrenderable (iPhone "High Efficiency"; Safari usually transcodes on upload but not always) — store as-is and show an honest "preview not supported" card rather than a broken image, no `pillow-heif` dependency. MediaRecorder emits `audio/mp4` on iOS and `audio/webm;codecs=opus` on Chrome — store the blob's real mime/extension, never assume one. **`getUserMedia` needs a secure context**: recording works over the owner's `ts.net` HTTPS address and NOT over plain `http://<vm>:9010`. The iOS recorder path is **not verifiable from this box** — headless Chromium proves the Chrome path with a fake mic; the owner confirms iOS on the phone.
 
-**Slices:** A — `note_attachments` schema, upload/serve/delete endpoints, capture-box photo + voice, rendering on the note. B — attach from an existing note page, librarian skip + `wm note show` awareness, attachment removal, `wm backup` coverage.
+**SHIPPED 2026-09-08** — A (`a808d27`): `note_attachments` schema, owner-only upload/serve/delete, capture-box photo + voice, rendering on the note. B (`d73c2e2`): attach from an existing note page, librarian skip + `wm note show` awareness, `wm backup` coverage. Suite **231 passed 0 failed** (+14 `test_note_attachments.py`). Attachment removal shipped in A (it is not note deletion — notes stay archive-only).
+**Owner-confirmed on real devices**: photo and voice capture both work from the phone and desktop — the one thing this box could not verify. HEIC never surfaced as a problem in his testing.
 
 ### Phase 3 — Import
 Importer job (per-source parsers, dedupe by hash + title heuristics, museum auto-archive, empties dropped, secrets quarantine), triage sessions through the Review Queue for the living set, coverage stat on Home.
