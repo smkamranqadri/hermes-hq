@@ -235,6 +235,35 @@ def test_file_proposal_archive_needs_no_home(env):
     assert store.get_note(nid, db_path=db)["status"] == "archived"
 
 
+def test_retag_on_an_already_filed_note_needs_no_new_home(env):
+    """The home check must consult the note's CURRENT filing, not just the
+    payload — a file payload never clears an existing area/project, it only
+    ever adds one, so retagging/retyping an already-homed note (or an inbox
+    note that already carries an area) must not be refused as 'homeless'."""
+    c, store, db = env
+    h = login(c)
+    work = area_id(store, db, "Work")
+    filed = store.create_note("already filed", status="active", area_id=work, db_path=db)
+    pid = store.create_proposal("file", filed, {"tags": ["x"], "new_tags": ["x"]}, db_path=db)  # accepted at create
+    r = c.post("/api/proposal/%d/approve" % pid, headers=h)
+    assert r.status_code == 200                                       # accepted at approve
+    n = store.get_note(filed, db_path=db)
+    assert n["status"] == "active" and n["area_id"] == work and n["tags"] == ["x"]
+
+    # an inbox note that already carries an area (filed by e.g. focus
+    # import, still untriaged otherwise) can be retyped without a new home
+    inbox_but_homed = store.create_note("inbox with area", area_id=work, db_path=db)
+    pid2 = store.create_proposal("file", inbox_but_homed, {"type": "playbook"}, db_path=db)
+    r2 = c.post("/api/proposal/%d/approve" % pid2, headers=h)
+    assert r2.status_code == 200
+    assert store.get_note(inbox_but_homed, db_path=db)["type"] == "playbook"
+
+    # the genuinely homeless case still refuses, at both create and approve
+    bare = store.create_note("bare", db_path=db)
+    with pytest.raises(ValueError, match="area or a project"):
+        store.create_proposal("file", bare, {"tags": ["y"], "new_tags": ["y"]}, db_path=db)
+
+
 def test_edited_homeless_approval_leaves_taxonomy_untouched(env):
     """An owner edit-before-approve that coins a tag but leaves the note
     homeless must 409 AND leave nothing registered — the tag registration and

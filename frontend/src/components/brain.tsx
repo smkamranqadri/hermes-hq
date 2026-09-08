@@ -734,10 +734,13 @@ export function EditProposalModal({ p, onClose }: { p: Proposal; onClose: () => 
   const projectList = projects.data?.projects ?? []
   // A file proposal may only END UP active with a home (core/wm_store.py
   // update_note / _validate_proposal_payload) — archiving is the one
-  // exception. Block the approve button the same way FileNoteModal blocks
-  // Save, instead of round-tripping a 409.
-  const fileHomeless = p.kind === 'file' && !file.area_id && !file.new_area.trim()
-    && !file.project_id && !file.archive
+  // exception. A file payload never CLEARS the note's existing home, only
+  // adds one, so a note that already has an area/project stays homed
+  // regardless of what this edit touches. Block the approve button the same
+  // way FileNoteModal blocks Save, instead of round-tripping a 409.
+  const noteAlreadyHomed = !!p.note_area_id || !!p.note_project_id
+  const fileHomeless = p.kind === 'file' && !noteAlreadyHomed
+    && !file.area_id && !file.new_area.trim() && !file.project_id && !file.archive
   return (
     <Modal title={`Edit ${KIND_LABEL[p.kind]} proposal #${p.id}`} onClose={onClose}>
       <div className="flex flex-col gap-3">

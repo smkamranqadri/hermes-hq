@@ -5538,9 +5538,19 @@ def _validate_proposal_payload(conn, kind, payload, note_id=None):
         # (not just when update_note later raises) means it is refused before
         # new_tags/new_area register anything, and at `wm note propose-file`
         # time too, not only at approval.
+        #
+        # A file payload never CLEARS the note's existing area/project (there
+        # is no clear_area/clear_project here, unlike the owner-edit API) —
+        # it only ever ADDS one. So a note that already has a home stays homed
+        # regardless of what this payload touches; only consult the note's
+        # current filing when the payload itself supplies none, and only
+        # refuse when NEITHER has one.
         if not archive and payload.get("area_id") is None \
                 and payload.get("project_id") is None and new_area is None:
-            raise ValueError(_NOTE_NEEDS_HOME_MSG)
+            current = conn.execute("SELECT area_id, project_id FROM notes WHERE id=?",
+                                   (note_id,)).fetchone() if note_id is not None else None
+            if current is None or (current["area_id"] is None and current["project_id"] is None):
+                raise ValueError(_NOTE_NEEDS_HOME_MSG)
     elif kind == "split":
         parts = payload.get("parts")
         if not isinstance(parts, list) or not parts:
@@ -5708,7 +5718,8 @@ def _decode_proposal(row):
 def list_proposals(status=None, classification=None, note_id=None, kind=None,
                    limit=100, offset=0, db_path=None):
     """Proposal list newest-first, with the subject note's title/status joined."""
-    sql = ("SELECT p.*, n.title AS note_title, n.status AS note_status "
+    sql = ("SELECT p.*, n.title AS note_title, n.status AS note_status, "
+           "n.area_id AS note_area_id, n.project_id AS note_project_id "
            "FROM proposals p LEFT JOIN notes n ON n.id = p.note_id WHERE 1=1")
     params = []
     if status is not None:
@@ -5737,7 +5748,8 @@ def get_proposal(pid, db_path=None):
     conn = _connect(db_path)
     try:
         row = conn.execute(
-            "SELECT p.*, n.title AS note_title, n.status AS note_status "
+            "SELECT p.*, n.title AS note_title, n.status AS note_status, "
+            "n.area_id AS note_area_id, n.project_id AS note_project_id "
             "FROM proposals p LEFT JOIN notes n ON n.id = p.note_id WHERE p.id=?",
             (pid,)).fetchone()
         return _decode_proposal(row) if row else None

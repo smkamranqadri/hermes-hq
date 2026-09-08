@@ -232,6 +232,7 @@ export type Proposal = {
   status: 'pending' | 'approved' | 'rejected' | 'superseded'
   author: string; feedback: string | null; result: { note_ids?: number[]; filed?: boolean; archived?: boolean; disputed?: number[]; task_id?: number; entry_id?: number; target_note_id?: number; archived_source?: boolean; new_area_id?: number; new_area_name?: string } | null
   created_at: number; decided_at: number | null; note_title: string | null; note_status: string | null
+  note_area_id: number | null; note_project_id: number | null
 }
 export type ProposalCounts = { pending: number; routine: number; needs_attention: number }
 export const useProposals = (status?: string) =>
