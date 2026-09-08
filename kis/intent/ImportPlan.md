@@ -17,16 +17,19 @@ The DoD reconciles against the tool, not against prose. Re-runnable (`--check` e
 |---|---|---|---|---|---|---|
 | focus | 107 | 0 | 0 | 2 | 0 | 105 |
 | old-hermes | 1 | 0 | 0 | 0 | 0 | 1 |
-| obsidian | 208 | 3 | 4 | 67 | 15 | 119 |
-| apple-notes | 251 | 1 | 47 | 3 | 0 | 200 |
+| obsidian | 208 | 3 | 4 | 65 | 15 | 121 |
+| apple-notes | 251 | 1 | 0 | 0 | 0 | 250 |
 | keep | 402 | 0 | 0 | 11 | 95 | 296 |
-| **TOTAL** | **969** | **4** | **51** | **83** | **110** | **721** |
+| **TOTAL** | **969** | **4** | **4** | **78** | **110** | **773** |
 
-**This supersedes the first table in this plan (51/82/82/95/659), which was wrong in two ways the tool exposed:**
-1. **The walk-order bug this plan warned about was present in the plan's own numbers.** `obsidian/Archive` sorts before `obsidian/Notes`, so the ad-hoc script kept the *Archive* copy and dropped the **live** one. `_keeper_rank` now ranks non-Archive first explicitly, so the live copy always wins.
-2. **"Archive clone" was over-counted and over-dropping.** After correct dedupe only **15** Archive files share a live filename, and those have *different* content — superseded drafts, not clones. They are now **archived searchable**, not discarded. The `archive_clone` decision no longer exists: a byte-identical Archive copy is simply a `duplicate`.
+**This supersedes the first table in this plan (51/82/82/95/659). Building the tool found four ways that hand-measured table silently destroyed data:**
+1. **The walk-order bug this plan warned about was present in the plan's own numbers.** `obsidian/Archive` sorts before `obsidian/Notes`, so the ad-hoc script kept the *Archive* copy and dropped the **live** one. `_keeper_rank` now ranks non-Archive first explicitly.
+2. **"Archive clone" was over-dropping.** After correct dedupe only **15** Archive files share a live filename, and those have *different* content — superseded drafts, not clones. They are archived searchable, not discarded. The `archive_clone` decision no longer exists: a byte-identical Archive copy is simply a `duplicate`.
+3. **The digest covered the body only, so notes sharing body text collapsed.** Real losses: obsidian's `Prompt 5A` / `Prompt 9` / `Prompt 9B` share a body, as do apple's `Tomorrow` / `Todo` (both just `- ☐`). Five distinct notes were being dropped. The digest is now title + body + attachment names.
+4. **47 apple notes called "empty" were photo-only notes.** An Apple note holding just a picture has an empty markdown body plus an `(Attachments)` dir; judging emptiness on text alone discarded **46 notes and the photos with them**. Emptiness now means no text *and* no attachments — consistent with 2c, where only VOICE-only notes are skipped because nothing can read audio.
+   - Same fix run: `os.path.splitext('.md')` returns `('.md','')` and `normpath` collapses `'.'`, so the attachment binding missed `.md` / `..md` and their ` (Attachments)` / `. (Attachments)` dirs. Keyed by `(dir, stem)` tuples now: **79 of 79 images bind**, up from 29.
 
-**Only `empty` (51) and `duplicate` (83) drop anything, and both are provably lossless** — an empty unit has no content, a duplicate's content survives in its keeper (whose ident is recorded on the dropped row). Every unit with unique text is kept.
+**Only `empty` (4) and `duplicate` (78) drop anything, and both are provably lossless** — an empty unit has no text and no attachments, a duplicate's content survives in its keeper (whose ident is recorded on the dropped row). Every unit with unique content is kept.
 
 Corpus 1.46 M chars (~366 k tokens). Also measured: **4** units carry real key material (1 `AKIA…`, 3 `PRIVATE KEY` blocks) and **43** more merely mention password/token/api-key words — those import normally, flagged, never quarantined.
 
@@ -74,8 +77,8 @@ This also fixes a shipped self-contradiction: `agents/librarian/skills/librarian
 |---|---|---|---|
 | 1 | focus | 105 | the live system; filing is a deterministic `domain:` → area lookup, so it proves the pipeline with the least librarian judgment in the way |
 | 2 | old-hermes | 1 | trivial volume, exercises the `split` kind on a structured doc |
-| 3 | obsidian | 119 | exercises keeper precedence and hash dedupe hardest (67 dup + 15 superseded drafts + 3 quarantined) |
-| 4 | apple-notes | 200 | exercises attachments (76 images) and hostile filenames |
+| 3 | obsidian | 121 | exercises keeper precedence and hash dedupe hardest (65 dup + 15 superseded drafts + 3 quarantined) |
+| 4 | apple-notes | 250 | exercises attachments (79 images, all binding) and hostile filenames; drops nothing |
 | 5 | keep | 296 | biggest and weakest signal — **re-planned after wave 4**, once librarian judgment quality is observable rather than assumed |
 
 ## Acceptance checks
@@ -84,7 +87,7 @@ This also fixes a shipped self-contradiction: `agents/librarian/skills/librarian
 
 **W0b — MET 2026-09-08.** `tools/analyze_notes_dump.py` reconciles the real dumps to 969 units with zero unaccounted; the baseline is committed at `tools/notes_dump_baseline.json` and `--check` exits non-zero on drift (verified against a deliberately corrupted copy); the 4 real secrets are detected and the 43 keyword-only hits are not; classification is deterministic across runs and independent of walk order. Suite 242 → **260** (+18 `test_notes_import.py`).
 
-**W0c (importer core)** — `--dry-run` reconciles to the committed baseline with **zero units unaccounted**; the AWS key and 3 private-key blocks appear in quarantine and **nowhere in `hq.db`** (verified by grepping the DB); the 43 keyword-only files import normally; the run is idempotent (`content_hash`).
+**W0c — MET 2026-09-08.** All five sources dry-run and reconcile to the committed baseline with zero units unaccounted. Applied against scratch DBs: focus 105 notes (22 inbox / 47 filed by domain / 36 archived, zero HQ tasks), obsidian 136 with 3 held back, apple-notes 250 with **79 of 79 images bound**. Re-running is a no-op (`already there 105, created 0`). The 3 private-key blocks are absent from `hq.db` AND from a real `wm backup` (grepped both) yet recoverable from their 0600 files. Migration live on :9010, health 200, `wm check` Integrity OK, live library untouched.
 
 **W1** — 107 notes; 36 archived, 41 filed to the right area by domain lookup; the three same-title `Multi-branch` files survive as three distinct notes; **zero HQ tasks created**; re-running the import creates nothing (`content_hash`).
 

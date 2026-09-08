@@ -3,9 +3,9 @@
   "per_source": {
     "apple-notes": {
       "auto_archive": 0,
-      "duplicate": 3,
-      "empty": 47,
-      "librarian": 200,
+      "duplicate": 0,
+      "empty": 0,
+      "librarian": 250,
       "quarantine": 1,
       "total": 251
     },
@@ -27,9 +27,9 @@
     },
     "obsidian": {
       "auto_archive": 15,
-      "duplicate": 67,
+      "duplicate": 65,
       "empty": 4,
-      "librarian": 119,
+      "librarian": 121,
       "quarantine": 3,
       "total": 208
     },
@@ -45,9 +45,9 @@
   "quarantined_count": 4,
   "totals": {
     "auto_archive": 110,
-    "duplicate": 83,
-    "empty": 51,
-    "librarian": 721,
+    "duplicate": 78,
+    "empty": 4,
+    "librarian": 773,
     "quarantine": 4,
     "total": 969
   }

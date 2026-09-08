@@ -235,3 +235,72 @@ def test_real_dumps_reconcile_with_nothing_unaccounted():
     # the four known secrets are held back, and none of them is merely a keyword
     assert rep["totals"][ni.QUARANTINE] == 4
     assert rep["flagged_secret_keywords"] > rep["totals"][ni.QUARANTINE]
+
+
+# ---- photo-only notes and hostile attachment names ----------------------
+
+def test_a_photo_only_note_is_not_empty(tmp_path):
+    """An Apple note holding only a picture has an EMPTY markdown body. Judging
+    emptiness on text alone discarded 46 real notes and 48 photos with them."""
+    d = str(tmp_path / "apple-notes" / "Trip")
+    write(os.path.join(d, "Beach.md"), "")
+    os.makedirs(os.path.join(d, "Beach (Attachments)"))
+    open(os.path.join(d, "Beach (Attachments)", "IMG_1.jpg"), "wb").write(b"\xff\xd8")
+    rep = ni.analyze(str(tmp_path))
+    u = rep["units"][0]
+    assert u.decision == ni.LIBRARIAN          # kept, not dropped
+    assert len(u.meta["attachments"]) == 1
+
+
+def test_two_photo_only_notes_do_not_dedupe_into_one(tmp_path):
+    """Both bodies are empty and both titles could repeat — identity comes from
+    the attachments, so they must be part of the digest."""
+    d = str(tmp_path / "apple-notes" / "Trip")
+    for name, img in (("A", "one.jpg"), ("B", "two.jpg")):
+        write(os.path.join(d, name + ".md"), "")
+        os.makedirs(os.path.join(d, name + " (Attachments)"))
+        open(os.path.join(d, name + " (Attachments)", img), "wb").write(b"\xff\xd8")
+    rep = ni.analyze(str(tmp_path))
+    assert rep["totals"][ni.DUPLICATE] == 0
+    assert rep["totals"][ni.LIBRARIAN] == 2
+
+
+def test_attachment_dirs_bind_to_dot_named_notes(tmp_path):
+    """`.md` and `..md` really exist in the dump, and their attachment dirs are
+    ` (Attachments)` and `. (Attachments)`. os.path.splitext('.md') returns
+    ('.md', '') and normpath collapses '.', so a path-string key either misses
+    them or collides the two together."""
+    d = str(tmp_path / "apple-notes" / "Notes")
+    write(os.path.join(d, ".md"), "note one")
+    write(os.path.join(d, "..md"), "note two")
+    for dirname, img in ((" (Attachments)", "a.jpg"), (". (Attachments)", "b.jpg")):
+        os.makedirs(os.path.join(d, dirname))
+        open(os.path.join(d, dirname, img), "wb").write(b"\xff\xd8")
+    units = {u.ident: u for u in ni.read_source(str(tmp_path), "apple-notes")}
+    a = units["apple-notes/Notes/.md"].meta.get("attachments") or []
+    b = units["apple-notes/Notes/..md"].meta.get("attachments") or []
+    assert [os.path.basename(p) for p in a] == ["a.jpg"]
+    assert [os.path.basename(p) for p in b] == ["b.jpg"]
+
+
+def test_two_notes_sharing_a_body_but_not_a_title_are_both_kept(tmp_path):
+    """Real case: obsidian's `Prompt 5A`, `Prompt 9` and `Prompt 9B` share a
+    body. Hashing the body alone silently collapsed two of the three."""
+    d = str(tmp_path / "obsidian" / "Notes")
+    for name in ("Prompt 5A", "Prompt 9", "Prompt 9B"):
+        write(os.path.join(d, name + ".md"), "the same shared body text")
+    rep = ni.analyze(str(tmp_path))
+    assert rep["totals"][ni.DUPLICATE] == 0
+    assert rep["totals"][ni.LIBRARIAN] == 3
+
+
+@pytest.mark.skipif(not os.path.isdir(REAL_DUMP), reason="no notes dump on this box")
+def test_every_real_attachment_binds_to_a_note():
+    """79 images live in (Attachments) dirs; all 79 must reach a note, or the
+    import silently loses photos."""
+    units = ni.read_source(REAL_DUMP, "apple-notes")
+    bound = sum(len(u.meta.get("attachments") or []) for u in units)
+    on_disk = sum(1 for r, _, fs in os.walk(os.path.join(REAL_DUMP, "apple-notes"))
+                  if "(Attachments)" in r
+                  for f in fs if not f.startswith("."))
+    assert bound == on_disk == 79

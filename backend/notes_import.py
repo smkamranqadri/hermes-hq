@@ -1,14 +1,20 @@
-"""Second Brain Phase 3 — dump parsing and pre-pass classification (read-only).
+"""Second Brain Phase 3 — importing the five note dumps.
 
-This module NEVER touches the database. It turns the five raw dumps at
-`/opt/data/notes-dump/` into units, decides what the deterministic pre-pass can
-prove about each one, and reconciles the totals. W0c builds the DB-writing
-importer on top of it, and `tools/analyze_notes_dump.py` is a thin CLI over it —
-sharing this code is the point, because the Phase 3 DoD reconciles against the
-analyzer's numbers and a second copy of the extraction logic would drift from
-the importer that actually runs.
+Three layers, and the split is deliberate:
 
-The raw dumps are treated as immutable: nothing here writes to them.
+1. **Parse** (read-only) — turn the raw dumps into units.
+2. **Classify** (read-only) — what the deterministic pre-pass can PROVE about
+   each unit's content: quarantine / empty / duplicate / auto-archive, or
+   "the librarian must read this". Every unit gets exactly one decision, so the
+   totals always reconcile — the property the Phase 3 DoD checks.
+3. **Plan + execute** — where each unit LANDS, and the writing itself. Only
+   `import_source` and `_attach` touch the database; everything above them is
+   pure and testable without one.
+
+`tools/analyze_notes_dump.py` runs layers 1–2 and nothing else, which is why
+the DoD's baseline cannot drift from the importer: they are the same code.
+
+The raw dumps are treated as immutable — nothing here ever writes to them.
 """
 import hashlib
 import html
@@ -78,7 +84,23 @@ class Unit:
 
     @property
     def sha256(self):
-        return hashlib.sha256(self.norm.encode("utf-8")).hexdigest()
+        """Digest over TITLE + body, not body alone.
+
+        Two notes can share body text and still be different notes — "Pay bill"
+        and "Call bank" both reading "do the thing" are two todos, and hashing
+        the body alone silently collapses one into the other. Dropping a unit
+        whose title differs loses information, which breaks the rule that only
+        provably-lossless buckets may drop anything.
+        """
+        # Attachment names are part of the identity too: two photo-only notes
+        # have identical (empty) bodies, and without this the second one's
+        # photos would be dropped as a duplicate of the first.
+        attached = ",".join(sorted(os.path.basename(p) for p in
+                                   (self.meta.get("attachments") or [])))
+        return hashlib.sha256(
+            (normalize(self.title) + "\n\x00\n" + self.norm
+             + "\n\x00\n" + attached).encode("utf-8")
+        ).hexdigest()
 
     def __repr__(self):                                  # pragma: no cover
         return "<Unit %s %s %r>" % (self.source, self.ident, self.title[:40])
@@ -156,7 +178,8 @@ def _walk_md(root, source):
             except OSError:
                 continue
             meta, body = split_frontmatter(raw)
-            body = clean(body)
+            # strip the blank line frontmatter leaves behind; inner structure kept
+            body = clean(body).strip("\n")
             rel = os.path.relpath(path, os.path.dirname(root))
             title = meta.get("title") or os.path.basename(name)[:-3].strip() \
                 or title_from(body, fallback=rel)
@@ -177,9 +200,16 @@ def read_apple_notes(root, source="apple-notes"):
     convention is reliable — but an unpaired one is recorded rather than
     silently dropped."""
     units = read_markdown_source(root, source)
-    by_key = {}
-    for u in units:
-        by_key[os.path.splitext(u.ident)[0]] = u
+    # Key by (directory, stem) TUPLES, never by a joined path string.
+    # os.path.splitext('.md') returns ('.md', '') — Python treats a leading dot
+    # as "no extension" — and os.path.join/normpath collapse a '.' segment, so
+    # both `.md` and `..md` (which really exist here) would either miss their
+    # attachment dir or collide with each other. Tuples sidestep all of it.
+    def key(rel):
+        d, name = os.path.split(rel)
+        return (d, name[:-3] if name.endswith(".md") else name)
+
+    by_key = {key(u.ident): u for u in units}
     parent = os.path.dirname(root)
     orphans = []
     for dirpath, dirnames, filenames in sorted(os.walk(root)):
@@ -187,16 +217,16 @@ def read_apple_notes(root, source="apple-notes"):
         base = os.path.basename(dirpath)
         if not base.endswith(" (Attachments)"):
             continue
-        note_dir = os.path.join(os.path.dirname(dirpath),
-                                base[:-len(" (Attachments)")])
-        key = os.path.relpath(note_dir, parent)
+        stem = base[:-len(" (Attachments)")]
+        owner_key = (os.path.relpath(os.path.dirname(dirpath), parent), stem)
         files = [os.path.join(dirpath, f) for f in sorted(filenames)
                  if not f.startswith(".")]
-        owner = by_key.get(key)
+        owner = by_key.get(owner_key)
         if owner is None:
-            orphans.append((key, files))
+            orphans.append((owner_key, files))
             continue
-        owner.meta["attachments"] = files
+        # extend, never assign: two dirs can legitimately resolve to one note
+        owner.meta.setdefault("attachments", []).extend(files)
     if orphans:
         # surfaced through the report; never silently discarded
         for u in units:
@@ -307,11 +337,15 @@ def classify(units):
         else:
             remaining.append(u)
 
-    # 2. provably empty
+    # 2. provably empty — of TEXT *and* attachments.
+    #    An Apple note holding only a photo has an empty markdown body and a
+    #    sibling `(Attachments)` dir; treating it as empty throws the photo
+    #    away. 2c already settled that a photo-with-no-text note is real work
+    #    (only VOICE-only notes are skipped, because nothing can read audio).
     rest = []
     for u in remaining:
-        if not u.norm:
-            u.decision, u.reason = EMPTY, "no content after normalization"
+        if not u.norm and not (u.meta.get("attachments") or []):
+            u.decision, u.reason = EMPTY, "no content and no attachments"
         else:
             rest.append(u)
 
@@ -404,6 +438,85 @@ def report_rows(report):
     return rows
 
 
+# --- what each unit BECOMES (the second layer, on top of the pre-pass) ------
+#
+# The pre-pass answers "what can code prove about this unit's CONTENT".
+# Planning answers "where does it land". They are separate on purpose: a
+# focus task is in the `librarian` bucket because nothing about its text
+# lets us drop it, yet its frontmatter says exactly where it belongs, so it is
+# filed rather than queued.
+
+SKIP = "skip"            # empty or duplicate — provably lossless
+CREATE = "create"
+HOLD = "hold"            # quarantined: no note row, ever
+
+
+class Plan:
+    __slots__ = ("unit", "action", "status", "area_id", "tags", "reason")
+
+    def __init__(self, unit, action, status=None, area_id=None, tags=None, reason=""):
+        self.unit = unit
+        self.action = action
+        self.status = status
+        self.area_id = area_id
+        self.tags = tags or []
+        self.reason = reason
+
+
+def _clean_title(unit):
+    """Apple filenames include `..md`, `.md` and `. (2).md`, whose derived
+    titles are empty or bare punctuation. Fall back to the first line of the
+    body — create_note requires a real title."""
+    t = (unit.title or "").strip()
+    if t.strip(". \t-_—–"):
+        return t[:300]
+    return title_from(unit.body, fallback="%s import" % unit.source)[:300]
+
+
+def plan_unit(unit, areas_by_name=None):
+    """Decide what one classified unit becomes. Pure: no DB writes."""
+    areas_by_name = areas_by_name or {}
+    if unit.decision == QUARANTINE:
+        return Plan(unit, HOLD, reason=unit.reason)
+    if unit.decision in (EMPTY, DUPLICATE):
+        return Plan(unit, SKIP, reason=unit.reason)
+
+    tags = [unit.source]
+    if unit.decision == AUTO_ARCHIVE:
+        return Plan(unit, CREATE, status="archived", tags=tags, reason=unit.reason)
+
+    # LIBRARIAN by content — but focus frontmatter already says where it
+    # goes and whether it is finished, so it is filed instead of queued (owner
+    # decision: import as notes, no HQ tasks; done -> archived, open -> its area).
+    area_id = areas_by_name.get((unit.meta.get("domain") or "").strip().lower())
+    if unit.source == "focus":
+        if (unit.meta.get("status") or "").strip().lower() == "done":
+            return Plan(unit, CREATE, status="archived", area_id=area_id, tags=tags,
+                        reason="focus status: done")
+        if area_id is not None:
+            return Plan(unit, CREATE, status="active", area_id=area_id, tags=tags,
+                        reason="filed by focus domain")
+    return Plan(unit, CREATE, status="inbox", area_id=area_id, tags=tags,
+                reason="needs librarian triage")
+
+
+def plan_all(units, areas_by_name=None):
+    return [plan_unit(u, areas_by_name) for u in units]
+
+
+def plan_summary(plans):
+    out = {"create_inbox": 0, "create_active": 0, "create_archived": 0,
+           "skip": 0, "hold": 0}
+    for p in plans:
+        if p.action == CREATE:
+            out["create_" + p.status] += 1
+        else:
+            out[p.action] += 1
+    out["create_total"] = (out["create_inbox"] + out["create_active"]
+                           + out["create_archived"])
+    return out
+
+
 def fixture_of(report):
     """The comparable shape the DoD reconciles against — counts only, no
     content, so it is safe to commit and stable across runs."""
@@ -416,3 +529,91 @@ def fixture_of(report):
         "flagged_secret_keywords": report["flagged_secret_keywords"],
         "quarantined_count": len(report["quarantined"]),
     }
+
+
+# --- execution (the ONLY part of this module that writes) -------------------
+
+ATTACH_MIME = {".jpg": "image/jpeg", ".jpeg": "image/jpeg", ".png": "image/png",
+               ".gif": "image/gif", ".heic": "image/heic", ".webp": "image/webp"}
+
+
+def _areas_by_name(store, db_path=None):
+    """Lowercased area name -> id. focus `domain:` values map 1:1 onto
+    the seeded areas, so filing that source needs no judgment."""
+    return {a["name"].strip().lower(): a["id"]
+            for a in store.list_areas(db_path=db_path)}
+
+
+def import_source(dump_root, source, store, db_path=None, dry_run=True,
+                  with_attachments=True, limit=None):
+    """Import one dump. Returns a result dict; writes NOTHING when dry_run.
+
+    Idempotent: a unit whose content_hash is already on a note is reported as
+    `already_imported` and skipped, so re-running a wave neither duplicates
+    notes nor re-quarantines bytes.
+    """
+    units = classify(read_source(dump_root, source))
+    plans = plan_all(units, _areas_by_name(store, db_path=db_path))
+    if limit is not None:
+        plans = plans[:int(limit)]
+
+    res = {"source": source, "dry_run": bool(dry_run),
+           "planned": plan_summary(plans), "created": [], "quarantined": [],
+           "already_imported": 0, "attachments": 0, "errors": []}
+
+    for p in plans:
+        u = p.unit
+        if p.action == SKIP:
+            continue
+        if p.action == HOLD:
+            if not dry_run:
+                store.quarantine_unit(u.source, u.ident, u.reason, u.sha256,
+                                      u.body, db_path=db_path)
+            res["quarantined"].append(u.ident)
+            continue
+
+        # idempotency is checked even on a dry run, so the preview tells the
+        # truth about what a real run would actually do
+        if store.note_by_content_hash(u.sha256, db_path=db_path) is not None:
+            res["already_imported"] += 1
+            continue
+        if dry_run:
+            res["created"].append((u.ident, p.status))
+            continue
+        try:
+            nid = store.create_note(
+                _clean_title(u), body=u.body, status=p.status,
+                area_id=p.area_id, tags=p.tags, authored_by="import",
+                content_hash=u.sha256, db_path=db_path)
+        except ValueError as e:
+            res["errors"].append("%s: %s" % (u.ident, e))
+            continue
+        res["created"].append((u.ident, p.status))
+        if with_attachments:
+            res["attachments"] += _attach(store, nid, u, res, db_path=db_path)
+    return res
+
+
+def _attach(store, note_id, unit, res, db_path=None):
+    """Apple's `(Attachments)` images, bound to the note they belong to.
+
+    Failures are recorded, never raised: a note that imported fine must not be
+    lost because one of its images could not be read.
+    """
+    n = 0
+    for path in unit.meta.get("attachments") or []:
+        try:
+            with open(path, "rb") as fh:
+                data = fh.read()
+            if not data:
+                continue
+            ext = os.path.splitext(path)[1].lower()
+            store.add_attachment(note_id, data, kind="photo",
+                                 mime=ATTACH_MIME.get(ext),
+                                 orig_name=os.path.basename(path),
+                                 db_path=db_path)
+            n += 1
+        except (OSError, ValueError) as e:
+            res["errors"].append("%s attachment %s: %s"
+                                 % (unit.ident, os.path.basename(path), e))
+    return n

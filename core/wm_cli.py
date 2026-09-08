@@ -6,6 +6,7 @@ Stdlib only. Reads project data from the DB (single source of truth).
 """
 
 import argparse
+import os
 import sys
 
 try:
@@ -622,6 +623,58 @@ def _note_line(n, pending_ids):
     return "  #%-4d %s%s%s%s" % (n["id"], n["title"], tags, att, mark)
 
 
+def cmd_note_import(args):
+    """OWNER-ONLY. Import one dump. Defaults to a dry run: --apply writes."""
+    from backend import notes_import as ni
+    if args.source not in ni.SOURCES:
+        _p("error: unknown source %r (one of %s)" % (args.source, ", ".join(ni.SOURCES)))
+        return 1
+    if not os.path.isdir(os.path.join(args.root, args.source)):
+        _p("error: no dump at %s" % os.path.join(args.root, args.source))
+        return 1
+    res = ni.import_source(args.root, args.source, store, dry_run=not args.apply,
+                           with_attachments=not args.no_attachments, limit=args.limit)
+    p = res["planned"]
+    # Count what ACTUALLY happened, not what the plan said before the
+    # idempotency check — on a re-run those differ, and printing the plan would
+    # claim 105 creations while creating nothing.
+    by_status = {}
+    for _, st in res["created"]:
+        by_status[st] = by_status.get(st, 0) + 1
+    verb = "created" if args.apply else "would create"
+    _p("%s %s" % ("APPLIED" if args.apply else "DRY RUN — nothing was written:",
+                  args.source))
+    _p("  %-13s %4d   (inbox %d · filed %d · archived %d)"
+       % (verb, len(res["created"]), by_status.get("inbox", 0),
+          by_status.get("active", 0), by_status.get("archived", 0)))
+    if res["already_imported"]:
+        _p("  %-13s %4d   (same content_hash — nothing to do)"
+           % ("already there", res["already_imported"]))
+    _p("  %-13s %4d   (empty or byte-identical duplicate — nothing lost)"
+       % ("skipped", p["skip"]))
+    _p("  %-13s %4d   (secret: no note row, bytes 0600 outside hq_home)"
+       % ("held back", p["hold"]))
+    if res["attachments"]:
+        _p("  attached %4d file(s)" % res["attachments"])
+    for e in res["errors"]:
+        _p("  ERROR %s" % e)
+    if not args.apply:
+        _p("Re-run with --apply to write. The raw dump is never modified.")
+    return 1 if res["errors"] else 0
+
+
+def cmd_note_quarantine(args):
+    rows = store.list_quarantine()
+    if not rows:
+        _p("Quarantine is empty.")
+        return 0
+    _p("Quarantined units (%d) — bytes are NOT in hq.db and NOT in backups:" % len(rows))
+    for r in rows:
+        _p("  #%-4d %-12s %s" % (r["id"], r["source"], r["ident"]))
+        _p("        %s · %s" % (r["reason"], r["stored_path"]))
+    return 0
+
+
 def cmd_note_search(args):
     """Find notes ALREADY in the Library. Without this the librarian triages
     every capture blind to what exists and can only ever propose a new note."""
@@ -1224,6 +1277,29 @@ def build_parser():
                     type=int, choices=(0, 1),
                     help="set (1) or clear (0) the owner-approval gate")
     te.set_defaults(fn=cmd_task_edit)
+
+    # Phase 3 import. DELIBERATELY NOT under `wm note`: that group is the
+    # librarian's entire surface and must stay write-free (the guard test
+    # asserts it has no note-write verb). The importer creates notes directly,
+    # so it lives out here where the agent surface cannot reach it.
+    bim = sub.add_parser("brain-import", help="OWNER-ONLY: import a Second Brain "
+                                              "note dump (dry run unless --apply)")
+    bim_sub = bim.add_subparsers(dest="sub", required=True)
+    bir = bim_sub.add_parser("run", help="import one dump")
+    bir.add_argument("source", help="focus | old-hermes | obsidian | "
+                                    "apple-notes | keep")
+    bir.add_argument("--root", default="/opt/data/notes-dump",
+                     help="dump root (default /opt/data/notes-dump)")
+    bir.add_argument("--apply", action="store_true",
+                     help="actually write; without it nothing is created")
+    bir.add_argument("--limit", type=int, default=None,
+                     help="stop after N planned units (rehearsal)")
+    bir.add_argument("--no-attachments", dest="no_attachments", action="store_true",
+                     help="skip binding Apple (Attachments) images")
+    bir.set_defaults(fn=cmd_note_import)
+    biq = bim_sub.add_parser("quarantine", help="units held back for carrying key "
+                                                "material (never their bytes)")
+    biq.set_defaults(fn=cmd_note_quarantine)
 
     sub.add_parser("status", help="Grouped text readout").set_defaults(
         fn=cmd_status)

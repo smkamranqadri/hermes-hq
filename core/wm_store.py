@@ -586,6 +586,24 @@ CREATE TABLE IF NOT EXISTS note_attachments (
 
 CREATE INDEX IF NOT EXISTS idx_attachments_note ON note_attachments(note_id);
 
+-- Phase 3 import: units carrying high-confidence key material. NO note row is
+-- ever created for these, and this table holds NO secret text — only where it
+-- came from, its hash, and what matched. The bytes live in a 0600 file outside
+-- hq_home so they stay out of every `wm backup`; Phase 4's vault drains this
+-- table when encryption at rest ships.
+CREATE TABLE IF NOT EXISTS import_quarantine (
+    id          INTEGER PRIMARY KEY AUTOINCREMENT,
+    source      TEXT NOT NULL,               -- which dump
+    ident       TEXT NOT NULL,               -- path (or path#index) in the dump
+    reason      TEXT NOT NULL,               -- which pattern matched
+    sha256      TEXT NOT NULL,               -- of the normalized unit text
+    stored_path TEXT,                        -- 0600 file holding the bytes
+    created_at  REAL
+);
+
+CREATE UNIQUE INDEX IF NOT EXISTS idx_quarantine_unit
+    ON import_quarantine(source, ident);
+
 CREATE INDEX IF NOT EXISTS idx_notes_status   ON notes(status);
 CREATE INDEX IF NOT EXISTS idx_notes_area     ON notes(area_id);
 CREATE INDEX IF NOT EXISTS idx_notes_project  ON notes(project_id);
@@ -691,6 +709,18 @@ def _migrate(conn):
         )""")
     conn.execute("CREATE INDEX IF NOT EXISTS idx_attachments_note "
                  "ON note_attachments(note_id)")
+    conn.execute("""
+        CREATE TABLE IF NOT EXISTS import_quarantine (
+            id          INTEGER PRIMARY KEY AUTOINCREMENT,
+            source      TEXT NOT NULL,
+            ident       TEXT NOT NULL,
+            reason      TEXT NOT NULL,
+            sha256      TEXT NOT NULL,
+            stored_path TEXT,
+            created_at  REAL
+        )""")
+    conn.execute("CREATE UNIQUE INDEX IF NOT EXISTS idx_quarantine_unit "
+                 "ON import_quarantine(source, ident)")
 
 
 def init_db(db_path=None):
@@ -4731,6 +4761,84 @@ def attachments_dir(note_id=None):
     base = os.environ.get("HERMES_HQ_ATTACHMENTS_DIR") or \
         os.path.join(hq_home(), "attachments")
     return base if note_id is None else os.path.join(base, str(int(note_id)))
+
+
+def quarantine_dir():
+    """Where quarantined import bytes live: a SIBLING of hq_home, never inside.
+
+    Deliberately outside hq_home so it is not swept into `wm backup` — a backup
+    is copied around and kept, and key material should not ride along. Derived
+    from hq_home rather than hardcoded (owner rule: never assume /opt/data).
+    """
+    return os.environ.get("HERMES_HQ_QUARANTINE_DIR") or \
+        os.path.join(os.path.dirname(os.path.abspath(hq_home())),
+                     "hq-import-quarantine")
+
+
+def quarantine_unit(source, ident, reason, sha256, data, db_path=None):
+    """Hold back a unit that carries key material. Returns the row id.
+
+    Writes the bytes 0600 into `quarantine_dir()` and records only WHERE it came
+    from, its hash and what matched — the secret text never enters hq.db, which
+    is the whole point of the DoD line "zero plaintext secrets outside
+    quarantine". Idempotent per (source, ident) so re-running an import neither
+    duplicates rows nor rewrites files.
+    """
+    base = quarantine_dir()
+    os.makedirs(base, exist_ok=True)
+    try:
+        os.chmod(base, 0o700)
+    except OSError:
+        pass                      # a restrictive umask already did the job
+    conn = _connect(db_path)
+    try:
+        with conn:
+            existing = conn.execute(
+                "SELECT id FROM import_quarantine WHERE source=? AND ident=?",
+                (source, ident)).fetchone()
+            if existing is not None:
+                return existing["id"]
+            stored = os.path.join(base, "%s-%s" % (source, sha256[:16]))
+            # 0600 from the moment it exists — never create-then-chmod, which
+            # leaves a readable window.
+            fd = os.open(stored, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
+            try:
+                os.write(fd, data if isinstance(data, bytes)
+                         else (data or "").encode("utf-8"))
+            finally:
+                os.close(fd)
+            cur = conn.execute(
+                "INSERT INTO import_quarantine(source, ident, reason, sha256, "
+                "stored_path, created_at) VALUES(?,?,?,?,?,?)",
+                (source, ident, reason, sha256, stored, time.time()))
+            return cur.lastrowid
+    finally:
+        conn.close()
+
+
+def list_quarantine(db_path=None):
+    """Quarantine rows, newest first. Never returns the bytes."""
+    conn = _connect(db_path)
+    try:
+        return [dict(r) for r in conn.execute(
+            "SELECT * FROM import_quarantine ORDER BY id DESC")]
+    finally:
+        conn.close()
+
+
+def note_by_content_hash(content_hash, db_path=None):
+    """The note already imported from this exact content, or None. This is what
+    makes re-running an import a no-op instead of a duplication."""
+    if not content_hash:
+        return None
+    conn = _connect(db_path)
+    try:
+        row = conn.execute(
+            "SELECT id FROM notes WHERE content_hash=? ORDER BY id LIMIT 1",
+            (content_hash,)).fetchone()
+        return row["id"] if row else None
+    finally:
+        conn.close()
 
 
 def attachment_path(note_id, stored_name):
