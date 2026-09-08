@@ -193,20 +193,26 @@ export type NoteFull = Note & {
 }
 export type NotesTree = { areas: Area[]; projects: { id: number; slug: string; name: string; note_count: number }[]; counts: Record<string, number> }
 
+// The librarian files proposals on its own schedule, so every Second Brain
+// surface must refresh on the same 15s cadence the rest of the app uses. The
+// tree is in here too: it feeds the sub-nav badges, and leaving it slower than
+// the lists let the header read "Review · 3" over an empty queue.
+const NOTES_REFETCH = 15000
+
 export const useAreas = () => useQuery({ queryKey: ['areas'], queryFn: () => get<{ areas: Area[] }>('/api/areas') })
-export const useNotesTree = () => useQuery({ queryKey: ['notes-tree'], queryFn: () => get<NotesTree>('/api/notes/tree'), refetchInterval: 30000 })
+export const useNotesTree = () => useQuery({ queryKey: ['notes-tree'], queryFn: () => get<NotesTree>('/api/notes/tree'), refetchInterval: NOTES_REFETCH })
 export const useNoteTags = () => useQuery({ queryKey: ['note-tags'], queryFn: () => get<{ tags: { tag: string; count: number }[] }>('/api/notes/tags') })
 export const useNotes = (p: { status?: string; area_id?: number; project_id?: number; type?: string; tag?: string; q?: string; limit?: number }) => {
   const qs = new URLSearchParams()
   Object.entries(p).forEach(([k, v]) => { if (v !== undefined && v !== '' && v !== null) qs.set(k, String(v)) })
-  return useQuery({ queryKey: ['notes', p], queryFn: () => get<{ notes: Note[] }>(`/api/notes?${qs}`) })
+  return useQuery({ queryKey: ['notes', p], queryFn: () => get<{ notes: Note[] }>(`/api/notes?${qs}`), refetchInterval: NOTES_REFETCH })
 }
 export const useNote = (id: number) =>
-  useQuery({ queryKey: ['note', id], queryFn: () => get<NoteFull>(`/api/note/${id}`), enabled: Number.isFinite(id) })
+  useQuery({ queryKey: ['note', id], queryFn: () => get<NoteFull>(`/api/note/${id}`), enabled: Number.isFinite(id), refetchInterval: NOTES_REFETCH })
 export const useProjectNotes = (slug: string) =>
-  useQuery({ queryKey: ['project-notes', slug], queryFn: () => get<{ notes: Note[] }>(`/api/project/${slug}/notes`) })
+  useQuery({ queryKey: ['project-notes', slug], queryFn: () => get<{ notes: Note[] }>(`/api/project/${slug}/notes`), refetchInterval: NOTES_REFETCH })
 export const useTaskNotes = (id: number) =>
-  useQuery({ queryKey: ['task-notes', id], queryFn: () => get<{ notes: Note[] }>(`/api/task/${id}/notes`), enabled: Number.isFinite(id) })
+  useQuery({ queryKey: ['task-notes', id], queryFn: () => get<{ notes: Note[] }>(`/api/task/${id}/notes`), enabled: Number.isFinite(id), refetchInterval: NOTES_REFETCH })
 
 // ---- librarian proposals (Phase 2a) ------------------------------------
 export type SplitPart = { title: string; body?: string; area_id?: number; project_id?: number; tags?: string[]; type?: Note['type'] }
@@ -228,7 +234,7 @@ export type Proposal = {
 }
 export type ProposalCounts = { pending: number; routine: number; needs_attention: number }
 export const useProposals = (status?: string) =>
-  useQuery({ queryKey: ['proposals', status ?? 'pending'], queryFn: () => get<{ proposals: Proposal[]; counts: ProposalCounts }>(`/api/proposals${status ? `?status=${status}` : ''}`) })
+  useQuery({ queryKey: ['proposals', status ?? 'pending'], queryFn: () => get<{ proposals: Proposal[]; counts: ProposalCounts }>(`/api/proposals${status ? `?status=${status}` : ''}`), refetchInterval: NOTES_REFETCH })
 export const markNotificationsRead = (ids?: number[], source_key?: string) => post<{ marked: number }>('/api/notifications/read', source_key ? { source_key } : ids ? { ids } : {})
 export const addNotification = (n: { kind: 'chat' | 'question'; title: string; body?: string; href?: string; source_key?: string }) => post<{ id: number | null }>('/api/notifications', n)
 
