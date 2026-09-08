@@ -1,4 +1,4 @@
-import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
+import { useInfiniteQuery, useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import type { Human } from './status'
 
 export class ApiError extends Error { constructor(public status: number, message: string) { super(message) } }
@@ -231,6 +231,22 @@ export const useNotes = (p: { status?: string; area_id?: number; project_id?: nu
   const qs = new URLSearchParams()
   Object.entries(p).forEach(([k, v]) => { if (v !== undefined && v !== '' && v !== null) qs.set(k, String(v)) })
   return useQuery({ queryKey: ['notes', p], queryFn: () => get<{ notes: Note[] }>(`/api/notes?${qs}`), refetchInterval: NOTES_REFETCH })
+}
+export type NotesPage = { notes: Note[]; total: number; limit: number; offset: number }
+/** Slice E: the Library pages its list — 50 at a time, "Load more" appends.
+ *  The server answers every list with `total` under the same filters, so the
+ *  button can say how much is left; a filter change is a new key, which
+ *  resets to page one on its own. Home/inbox lists keep `useNotes`. */
+export const useNotesPaged = (p: { status?: string; area_id?: number; project_id?: number; type?: string; tag?: string; q?: string; exclude_archived?: boolean }, pageSize = 50) => {
+  const base = new URLSearchParams()
+  Object.entries(p).forEach(([k, v]) => { if (v !== undefined && v !== '' && v !== null) base.set(k, String(v)) })
+  return useInfiniteQuery({
+    queryKey: ['notes-paged', p, pageSize],
+    initialPageParam: 0,
+    queryFn: ({ pageParam }) => { const qs = new URLSearchParams(base); qs.set('limit', String(pageSize)); qs.set('offset', String(pageParam)); return get<NotesPage>(`/api/notes?${qs}`) },
+    getNextPageParam: (last, pages) => { const shown = pages.reduce((n, pg) => n + pg.notes.length, 0); return shown < last.total && last.notes.length > 0 ? shown : undefined },
+    refetchInterval: NOTES_REFETCH,
+  })
 }
 export const useNote = (id: number) =>
   useQuery({ queryKey: ['note', id], queryFn: () => get<NoteFull>(`/api/note/${id}`), enabled: Number.isFinite(id), refetchInterval: NOTES_REFETCH })

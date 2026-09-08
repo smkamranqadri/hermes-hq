@@ -5467,7 +5467,8 @@ def _fts_match_query(q):
 
 
 def search_notes(q, limit=50, status=None, area_id=None, project_id=None,
-                 note_type=None, tag=None, exclude_archived=False, db_path=None):
+                 note_type=None, tag=None, exclude_archived=False, offset=0,
+                 db_path=None):
     """Note search: FTS5 (bm25-ranked) with a LIKE fallback.
 
     Narrows by the SAME filters as list_notes, so searching inside an area
@@ -5488,8 +5489,8 @@ def search_notes(q, limit=50, status=None, area_id=None, project_id=None,
                 rows = conn.execute(
                     "SELECT n.*, bm25(notes_fts) AS rank FROM notes_fts f "
                     "JOIN notes n ON n.id = f.rowid WHERE notes_fts MATCH ?"
-                    + scope + " ORDER BY rank LIMIT ?",
-                    [match] + scope_params + [int(limit)]).fetchall()
+                    + scope + " ORDER BY rank LIMIT ? OFFSET ?",
+                    [match] + scope_params + [int(limit), int(offset)]).fetchall()
                 return _with_project_names(conn, _with_entry_counts(conn, [_decode_note(r) for r in rows]))
             except sqlite3.OperationalError:
                 pass  # malformed query despite quoting — fall back to LIKE
@@ -5497,9 +5498,31 @@ def search_notes(q, limit=50, status=None, area_id=None, project_id=None,
         rows = conn.execute(
             "SELECT n.* FROM notes n WHERE (n.title LIKE ? OR n.body LIKE ? "
             "OR n.tags LIKE ?)" + scope +
-            " ORDER BY COALESCE(n.updated_at, n.created_at) DESC LIMIT ?",
-            [like, like, like] + scope_params + [int(limit)]).fetchall()
+            " ORDER BY COALESCE(n.updated_at, n.created_at) DESC LIMIT ? OFFSET ?",
+            [like, like, like] + scope_params + [int(limit), int(offset)]).fetchall()
         return _with_project_names(conn, _with_entry_counts(conn, [_decode_note(r) for r in rows]))
+    finally:
+        conn.close()
+
+
+def count_notes(status=None, area_id=None, project_id=None, note_type=None,
+                tag=None, q=None, exclude_archived=False, db_path=None):
+    """How many notes the SAME filters list_notes / search_notes take would
+    return without a LIMIT — the total behind a paged Library list.
+
+    LibraryPolishPlan Slice E: the Library requested limit=100 with no paging,
+    so at 139 notes "All notes" silently clipped; waves 4–5 add ~450 more.
+    Built on _scope_sql + _q_scope_sql so browse, search, facets and this
+    count can never disagree about what a filter means.
+    """
+    scope, params = _scope_sql(status, area_id, project_id, note_type, tag,
+                               exclude_archived)
+    conn = _connect(db_path)
+    try:
+        q_sql, q_params = _q_scope_sql(conn, (q or "").strip())
+        row = conn.execute("SELECT COUNT(*) FROM notes n WHERE 1=1" + scope + q_sql,
+                           params + q_params).fetchone()
+        return int(row[0])
     finally:
         conn.close()
 

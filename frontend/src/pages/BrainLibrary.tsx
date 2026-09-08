@@ -3,10 +3,11 @@
 import { useEffect, useState } from 'react'
 import { useSearchParams } from 'react-router-dom'
 import clsx from 'clsx'
-import { useAreas, useNoteFacets, useNotes, useNotesTree } from '../api'
+import { useAreas, useNoteFacets, useNotesPaged, useNotesTree } from '../api'
 import { PageHeader } from '../components/GlassCard'
 import { BrainSubNav, NoteRow, useBrainCounts } from '../components/brain'
 import { Empty, Input, Label, Loading, Select } from '../components/ui'
+import { Btn } from '../components/Modal'
 import { usePageTitle } from '../usePageTitle'
 
 function TreeRow({ label, count, depth = 0, active, onClick, mono = false }: {
@@ -81,7 +82,7 @@ export function BrainLibrary() {
   // or a cold view=archived link would fetch the wrong (active) list once.
   const showArch = sp.get('arch') === '1' || view === 'archived'
   const archFilter = showArch ? { status: 'archived' } : { exclude_archived: true }
-  const scoped = { area_id: areaSel ? Number(areaSel) : undefined, project_id: projSel ? Number(projSel) : undefined, type: typeSel ?? undefined, tag: tagSel ?? undefined, limit: 100 }
+  const scoped = { area_id: areaSel ? Number(areaSel) : undefined, project_id: projSel ? Number(projSel) : undefined, type: typeSel ?? undefined, tag: tagSel ?? undefined }
   const filters = q
     ? { ...scoped, q, ...archFilter }
     : showArch ? { ...scoped, status: 'archived' }
@@ -91,17 +92,19 @@ export function BrainLibrary() {
   // Shown on every view except Inbox — an inbox note is never archived, so
   // the toggle would be a dead control there. Stays live while searching.
   const showArchRefine = view !== 'inbox'
-  const notes = useNotes(filters)
+  // Slice E: paged, 50 at a time. `rows` is every page loaded so far and
+  // `total` the unpaged count the server reports under the same filters.
+  const notes = useNotesPaged(filters)
+  const rows = notes.data?.pages.flatMap(pg => pg.notes) ?? []
+  const total = notes.data?.pages[0]?.total ?? rows.length
   // LibraryPolishPlan Slice C: the refine selects (tag/project/area) list
   // only what's actually present in the CURRENT selection, with counts, so
   // the owner never picks a tag that empties the list. `filters` is exactly
   // the same scope the note list itself uses — the facets endpoint narrows
   // each dimension by every filter EXCEPT its own, so switching a tag/
   // project never narrows the very list it's choosing from. `limit` is
-  // list-only (facets has no notion of it) — stripped so it isn't sent and
-  // doesn't churn the query key.
-  const { limit: _facetsLimit, ...facetFilters } = filters
-  const facets = useNoteFacets(facetFilters)
+  // list-only paging lives in the hook, so `filters` is exactly what facets need.
+  const facets = useNoteFacets(filters)
   // A facet selected via the URL might not appear in the current facet
   // result (e.g. the owner narrowed further and its count dropped to 0) —
   // keep it in the options list at count 0 so Clear stays reachable.
@@ -219,7 +222,7 @@ export function BrainLibrary() {
         <div className="min-w-0">
           <div className="mb-2 flex items-center justify-between">
             <Label>{selLabel}</Label>
-            {notes.data && <span className="font-mono text-[10px] text-muted">{notes.data.notes.length} note{notes.data.notes.length === 1 ? '' : 's'}</span>}
+            {notes.data && <span className="font-mono text-[10px] text-muted">{rows.length < total ? `${rows.length} of ${total}` : total} note{total === 1 ? '' : 's'}</span>}
           </div>
           {showArchRefine && (
             // Compact on mobile: content-sized selects (w-auto/min-w-0) with
@@ -261,10 +264,17 @@ export function BrainLibrary() {
           )}
           {notes.isLoading && <Loading rows={5} />}
           {notes.isError && <Empty error title="Could not load notes" note={String(notes.error)} />}
-          {notes.data && notes.data.notes.length === 0 && <Empty title={q ? 'No matches' : 'Nothing here yet'} note={q ? 'Try different words — search covers titles, bodies, entries and tags.' : 'Capture from Home, then file notes here.'} />}
+          {notes.data && rows.length === 0 && <Empty title={q ? 'No matches' : 'Nothing here yet'} note={q ? 'Try different words — search covers titles, bodies, entries and tags.' : 'Capture from Home, then file notes here.'} />}
           <div className="flex flex-col gap-2">
-            {(notes.data?.notes ?? []).map(n => <NoteRow key={n.id} n={n} areas={areas.data?.areas} />)}
+            {rows.map(n => <NoteRow key={n.id} n={n} areas={areas.data?.areas} />)}
           </div>
+          {notes.hasNextPage && (
+            <div className="mt-3 flex justify-center">
+              <Btn kind="ghost" busy={notes.isFetchingNextPage} onClick={() => notes.fetchNextPage()}>
+                Load more · {rows.length} of {total}
+              </Btn>
+            </div>
+          )}
         </div>
       </div>
     </section>
