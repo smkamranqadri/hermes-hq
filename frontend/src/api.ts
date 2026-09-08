@@ -209,6 +209,22 @@ export const useNotes = (p: { status?: string; area_id?: number; project_id?: nu
 }
 export const useNote = (id: number) =>
   useQuery({ queryKey: ['note', id], queryFn: () => get<NoteFull>(`/api/note/${id}`), enabled: Number.isFinite(id), refetchInterval: NOTES_REFETCH })
+
+// Related-notes card (Library polish Slice D): three labelled groups, each
+// capped server-side with a `more` count. `linked` items are either a full
+// Note (kind: 'note') or a NoteLink-shaped task/schedule target (kind:
+// 'task'|'schedule'); `shared_tags`/`same_area` items are always a full Note
+// plus (for shared_tags) the tags that matched.
+export type RelatedNoteItem = Note & { kind: 'note'; shared_tags?: string[] }
+export type RelatedLinkItem = { kind: 'task' | 'schedule'; target_id: number; target: NoteLink['target']; created_at: number }
+export type RelatedGroup<T> = { items: T[]; more: number }
+export type RelatedNotes = {
+  linked: RelatedGroup<RelatedNoteItem | RelatedLinkItem>
+  shared_tags: RelatedGroup<RelatedNoteItem>
+  same_area: RelatedGroup<RelatedNoteItem>
+}
+export const useRelatedNotes = (id: number) =>
+  useQuery({ queryKey: ['note-related', id], queryFn: () => get<RelatedNotes>(`/api/note/${id}/related`), enabled: Number.isFinite(id), refetchInterval: NOTES_REFETCH })
 export const useProjectNotes = (slug: string) =>
   useQuery({ queryKey: ['project-notes', slug], queryFn: () => get<{ notes: Note[] }>(`/api/project/${slug}/notes`), refetchInterval: NOTES_REFETCH })
 export const useTaskNotes = (id: number) =>

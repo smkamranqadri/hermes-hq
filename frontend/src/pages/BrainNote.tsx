@@ -4,21 +4,47 @@
 import { useState } from 'react'
 import { Link, useLocation, useNavigate, useParams } from 'react-router-dom'
 import { useQueryClient } from '@tanstack/react-query'
-import { post, useNote, when } from '../api'
+import { post, useNote, useRelatedNotes, when, type RelatedLinkItem, type RelatedNoteItem } from '../api'
 import { GlassCard } from '../components/GlassCard'
 import { Markdown } from '../components/chat/Markdown'
-import { AttachToNote, DisputedChip, FileNoteModal, NewReminderFromNoteModal, NewTaskFromNoteModal, NoteAttachments, ProposalBanner, TYPE_TONE } from '../components/brain'
+import { AttachToNote, DisputedChip, FileNoteModal, NewReminderFromNoteModal, NewTaskFromNoteModal, NoteAttachments, NoteRow, ProposalBanner, TYPE_TONE } from '../components/brain'
 import { Btn, ConfirmModal, TextArea } from '../components/Modal'
-import { Chip, Crumbs, Empty, Label, Loading } from '../components/ui'
+import { Chip, Crumbs, Empty, Label, Loading, Skeleton } from '../components/ui'
 import { useToast } from '../components/Toast'
 import { usePageTitle } from '../usePageTitle'
 import clsx from 'clsx'
+
+function LinkedTargetRow({ item }: { item: RelatedLinkItem }) {
+  return (
+    <div className="flex flex-wrap items-center gap-2">
+      <Chip tone="accent">{item.kind === 'task' ? 'task' : 'reminder'}</Chip>
+      {item.kind === 'task'
+        ? <Link to={`/tasks/${item.target_id}`} className="hover:text-accent-2">#{item.target_id} — {item.target?.title ?? '(deleted)'}</Link>
+        : <Link to="/schedules" className="hover:text-accent-2">{item.target?.name ?? '(deleted)'} <span className="font-mono text-[10px] text-muted">{item.target?.cron}</span></Link>}
+      {item.kind === 'task' && item.target?.status && <Chip>{item.target.status}</Chip>}
+    </div>
+  )
+}
+
+/** The note↔note branch of a Linked item — kept separate from `NoteRow` so a
+ * conflicting pair still surfaces the DisputedChip the old Linked card had. */
+function LinkedNoteRow({ item, from }: { item: RelatedNoteItem; from: string }) {
+  return (
+    <div className="flex flex-wrap items-center gap-2">
+      <Chip tone="accent">{item.disputed ? 'conflicts with' : 'note'}</Chip>
+      <Link to={`/brain/note/${item.id}`} state={{ from }} className="hover:text-accent-2">#{item.id} — {item.title}</Link>
+      {!!item.disputed && <DisputedChip />}
+    </div>
+  )
+}
 
 export function BrainNote() {
   const { id = '' } = useParams()
   const nid = Number(id)
   const q = useNote(nid)
   const n = q.data
+  const relatedQ = useRelatedNotes(nid)
+  const related = relatedQ.data
   usePageTitle(n?.title ?? `Note #${id}`)
   const qc = useQueryClient(); const toast = useToast(); const nav = useNavigate()
   const loc = useLocation()
@@ -142,21 +168,64 @@ export function BrainNote() {
         </div>
       </GlassCard>
 
-      {n.links.length > 0 && (
+      {related && (related.linked.items.length > 0 || related.shared_tags.items.length > 0 || related.same_area.items.length > 0) && (
         <GlassCard>
-          <Label>Linked</Label>
-          <div className="mt-2 flex flex-col gap-2 text-sm">
-            {n.links.map(l => (
-              <div key={`${l.kind}-${l.target_id}`} className="flex flex-wrap items-center gap-2">
-                <Chip tone="accent">{l.kind === 'task' ? 'task' : l.kind === 'note' ? 'conflicts with' : 'reminder'}</Chip>
-                {l.kind === 'task' && <Link to={`/tasks/${l.target_id}`} className="hover:text-accent-2">#{l.target_id} — {l.target?.title ?? '(deleted)'}</Link>}
-                {l.kind === 'schedule' && <Link to="/schedules" className="hover:text-accent-2">{l.target?.name ?? '(deleted)'} <span className="font-mono text-[10px] text-muted">{l.target?.cron}</span></Link>}
-                {l.kind === 'note' && <Link to={`/brain/note/${l.target_id}`} state={{ from: loc.pathname + loc.search }} className="hover:text-accent-2">#{l.target_id} — {l.target?.title ?? '(deleted)'}</Link>}
-                {l.kind === 'task' && l.target?.status && <Chip>{l.target.status}</Chip>}
-                {l.kind === 'note' && !!l.target?.disputed && <DisputedChip />}
+          <Label>Related</Label>
+          <div className="mt-2 flex flex-col gap-4">
+            {related.linked.items.length > 0 && (
+              <div>
+                <p className="mb-2 font-mono text-[10px] uppercase tracking-wider text-muted">Linked</p>
+                <div className="flex flex-col gap-2 text-sm">
+                  {related.linked.items.map(item => item.kind === 'note'
+                    ? <LinkedNoteRow key={`note-${item.id}`} item={item} from={loc.pathname + loc.search} />
+                    : <LinkedTargetRow key={`${item.kind}-${item.target_id}`} item={item} />)}
+                </div>
               </div>
-            ))}
+            )}
+            {related.shared_tags.items.length > 0 && (
+              <div>
+                <div className="mb-2 flex items-center justify-between gap-2">
+                  <p className="font-mono text-[10px] uppercase tracking-wider text-muted">Shared tags</p>
+                  {related.shared_tags.more > 0 && n.tags[0] && (
+                    <Link to={`/brain/library?tag=${encodeURIComponent(n.tags[0])}`} className="text-[11px] text-accent-2 hover:underline">more ({related.shared_tags.more})</Link>
+                  )}
+                </div>
+                <div className="flex flex-col gap-2">
+                  {related.shared_tags.items.map(item => (
+                    <div key={`shared-${item.id}`} className="flex flex-col gap-1">
+                      <NoteRow n={item} showBody={false} />
+                      {!!item.shared_tags?.length && <p className="pl-1 text-[11px] text-muted">via {item.shared_tags.join(', ')}</p>}
+                    </div>
+                  ))}
+                </div>
+              </div>
+            )}
+            {related.same_area.items.length > 0 && (
+              <div>
+                <div className="mb-2 flex items-center justify-between gap-2">
+                  <p className="font-mono text-[10px] uppercase tracking-wider text-muted">Same area</p>
+                  {related.same_area.more > 0 && !!n.area_id && (
+                    <Link to={`/brain/library?area=${n.area_id}`} className="text-[11px] text-accent-2 hover:underline">more ({related.same_area.more})</Link>
+                  )}
+                </div>
+                <div className="flex flex-col gap-2">
+                  {related.same_area.items.map(item => <NoteRow key={`area-${item.id}`} n={item} showBody={false} />)}
+                </div>
+              </div>
+            )}
           </div>
+        </GlassCard>
+      )}
+      {relatedQ.isLoading && (
+        <GlassCard>
+          <Label>Related</Label>
+          <div className="mt-2"><Skeleton rows={3} /></div>
+        </GlassCard>
+      )}
+      {relatedQ.isError && (
+        <GlassCard>
+          <Label>Related</Label>
+          <p className="mt-2 text-xs text-error">Could not load related notes.</p>
         </GlassCard>
       )}
     </section>
