@@ -4995,6 +4995,196 @@ def _note_links(conn, note_id):
     return out
 
 
+def _enrich_note_rows(conn, rows):
+    """Attach entry_count, attachment_counts, pending_proposal_id and
+    awaiting_transcript to already-decoded note rows, IN PLACE — one batched
+    query per field, scoped to just these rows' ids so neither caller
+    (`list_notes`'s page, or a specific id set from `related_notes`) scans
+    the whole notes table or re-queries note-by-note. Also truncates long
+    bodies the way lists always have. Returns `rows` for convenience."""
+    if not rows:
+        return rows
+    ids = [r["id"] for r in rows]
+    ph = ",".join("?" * len(ids))
+    pending = {r["note_id"]: r["pid"] for r in conn.execute(
+        "SELECT note_id, MAX(id) AS pid FROM proposals WHERE status='pending' "
+        "AND note_id IN (%s) GROUP BY note_id" % ph, ids)}
+    att_counts = {}
+    for r in conn.execute("SELECT note_id, kind, COUNT(*) AS n FROM note_attachments "
+                          "WHERE note_id IN (%s) GROUP BY note_id, kind" % ph, ids):
+        att_counts.setdefault(r["note_id"], {})[r["kind"]] = r["n"]
+    voice_only = {r["id"] for r in conn.execute(
+        "SELECT n.id FROM notes n WHERE (%s) AND n.id IN (%s)" % (VOICE_ONLY_SQL, ph), ids)}
+    entry_counts = {r["note_id"]: r["n"] for r in conn.execute(
+        "SELECT note_id, COUNT(*) AS n FROM note_entries WHERE note_id IN (%s) "
+        "GROUP BY note_id" % ph, ids)}
+    for r in rows:
+        if r["body"] and len(r["body"]) > 400:
+            r["body"] = r["body"][:400]
+            r["body_truncated"] = True
+        r["entry_count"] = entry_counts.get(r["id"], 0)
+        r["pending_proposal_id"] = pending.get(r["id"])
+        r["attachment_counts"] = att_counts.get(r["id"], {})
+        r["awaiting_transcript"] = r["id"] in voice_only
+    return rows
+
+
+def _bulk_note_rows(conn, ids):
+    """Decode + enrich a specific set of notes the same way `list_notes`
+    enriches its page — scoped to just `ids` so callers like `related_notes`
+    never loop the whole table. Returns {id: row}."""
+    if not ids:
+        return {}
+    ph = ",".join("?" * len(ids))
+    rows = [_decode_note(r) for r in conn.execute(
+        "SELECT * FROM notes WHERE id IN (%s)" % ph, ids).fetchall()]
+    if not rows:
+        return {}
+    _enrich_note_rows(conn, rows)
+    return {r["id"]: r for r in rows}
+
+
+def related_notes(note_id, cap=6, db_path=None):
+    """Three labelled groups for the note page's Related card, or None when
+    `note_id` does not exist:
+
+    - linked: existing `note_links` targets in BOTH directions (a link is
+      stored one-directional from the linker, so a note that was linked TO
+      — e.g. an append_entry target — must resolve it as a reverse hit here,
+      not just the note that created the link). Notes resolve to the full
+      `list_notes` row shape (`kind: "note"`); tasks/schedules resolve to the
+      `_note_links` target shape (`kind: "task"|"schedule"`).
+    - shared_tags: other active notes sharing >=1 tag, most-shared-first then
+      newest, excluding self and anything already in `linked`. Each item
+      carries `shared_tags` (which tags matched).
+    - same_area: other active notes in the same area, newest first, excluding
+      self and everything already surfaced above. Empty when this note has
+      no area.
+
+    Each group is capped at `cap`; `more` is the count beyond the cap.
+    """
+    conn = _connect(db_path)
+    try:
+        base_row = conn.execute("SELECT * FROM notes WHERE id=?", (note_id,)).fetchone()
+        if base_row is None:
+            return None
+        base = _decode_note(base_row)
+
+        # ---- linked: forward links (this note is the linker) plus reverse
+        # note-links (some other note linked TO this one). Tasks/schedules
+        # can only ever be forward — those tables don't originate links here.
+        forward = conn.execute(
+            "SELECT * FROM note_links WHERE note_id=? ORDER BY created_at",
+            (note_id,)).fetchall()
+        reverse = conn.execute(
+            "SELECT * FROM note_links WHERE kind='note' AND target_id=? "
+            "ORDER BY created_at", (note_id,)).fetchall()
+
+        linked_raw = []             # (created_at, kind, related_id)
+        seen_note_ids = set()
+        for l in forward:
+            if l["kind"] == "note":
+                if l["target_id"] == note_id or l["target_id"] in seen_note_ids:
+                    continue
+                seen_note_ids.add(l["target_id"])
+                linked_raw.append((l["created_at"], "note", l["target_id"]))
+            else:
+                linked_raw.append((l["created_at"], l["kind"], l["target_id"]))
+        for l in reverse:
+            if l["note_id"] == note_id or l["note_id"] in seen_note_ids:
+                continue
+            seen_note_ids.add(l["note_id"])
+            linked_raw.append((l["created_at"], "note", l["note_id"]))
+        linked_raw.sort(key=lambda t: t[0] or 0)   # created_at is nullable
+
+        linked_page = linked_raw[:cap]
+        linked_more = max(0, len(linked_raw) - cap)
+        linked_note_rows = _bulk_note_rows(
+            conn, [i for (_, k, i) in linked_page if k == "note"])
+        linked_items = []
+        for created_at, kind, target_id in linked_page:
+            if kind == "note":
+                row = linked_note_rows.get(target_id)
+                item = dict(row) if row else {"id": target_id, "title": "(deleted)"}
+                item["kind"] = "note"
+            elif kind == "task":
+                t = conn.execute("SELECT id, title, status FROM tasks WHERE id=?",
+                                 (target_id,)).fetchone()
+                item = {"kind": "task", "target_id": target_id,
+                        "target": dict(t) if t else None, "created_at": created_at}
+            else:  # schedule
+                s = conn.execute("SELECT id, name, cron, enabled FROM schedules WHERE id=?",
+                                 (target_id,)).fetchone()
+                item = {"kind": "schedule", "target_id": target_id,
+                        "target": dict(s) if s else None, "created_at": created_at}
+            linked_items.append(item)
+
+        excluded_ids = seen_note_ids | {note_id}
+
+        # ---- shared_tags: SQL join over json_each, not a Python scan of the
+        # whole table — a note with many tags still costs one grouped query.
+        shared_items, shared_more = [], 0
+        tags = base["tags"]
+        if tags:
+            tag_ph = ",".join("?" * len(tags))
+            # COUNT(DISTINCT ...) — a note with a duplicate tag in its own
+            # (malformed) tags list must not out-rank a note with more
+            # actually-distinct shared tags.
+            rows = conn.execute(
+                "SELECT n.id AS id, COUNT(DISTINCT je.value) AS shared_count "
+                "FROM notes n, json_each(n.tags) je "
+                "WHERE je.value IN (%s) AND n.status <> 'archived' "
+                "AND json_valid(n.tags) AND n.id <> ? "
+                "GROUP BY n.id "
+                "ORDER BY shared_count DESC, COALESCE(n.updated_at, n.created_at) DESC"
+                % tag_ph, (*tags, note_id)).fetchall()
+            candidates = [r["id"] for r in rows if r["id"] not in excluded_ids]
+            shared_more = max(0, len(candidates) - cap)
+            page_ids = candidates[:cap]
+            note_rows = _bulk_note_rows(conn, page_ids)
+            matched = {}
+            if page_ids:
+                id_ph = ",".join("?" * len(page_ids))
+                for tr in conn.execute(
+                        "SELECT DISTINCT n.id AS id, je.value AS tag "
+                        "FROM notes n, json_each(n.tags) je "
+                        "WHERE je.value IN (%s) AND n.id IN (%s)" % (tag_ph, id_ph),
+                        (*tags, *page_ids)):
+                    matched.setdefault(tr["id"], []).append(tr["tag"])
+            for nid in page_ids:
+                item = dict(note_rows.get(nid, {"id": nid}))
+                item["kind"] = "note"
+                item["shared_tags"] = matched.get(nid, [])
+                shared_items.append(item)
+            # "excluding self and the above" for same_area means EVERY tag
+            # match, not just the capped page shown here.
+            excluded_ids |= set(candidates)
+
+        # ---- same_area: skip entirely when this note has no area.
+        same_area_items, same_area_more = [], 0
+        if base["area_id"]:
+            rows = conn.execute(
+                "SELECT id FROM notes WHERE area_id=? AND status <> 'archived' "
+                "AND id <> ? ORDER BY COALESCE(updated_at, created_at) DESC",
+                (base["area_id"], note_id)).fetchall()
+            candidates = [r["id"] for r in rows if r["id"] not in excluded_ids]
+            same_area_more = max(0, len(candidates) - cap)
+            page_ids = candidates[:cap]
+            note_rows = _bulk_note_rows(conn, page_ids)
+            for nid in page_ids:
+                item = dict(note_rows.get(nid, {"id": nid}))
+                item["kind"] = "note"
+                same_area_items.append(item)
+
+        return {
+            "linked": {"items": linked_items, "more": linked_more},
+            "shared_tags": {"items": shared_items, "more": shared_more},
+            "same_area": {"items": same_area_items, "more": same_area_more},
+        }
+    finally:
+        conn.close()
+
+
 def list_notes(status=None, area_id=None, project_id=None, note_type=None,
                authored_by=None, tag=None, limit=200, offset=0, owner_first=False,
                exclude_archived=False, db_path=None):
@@ -5046,28 +5236,10 @@ def list_notes(status=None, area_id=None, project_id=None, note_type=None,
     conn = _connect(db_path)
     try:
         rows = [_decode_note(r) for r in conn.execute(sql, params).fetchall()]
-        pending = {r["note_id"]: r["pid"] for r in conn.execute(
-            "SELECT note_id, MAX(id) AS pid FROM proposals "
-            "WHERE status='pending' GROUP BY note_id")}
-        att_counts = {}
-        for r in conn.execute("SELECT note_id, kind, COUNT(*) AS n "
-                              "FROM note_attachments GROUP BY note_id, kind"):
-            att_counts.setdefault(r["note_id"], {})[r["kind"]] = r["n"]
-        voice_only = {r["id"] for r in conn.execute(
-            "SELECT n.id FROM notes n WHERE %s" % VOICE_ONLY_SQL)}
-        for r in rows:
-            if r["body"] and len(r["body"]) > 400:
-                r["body"] = r["body"][:400]
-                r["body_truncated"] = True
-            r["entry_count"] = conn.execute(
-                "SELECT COUNT(*) AS n FROM note_entries WHERE note_id=?",
-                (r["id"],)).fetchone()["n"]
-            # the review queue owns the decision: lists surface that a note is
-            # already in the librarian's hands so the owner isn't double-filing
-            r["pending_proposal_id"] = pending.get(r["id"])
-            r["attachment_counts"] = att_counts.get(r["id"], {})
-            # 2c: waiting on the owner to say what the memo said
-            r["awaiting_transcript"] = r["id"] in voice_only
+        # the review queue owns the decision: lists surface that a note is
+        # already in the librarian's hands so the owner isn't double-filing.
+        # 2c: awaiting_transcript says a memo is waiting on the owner's words.
+        _enrich_note_rows(conn, rows)
         return _with_project_names(conn, rows)
     finally:
         conn.close()

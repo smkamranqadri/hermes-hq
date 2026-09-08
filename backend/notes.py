@@ -147,6 +147,16 @@ def note(note_id: int):
     return n
 
 
+@router.get("/note/{note_id}/related")
+def note_related(note_id: int):
+    """Related-notes card: linked / shared-tags / same-area, each capped and
+    labelled with a `more` count (core.wm_store.related_notes)."""
+    r = store.related_notes(note_id, db_path=_db())
+    if r is None:
+        raise HTTPException(404, "no such note")
+    return r
+
+
 @router.post("/notes")
 def create_note(body: NoteIn):
     nid = _engine(store.create_note, body.title, body=body.body,
