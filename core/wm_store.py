@@ -4992,17 +4992,23 @@ def _note_links(conn, note_id):
 
 def list_notes(status=None, area_id=None, project_id=None, note_type=None,
                authored_by=None, tag=None, limit=200, offset=0, owner_first=False,
-               db_path=None):
+               exclude_archived=False, db_path=None):
     """Filtered note list, newest-updated first. Bodies truncated for lists.
     Filters compose (2b-ii: tag/project within an area selection).
     owner_first (Phase 3): sort owner-authored notes ahead of imported ones —
     the librarian's inbox worklist, so a real capture is never stuck behind an
-    import wave."""
+    import wave.
+    exclude_archived: everything EXCEPT the museum. `status` takes one value, so
+    "not archived" (inbox + active) cannot be expressed as a status — which is
+    why the Library's default view was showing archived notes mixed in with
+    live ones."""
     sql, params = "SELECT * FROM notes WHERE 1=1", []
     if status is not None:
         if status not in NOTE_STATUSES:
             raise ValueError("invalid status filter %r" % status)
         sql += " AND status=?"; params.append(status)
+    if exclude_archived:
+        sql += " AND status <> 'archived'"
     if tag is not None:
         if not isinstance(tag, str) or not tag.strip():
             raise ValueError("invalid tag filter %r" % (tag,))

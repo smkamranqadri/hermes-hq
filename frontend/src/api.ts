@@ -202,7 +202,7 @@ export const NOTES_REFETCH = 15000
 export const useAreas = () => useQuery({ queryKey: ['areas'], queryFn: () => get<{ areas: Area[] }>('/api/areas') })
 export const useNotesTree = () => useQuery({ queryKey: ['notes-tree'], queryFn: () => get<NotesTree>('/api/notes/tree'), refetchInterval: NOTES_REFETCH })
 export const useNoteTags = () => useQuery({ queryKey: ['note-tags'], queryFn: () => get<{ tags: { tag: string; count: number }[] }>('/api/notes/tags') })
-export const useNotes = (p: { status?: string; area_id?: number; project_id?: number; type?: string; tag?: string; q?: string; limit?: number }) => {
+export const useNotes = (p: { status?: string; area_id?: number; project_id?: number; type?: string; tag?: string; q?: string; limit?: number; exclude_archived?: boolean }) => {
   const qs = new URLSearchParams()
   Object.entries(p).forEach(([k, v]) => { if (v !== undefined && v !== '' && v !== null) qs.set(k, String(v)) })
   return useQuery({ queryKey: ['notes', p], queryFn: () => get<{ notes: Note[] }>(`/api/notes?${qs}`), refetchInterval: NOTES_REFETCH })

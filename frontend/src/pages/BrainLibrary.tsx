@@ -46,16 +46,22 @@ export function BrainLibrary() {
     v ? n.set(k, v) : n.delete(k)
     setSp(n, { replace: true })
   }
+  // The default view hides the museum. `status` holds ONE value, so "not
+  // archived" (inbox + active) needs its own flag — without it the default
+  // listed archived notes beside live ones under an option labelled "Active".
+  const scoped = { area_id: areaSel ? Number(areaSel) : undefined, project_id: projSel ? Number(projSel) : undefined, type: typeSel ?? undefined, tag: tagSel ?? undefined, limit: 100 }
   const filters = q
     ? { q, limit: 100 }
-    : view === 'archived' ? { status: 'archived', limit: 100 }
-    : view === 'inbox' ? { status: 'inbox', limit: 100 }
-    : { status: undefined as string | undefined, area_id: areaSel ? Number(areaSel) : undefined, project_id: projSel ? Number(projSel) : undefined, type: typeSel ?? undefined, tag: tagSel ?? undefined, limit: 100 }
+    : view === 'archived' ? { ...scoped, status: 'archived' }
+    : view === 'inbox' ? { ...scoped, status: 'inbox' }
+    : view === 'filed' ? { ...scoped, status: 'active' }
+    : view === 'all' ? scoped
+    : { ...scoped, exclude_archived: true }
   const notes = useNotes(filters)
   const roots = (tree.data?.areas ?? []).filter(a => !a.parent_id)
   const children = (id: number) => (tree.data?.areas ?? []).filter(a => a.parent_id === id)
   const projName = projSel ? tree.data?.projects.find(p => String(p.id) === projSel)?.name : undefined
-  const baseLabel = q ? `“${q}”` : view === 'archived' ? 'Archive' : view === 'inbox' ? 'Inbox' : typeSel ? typeSel + 's' : projSel && !areaSel ? projName ?? 'Project' : areaSel ? (tree.data?.areas ?? []).find(a => String(a.id) === areaSel)?.name ?? 'Area' : 'All notes'
+  const baseLabel = q ? `“${q}”` : view === 'archived' ? 'Archive' : view === 'inbox' ? 'Inbox' : view === 'filed' ? 'Filed' : view === 'all' ? 'All notes (incl. archive)' : typeSel ? typeSel + 's' : projSel && !areaSel ? projName ?? 'Project' : areaSel ? (tree.data?.areas ?? []).find(a => String(a.id) === areaSel)?.name ?? 'Area' : 'Not archived'
   const selLabel = baseLabel
     + (areaSel && projSel ? ` · ${projName ?? 'project'}` : '')
     + (tagSel && !q && !view ? ` · #${tagSel}` : '')
@@ -80,7 +86,11 @@ export function BrainLibrary() {
           {['note', 'playbook', 'wiki'].map(t => <option key={t}>{t}</option>)}
         </Select>
         <Select value={view ?? ''} onChange={e => pick('view', e.target.value || null)}>
-          <option value="">Active</option><option value="inbox">Inbox</option><option value="archived">Archive</option>
+          <option value="">Not archived</option>
+          <option value="inbox">Inbox</option>
+          <option value="filed">Filed</option>
+          <option value="archived">Archive</option>
+          <option value="all">All (incl. archive)</option>
         </Select>
       </div>
 
@@ -88,7 +98,8 @@ export function BrainLibrary() {
         <div className="hidden lg:block">
           <div className="glass rounded-xl p-2">
             {tree.isLoading && <Loading rows={4} />}
-            <TreeRow label="All notes" active={!areaSel && !projSel && !typeSel && !view && !q} onClick={() => pick('area', null)} />
+            {/* Honest label: this view hides the Archive, which has its own row. */}
+            <TreeRow label="Not archived" active={!areaSel && !projSel && !typeSel && !view && !q} onClick={() => pick('area', null)} />
             <TreeRow label="Inbox" count={tree.data?.counts?.inbox} active={view === 'inbox'} onClick={() => pick('view', 'inbox')} />
             <p className="mt-2 px-2 font-mono text-[10px] uppercase tracking-widest text-muted">Areas</p>
             {roots.map(r => (

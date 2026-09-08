@@ -325,3 +325,51 @@ def test_a_failed_area_approval_creates_no_area(env):
     assert len(store.list_areas(db_path=db)) == before
     assert store.get_proposal(pid, db_path=db)["status"] == "pending"
     assert store.get_proposal(pid, db_path=db)["payload"]["new_area"]["name"] == "Gardening"
+
+
+# ---- the Library's default view must hide the museum --------------------
+
+def test_exclude_archived_returns_inbox_and_active_but_not_archive(env):
+    """`status` holds ONE value, so "not archived" cannot be expressed as a
+    status — which is why the Library default (labelled "Active") listed
+    archived notes beside live ones. Wave 1 made that unusable: 57 archived
+    notes interleaved with the ones the owner is triaging."""
+    c, store, db = env
+    inbox = store.create_note("captured", body="x", db_path=db)
+    active = store.create_note("filed", body="x", status="active", db_path=db)
+    arch = store.create_note("museum", body="x", status="archived", db_path=db)
+
+    every = {n["id"] for n in store.list_notes(limit=500, db_path=db)}
+    assert every == {inbox, active, arch}            # unfiltered is unchanged
+
+    live = {n["id"] for n in store.list_notes(exclude_archived=True, limit=500,
+                                              db_path=db)}
+    assert live == {inbox, active}                   # the museum is gone
+    assert arch not in live
+
+
+def test_exclude_archived_composes_with_the_other_filters(env):
+    """2b-ii's rule is that filters compose. Archive-hiding must narrow an area
+    selection, not replace it."""
+    c, store, db = env
+    work = area_id(store, db, "Work")
+    home = area_id(store, db, "Home")
+    keep = store.create_note("work live", body="x", status="active",
+                             area_id=work, db_path=db)
+    store.create_note("work museum", body="x", status="archived",
+                      area_id=work, db_path=db)
+    store.create_note("home live", body="x", status="active",
+                      area_id=home, db_path=db)
+    got = store.list_notes(area_id=work, exclude_archived=True, limit=500, db_path=db)
+    assert [n["id"] for n in got] == [keep]
+
+
+def test_notes_api_exposes_the_filter(env):
+    c, store, db = env
+    store.create_note("live one", body="x", status="active", db_path=db)
+    store.create_note("museum one", body="x", status="archived", db_path=db)
+    login(c)
+    every = c.get("/api/notes").json()["notes"]
+    live = c.get("/api/notes?exclude_archived=true").json()["notes"]
+    assert len(every) == 2 and len(live) == 1
+    assert live[0]["title"] == "live one"
