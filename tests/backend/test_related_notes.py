@@ -68,6 +68,48 @@ def test_linked_includes_forward_and_reverse_notes(env):
     assert [it["id"] for it in rb["linked"]["items"] if it["kind"] == "note"] == [a]
 
 
+def test_linked_dedupes_a_bidirectional_pair(env):
+    c, store, db = env
+    login(c)
+    a = _note(store, db, "A")
+    b = _note(store, db, "B")
+    # A contradiction approval links BOTH directions (two distinct rows:
+    # (a,note,b) and (b,note,a)) — A's own page must show B once, not twice.
+    store.link_note(a, "note", b, db_path=db)
+    store.link_note(b, "note", a, db_path=db)
+    r = c.get("/api/note/%d/related" % a).json()
+    note_items = [it for it in r["linked"]["items"] if it["kind"] == "note"]
+    assert [it["id"] for it in note_items] == [b]
+
+
+def test_linked_null_created_at_does_not_500(env):
+    c, store, db = env
+    login(c)
+    a = _note(store, db, "A")
+    b = _note(store, db, "B")
+    conn = store._connect(db)
+    with conn:
+        conn.execute("INSERT INTO note_links(note_id, kind, target_id, created_at) "
+                     "VALUES(?,?,?,NULL)", (a, "note", b))
+    conn.close()
+    r = c.get("/api/note/%d/related" % a)
+    assert r.status_code == 200
+    note_items = [it for it in r.json()["linked"]["items"] if it["kind"] == "note"]
+    assert [it["id"] for it in note_items] == [b]
+
+
+def test_linked_cap_and_more(env):
+    c, store, db = env
+    login(c)
+    base = _note(store, db, "base")
+    targets = [_note(store, db, "linked %d" % i) for i in range(8)]
+    for t in targets:
+        store.link_note(base, "note", t, db_path=db)
+    r = c.get("/api/note/%d/related" % base).json()
+    assert len(r["linked"]["items"]) == 6
+    assert r["linked"]["more"] == 2
+
+
 def test_linked_carries_task_and_schedule_shape(env):
     c, store, db = env
     h = login(c)
@@ -143,6 +185,24 @@ def test_same_area_excludes_self_linked_and_shared(env):
     assert linked not in same_area_ids
     assert shared not in same_area_ids
     assert base not in same_area_ids
+
+
+def test_same_area_excludes_all_shared_tag_matches_beyond_the_cap(env):
+    c, store, db = env
+    login(c)
+    work = _work_area(store, db)["id"]
+    base = _note(store, db, "base", tags=["shared"], area_id=work, status="active")
+    # 9 notes qualify for BOTH shared_tags (same tag) and same_area (same
+    # area). shared_tags shows only 6 of them, but ALL 9 must still be
+    # excluded from same_area — not just the 6 that made the cut.
+    overlap = [_note(store, db, "overlap %d" % i, tags=["shared"], area_id=work,
+                     status="active") for i in range(9)]
+    r = c.get("/api/note/%d/related" % base).json()
+    assert len(r["shared_tags"]["items"]) == 6
+    assert r["shared_tags"]["more"] == 3
+    same_area_ids = {it["id"] for it in r["same_area"]["items"]}
+    assert same_area_ids.isdisjoint(overlap)
+    assert same_area_ids == set()
 
 
 def test_same_area_excludes_archived(env):

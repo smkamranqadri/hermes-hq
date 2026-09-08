@@ -4995,18 +4995,17 @@ def _note_links(conn, note_id):
     return out
 
 
-def _bulk_note_rows(conn, ids):
-    """Decode + enrich a specific set of notes the same way `list_notes`
-    enriches its page (entry_count, attachment_counts, pending_proposal_id,
-    awaiting_transcript, truncated body) — scoped to just `ids` so callers
-    like `related_notes` never loop the whole table. Returns {id: row}."""
-    if not ids:
-        return {}
-    ph = ",".join("?" * len(ids))
-    rows = {r["id"]: _decode_note(r) for r in conn.execute(
-        "SELECT * FROM notes WHERE id IN (%s)" % ph, ids).fetchall()}
+def _enrich_note_rows(conn, rows):
+    """Attach entry_count, attachment_counts, pending_proposal_id and
+    awaiting_transcript to already-decoded note rows, IN PLACE — one batched
+    query per field, scoped to just these rows' ids so neither caller
+    (`list_notes`'s page, or a specific id set from `related_notes`) scans
+    the whole notes table or re-queries note-by-note. Also truncates long
+    bodies the way lists always have. Returns `rows` for convenience."""
     if not rows:
-        return {}
+        return rows
+    ids = [r["id"] for r in rows]
+    ph = ",".join("?" * len(ids))
     pending = {r["note_id"]: r["pid"] for r in conn.execute(
         "SELECT note_id, MAX(id) AS pid FROM proposals WHERE status='pending' "
         "AND note_id IN (%s) GROUP BY note_id" % ph, ids)}
@@ -5019,15 +5018,30 @@ def _bulk_note_rows(conn, ids):
     entry_counts = {r["note_id"]: r["n"] for r in conn.execute(
         "SELECT note_id, COUNT(*) AS n FROM note_entries WHERE note_id IN (%s) "
         "GROUP BY note_id" % ph, ids)}
-    for nid, r in rows.items():
+    for r in rows:
         if r["body"] and len(r["body"]) > 400:
             r["body"] = r["body"][:400]
             r["body_truncated"] = True
-        r["entry_count"] = entry_counts.get(nid, 0)
-        r["pending_proposal_id"] = pending.get(nid)
-        r["attachment_counts"] = att_counts.get(nid, {})
-        r["awaiting_transcript"] = nid in voice_only
+        r["entry_count"] = entry_counts.get(r["id"], 0)
+        r["pending_proposal_id"] = pending.get(r["id"])
+        r["attachment_counts"] = att_counts.get(r["id"], {})
+        r["awaiting_transcript"] = r["id"] in voice_only
     return rows
+
+
+def _bulk_note_rows(conn, ids):
+    """Decode + enrich a specific set of notes the same way `list_notes`
+    enriches its page — scoped to just `ids` so callers like `related_notes`
+    never loop the whole table. Returns {id: row}."""
+    if not ids:
+        return {}
+    ph = ",".join("?" * len(ids))
+    rows = [_decode_note(r) for r in conn.execute(
+        "SELECT * FROM notes WHERE id IN (%s)" % ph, ids).fetchall()]
+    if not rows:
+        return {}
+    _enrich_note_rows(conn, rows)
+    return {r["id"]: r for r in rows}
 
 
 def related_notes(note_id, cap=6, db_path=None):
@@ -5081,7 +5095,7 @@ def related_notes(note_id, cap=6, db_path=None):
                 continue
             seen_note_ids.add(l["note_id"])
             linked_raw.append((l["created_at"], "note", l["note_id"]))
-        linked_raw.sort(key=lambda t: t[0])
+        linked_raw.sort(key=lambda t: t[0] or 0)   # created_at is nullable
 
         linked_page = linked_raw[:cap]
         linked_more = max(0, len(linked_raw) - cap)
@@ -5113,8 +5127,11 @@ def related_notes(note_id, cap=6, db_path=None):
         tags = base["tags"]
         if tags:
             tag_ph = ",".join("?" * len(tags))
+            # COUNT(DISTINCT ...) — a note with a duplicate tag in its own
+            # (malformed) tags list must not out-rank a note with more
+            # actually-distinct shared tags.
             rows = conn.execute(
-                "SELECT n.id AS id, COUNT(*) AS shared_count "
+                "SELECT n.id AS id, COUNT(DISTINCT je.value) AS shared_count "
                 "FROM notes n, json_each(n.tags) je "
                 "WHERE je.value IN (%s) AND n.status <> 'archived' "
                 "AND json_valid(n.tags) AND n.id <> ? "
@@ -5129,7 +5146,8 @@ def related_notes(note_id, cap=6, db_path=None):
             if page_ids:
                 id_ph = ",".join("?" * len(page_ids))
                 for tr in conn.execute(
-                        "SELECT n.id AS id, je.value AS tag FROM notes n, json_each(n.tags) je "
+                        "SELECT DISTINCT n.id AS id, je.value AS tag "
+                        "FROM notes n, json_each(n.tags) je "
                         "WHERE je.value IN (%s) AND n.id IN (%s)" % (tag_ph, id_ph),
                         (*tags, *page_ids)):
                     matched.setdefault(tr["id"], []).append(tr["tag"])
@@ -5218,28 +5236,10 @@ def list_notes(status=None, area_id=None, project_id=None, note_type=None,
     conn = _connect(db_path)
     try:
         rows = [_decode_note(r) for r in conn.execute(sql, params).fetchall()]
-        pending = {r["note_id"]: r["pid"] for r in conn.execute(
-            "SELECT note_id, MAX(id) AS pid FROM proposals "
-            "WHERE status='pending' GROUP BY note_id")}
-        att_counts = {}
-        for r in conn.execute("SELECT note_id, kind, COUNT(*) AS n "
-                              "FROM note_attachments GROUP BY note_id, kind"):
-            att_counts.setdefault(r["note_id"], {})[r["kind"]] = r["n"]
-        voice_only = {r["id"] for r in conn.execute(
-            "SELECT n.id FROM notes n WHERE %s" % VOICE_ONLY_SQL)}
-        for r in rows:
-            if r["body"] and len(r["body"]) > 400:
-                r["body"] = r["body"][:400]
-                r["body_truncated"] = True
-            r["entry_count"] = conn.execute(
-                "SELECT COUNT(*) AS n FROM note_entries WHERE note_id=?",
-                (r["id"],)).fetchone()["n"]
-            # the review queue owns the decision: lists surface that a note is
-            # already in the librarian's hands so the owner isn't double-filing
-            r["pending_proposal_id"] = pending.get(r["id"])
-            r["attachment_counts"] = att_counts.get(r["id"], {})
-            # 2c: waiting on the owner to say what the memo said
-            r["awaiting_transcript"] = r["id"] in voice_only
+        # the review queue owns the decision: lists surface that a note is
+        # already in the librarian's hands so the owner isn't double-filing.
+        # 2c: awaiting_transcript says a memo is waiting on the owner's words.
+        _enrich_note_rows(conn, rows)
         return rows
     finally:
         conn.close()

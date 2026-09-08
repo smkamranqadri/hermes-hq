@@ -33,9 +33,23 @@ function LinkedNoteRow({ item, from }: { item: RelatedNoteItem; from: string }) 
     <div className="flex flex-wrap items-center gap-2">
       <Chip tone="accent">{item.disputed ? 'conflicts with' : 'note'}</Chip>
       <Link to={`/brain/note/${item.id}`} state={{ from }} className="hover:text-accent-2">#{item.id} — {item.title}</Link>
+      {/* append_entry archives its source — a linked note that's since been
+          archived shouldn't read as still live. */}
+      {item.status === 'archived' && <Chip>archived</Chip>}
       {!!item.disputed && <DisputedChip />}
     </div>
   )
+}
+
+/** The tag to send "more" to for the Shared-tags group: whichever tag
+ * appears most often across the shown items' `shared_tags` — `n.tags[0]`
+ * can be a tag none of the overflow notes actually matched on. */
+function topSharedTag(items: RelatedNoteItem[]): string | null {
+  const counts = new Map<string, number>()
+  for (const item of items) for (const t of item.shared_tags ?? []) counts.set(t, (counts.get(t) ?? 0) + 1)
+  let best: string | null = null; let bestCount = 0
+  for (const [t, n] of counts) if (n > bestCount) { best = t; bestCount = n }
+  return best
 }
 
 export function BrainNote() {
@@ -179,6 +193,9 @@ export function BrainNote() {
                   {related.linked.items.map(item => item.kind === 'note'
                     ? <LinkedNoteRow key={`note-${item.id}`} item={item} from={loc.pathname + loc.search} />
                     : <LinkedTargetRow key={`${item.kind}-${item.target_id}`} item={item} />)}
+                  {/* No Library view filters by "linked to note X" — say the
+                      count in plain text instead of a dead-end "more" link. */}
+                  {related.linked.more > 0 && <p className="text-[11px] text-muted">+{related.linked.more} more linked</p>}
                 </div>
               </div>
             )}
@@ -186,9 +203,12 @@ export function BrainNote() {
               <div>
                 <div className="mb-2 flex items-center justify-between gap-2">
                   <p className="font-mono text-[10px] uppercase tracking-wider text-muted">Shared tags</p>
-                  {related.shared_tags.more > 0 && n.tags[0] && (
-                    <Link to={`/brain/library?tag=${encodeURIComponent(n.tags[0])}`} className="text-[11px] text-accent-2 hover:underline">more ({related.shared_tags.more})</Link>
-                  )}
+                  {related.shared_tags.more > 0 && (() => {
+                    const tag = topSharedTag(related.shared_tags.items) ?? n.tags[0]
+                    return tag ? (
+                      <Link to={`/brain/library?tag=${encodeURIComponent(tag)}`} className="text-[11px] text-accent-2 hover:underline">more ({related.shared_tags.more}) · {tag}</Link>
+                    ) : null
+                  })()}
                 </div>
                 <div className="flex flex-col gap-2">
                   {related.shared_tags.items.map(item => (
@@ -222,7 +242,7 @@ export function BrainNote() {
           <div className="mt-2"><Skeleton rows={3} /></div>
         </GlassCard>
       )}
-      {relatedQ.isError && (
+      {relatedQ.isError && !related && (
         <GlassCard>
           <Label>Related</Label>
           <p className="mt-2 text-xs text-error">Could not load related notes.</p>
