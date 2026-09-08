@@ -88,6 +88,7 @@ Common contract for every slice: builder works on branch `polish/<slice>` in a w
 Area-descriptions interview (four taxonomy questions above, now over 18 areas — four with zero active notes: Health, Home, Journal, Study) → wave 2 per `intent/ImportPlan.md`.
 
 ## After shipping (2026-09-08)
+- **Item 3 outcome differs from the plan:** the owner rejected all five librarian `append_entry` proposals with "dup, archive one" — for the LIVE pairs he wants the duplicate archived, not merged as a Thought. Done (#113, #66 archived; the other pairs already had one side archived). The importer's Thought-merge stays for fresh imports; if a future wave's `merge_needed` rows come up, ask him again rather than assume merge.
 - Owner decisions during the run: Archive = archived-only in scope (A); **no origin tags on import** and `focus` stripped from the 97 live notes (the tag drowned the Related card); `authored_by` shown as provenance text, never a chip; no auto-reload after deploys (close/reopen the Home Screen app instead).
 - Card fix he reported as "not all tags": the card lacked the PROJECT chip — added in C.
 - Leftovers (minor, logged in State → Known debt): TagPicker shows zero-count taxonomy tags; sidebar not sticky; `BrightLane`/`brightlane` taxonomy near-duplicate; project select in the file modal counts only projects that hold notes.
