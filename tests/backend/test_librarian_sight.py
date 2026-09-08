@@ -373,3 +373,66 @@ def test_notes_api_exposes_the_filter(env):
     live = c.get("/api/notes?exclude_archived=true").json()["notes"]
     assert len(every) == 2 and len(live) == 1
     assert live[0]["title"] == "live one"
+
+
+# ---- search narrows the current view instead of replacing it ------------
+
+def test_search_respects_the_area_you_are_looking_at(env):
+    """Typing in the box used to throw the owner's selection away and search
+    the whole Library, so results appeared from areas they had filtered out."""
+    c, store, db = env
+    work, home = area_id(store, db, "Work"), area_id(store, db, "Home")
+    a = store.create_note("invoice process", body="stamp the invoice",
+                          status="active", area_id=work, db_path=db)
+    b = store.create_note("invoice for plumber", body="stamp the invoice",
+                          status="active", area_id=home, db_path=db)
+    assert {n["id"] for n in store.search_notes("invoice", db_path=db)} == {a, b}
+    assert [n["id"] for n in store.search_notes("invoice", area_id=work,
+                                                db_path=db)] == [a]
+
+
+def test_search_hides_the_archive_when_asked(env):
+    c, store, db = env
+    live = store.create_note("standup live", body="daily standup", status="active",
+                             db_path=db)
+    store.create_note("standup old", body="daily standup", status="archived",
+                      db_path=db)
+    assert len(store.search_notes("standup", db_path=db)) == 2
+    assert [n["id"] for n in store.search_notes("standup", exclude_archived=True,
+                                                db_path=db)] == [live]
+
+
+def test_search_scope_applies_to_the_like_fallback_too(env):
+    """A query FTS cannot parse falls back to LIKE — the scope must survive the
+    fallback, or filters silently stop working on exactly the odd queries."""
+    c, store, db = env
+    work = area_id(store, db, "Work")
+    a = store.create_note("odd one", body="pipe | star * paren (", status="active",
+                          area_id=work, db_path=db)
+    store.create_note("odd two", body="pipe | star * paren (", status="active",
+                      db_path=db)
+    got = store.search_notes("star *", area_id=work, db_path=db)
+    assert [n["id"] for n in got] == [a]
+
+
+def test_search_api_carries_the_filters(env):
+    c, store, db = env
+    work = area_id(store, db, "Work")
+    a = store.create_note("api scoped", body="findme", status="active",
+                          area_id=work, db_path=db)
+    store.create_note("api global", body="findme", status="active", db_path=db)
+    login(c)
+    assert len(c.get("/api/notes?q=findme").json()["notes"]) == 2
+    scoped = c.get("/api/notes?q=findme&area_id=%d" % work).json()["notes"]
+    assert [n["id"] for n in scoped] == [a]
+
+
+def test_unscoped_search_is_unchanged_for_the_librarian(env):
+    """`wm note search` passes no filters and must keep seeing everything —
+    scoping is a UI concern, not a new restriction on the agent."""
+    c, store, db = env
+    store.create_note("filed", body="needle", status="active",
+                      area_id=area_id(store, db, "Work"), db_path=db)
+    store.create_note("archived", body="needle", status="archived", db_path=db)
+    store.create_note("inbox", body="needle", db_path=db)
+    assert len(store.search_notes("needle", db_path=db)) == 3

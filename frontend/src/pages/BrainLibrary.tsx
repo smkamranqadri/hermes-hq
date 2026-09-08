@@ -41,7 +41,7 @@ export function BrainLibrary() {
   }
   // 2b-ii sub-filters: tag (anywhere) and project (within an area) REFINE the
   // current selection instead of replacing it.
-  const refine = (k: 'tag' | 'project', v: string | null) => {
+  const refine = (k: 'tag' | 'project' | 'arch', v: string | null) => {
     const n = new URLSearchParams(sp)
     v ? n.set(k, v) : n.delete(k)
     setSp(n, { replace: true })
@@ -49,19 +49,31 @@ export function BrainLibrary() {
   // The default view hides the museum. `status` holds ONE value, so "not
   // archived" (inbox + active) needs its own flag — without it the default
   // listed archived notes beside live ones under an option labelled "Active".
+  // Archive is a REFINE toggle beside tag/project, not a separate view: "All
+  // notes" stays the default selection and simply hides the museum unless the
+  // owner asks for it.
+  const showArch = sp.get('arch') === '1'
   const scoped = { area_id: areaSel ? Number(areaSel) : undefined, project_id: projSel ? Number(projSel) : undefined, type: typeSel ?? undefined, tag: tagSel ?? undefined, limit: 100 }
   const filters = q
-    ? { q, limit: 100 }
+    ? { ...scoped, q, exclude_archived: !showArch }
     : view === 'archived' ? { ...scoped, status: 'archived' }
     : view === 'inbox' ? { ...scoped, status: 'inbox' }
     : view === 'filed' ? { ...scoped, status: 'active' }
-    : view === 'all' ? scoped
-    : { ...scoped, exclude_archived: true }
+    : { ...scoped, exclude_archived: !showArch }
   const notes = useNotes(filters)
   const roots = (tree.data?.areas ?? []).filter(a => !a.parent_id)
   const children = (id: number) => (tree.data?.areas ?? []).filter(a => a.parent_id === id)
   const projName = projSel ? tree.data?.projects.find(p => String(p.id) === projSel)?.name : undefined
-  const baseLabel = q ? `“${q}”` : view === 'archived' ? 'Archive' : view === 'inbox' ? 'Inbox' : view === 'filed' ? 'Filed' : view === 'all' ? 'All notes (incl. archive)' : typeSel ? typeSel + 's' : projSel && !areaSel ? projName ?? 'Project' : areaSel ? (tree.data?.areas ?? []).find(a => String(a.id) === areaSel)?.name ?? 'Area' : 'Not archived'
+  const baseLabel = q ? `“${q}”` : view === 'archived' ? 'Archive' : view === 'inbox' ? 'Inbox' : view === 'filed' ? 'Filed' : typeSel ? typeSel + 's' : projSel && !areaSel ? projName ?? 'Project' : areaSel ? (tree.data?.areas ?? []).find(a => String(a.id) === areaSel)?.name ?? 'Area' : 'All notes'
+  // Clearing must not also throw away the area/tag the owner had selected —
+  // only the query goes.
+  const clearSearch = () => {
+    setDraft('')
+    const n = new URLSearchParams(sp); n.delete('q'); setSp(n, { replace: true })
+  }
+  const searchScope = areaSel ? ((tree.data?.areas ?? []).find(a => String(a.id) === areaSel)?.name ?? 'this area')
+    : view === 'archived' ? 'the Archive' : view === 'inbox' ? 'the Inbox'
+    : projSel ? (projName ?? 'this project') : 'the Library'
   const selLabel = baseLabel
     + (areaSel && projSel ? ` · ${projName ?? 'project'}` : '')
     + (tagSel && !q && !view ? ` · #${tagSel}` : '')
@@ -70,8 +82,18 @@ export function BrainLibrary() {
       <PageHeader crumb="second-brain // library" title="Library" right={
         <div className="flex flex-wrap items-center gap-2">
           <BrainSubNav inbox={inbox} review={review} />
-          <form onSubmit={e => { e.preventDefault(); const n = new URLSearchParams(sp); draft ? n.set('q', draft) : n.delete('q'); setSp(n, { replace: true }) }}>
-            <Input value={draft} onChange={e => setDraft(e.target.value)} placeholder="Search everything…" className="w-full sm:w-56" />
+          <form className="relative" onSubmit={e => { e.preventDefault(); const n = new URLSearchParams(sp); draft ? n.set('q', draft) : n.delete('q'); setSp(n, { replace: true }) }}>
+            {/* Search NARROWS the current selection, so the placeholder says
+              * where it is looking. Escape and the × both clear it and leave
+              * the owner exactly where they were. */}
+            <Input value={draft} onChange={e => setDraft(e.target.value)}
+                   onKeyDown={e => { if (e.key === 'Escape') clearSearch() }}
+                   placeholder={`Search ${searchScope}…`} className="w-full pr-8 sm:w-56" />
+            {(draft || q) && (
+              <button type="button" onClick={clearSearch} aria-label="Clear search"
+                      title="Clear search (Esc)"
+                      className="absolute right-2 top-1/2 -translate-y-1/2 px-1 text-muted hover:text-fg">✕</button>
+            )}
           </form>
         </div>} />
 
@@ -86,11 +108,10 @@ export function BrainLibrary() {
           {['note', 'playbook', 'wiki'].map(t => <option key={t}>{t}</option>)}
         </Select>
         <Select value={view ?? ''} onChange={e => pick('view', e.target.value || null)}>
-          <option value="">Not archived</option>
+          <option value="">All notes</option>
           <option value="inbox">Inbox</option>
           <option value="filed">Filed</option>
           <option value="archived">Archive</option>
-          <option value="all">All (incl. archive)</option>
         </Select>
       </div>
 
@@ -98,8 +119,7 @@ export function BrainLibrary() {
         <div className="hidden lg:block">
           <div className="glass rounded-xl p-2">
             {tree.isLoading && <Loading rows={4} />}
-            {/* Honest label: this view hides the Archive, which has its own row. */}
-            <TreeRow label="Not archived" active={!areaSel && !projSel && !typeSel && !view && !q} onClick={() => pick('area', null)} />
+            <TreeRow label="All notes" active={!areaSel && !projSel && !typeSel && !view && !q} onClick={() => pick('area', null)} />
             <TreeRow label="Inbox" count={tree.data?.counts?.inbox} active={view === 'inbox'} onClick={() => pick('view', 'inbox')} />
             <p className="mt-2 px-2 font-mono text-[10px] uppercase tracking-widest text-muted">Areas</p>
             {roots.map(r => (
@@ -126,8 +146,12 @@ export function BrainLibrary() {
             <Label>{selLabel}</Label>
             {notes.data && <span className="font-mono text-[10px] text-muted">{notes.data.notes.length} note{notes.data.notes.length === 1 ? '' : 's'}</span>}
           </div>
-          {!q && !view && (
+          {view !== 'archived' && (
             <div className="mb-3 flex flex-wrap gap-2">
+              <Select value={showArch ? '1' : ''} onChange={e => refine('arch', e.target.value || null)} aria-label="Archive filter">
+                <option value="">Archive hidden</option>
+                <option value="1">Archive included</option>
+              </Select>
               <Select value={tagSel ?? ''} onChange={e => refine('tag', e.target.value || null)} aria-label="Tag filter">
                 <option value="">All tags</option>
                 {(tags.data?.tags ?? []).map(t => <option key={t.tag} value={t.tag}>{t.tag} ({t.count})</option>)}

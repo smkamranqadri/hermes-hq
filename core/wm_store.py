@@ -5203,12 +5203,52 @@ def _with_entry_counts(conn, rows):
     return rows
 
 
-def search_notes(q, limit=50, db_path=None):
-    """Global note search: FTS5 (bm25-ranked) with a LIKE fallback.
-    Hits carry entry_count; area/project names are resolved by the caller."""
+def _scope_sql(status=None, area_id=None, project_id=None, note_type=None,
+               tag=None, exclude_archived=False):
+    """The same narrowing list_notes applies, as a reusable WHERE fragment.
+
+    Search used to ignore every filter and go global, so searching from inside
+    an area silently threw the area away — the owner's selection vanished the
+    moment they typed. One definition keeps browse and search agreeing.
+    """
+    sql, params = "", []
+    if status is not None:
+        if status not in NOTE_STATUSES:
+            raise ValueError("invalid status filter %r" % status)
+        sql += " AND n.status=?"; params.append(status)
+    if exclude_archived:
+        sql += " AND n.status <> 'archived'"
+    if area_id is not None:
+        sql += (" AND (n.area_id=? OR n.area_id IN "
+                "(SELECT id FROM areas WHERE parent_id=?))")
+        params += [area_id, area_id]
+    if project_id is not None:
+        sql += " AND n.project_id=?"; params.append(project_id)
+    if note_type is not None:
+        sql += " AND n.type=?"; params.append(note_type)
+    if tag is not None:
+        if not isinstance(tag, str) or not tag.strip():
+            raise ValueError("invalid tag filter %r" % (tag,))
+        sql += (" AND json_valid(n.tags) AND EXISTS "
+                "(SELECT 1 FROM json_each(n.tags) WHERE json_each.value = ?)")
+        params.append(tag.strip())
+    return sql, params
+
+
+def search_notes(q, limit=50, status=None, area_id=None, project_id=None,
+                 note_type=None, tag=None, exclude_archived=False, db_path=None):
+    """Note search: FTS5 (bm25-ranked) with a LIKE fallback.
+
+    Narrows by the SAME filters as list_notes, so searching inside an area
+    searches THAT area. Pass nothing to search the whole Library (what the
+    librarian does).
+    Hits carry entry_count; area/project names are resolved by the caller.
+    """
     q = (q or "").strip()
     if not q:
         return []
+    scope, scope_params = _scope_sql(status, area_id, project_id, note_type,
+                                     tag, exclude_archived)
     conn = _connect(db_path)
     try:
         if NOTES_FTS:
@@ -5218,16 +5258,18 @@ def search_notes(q, limit=50, db_path=None):
                                  for t in q.split() if t)
                 rows = conn.execute(
                     "SELECT n.*, bm25(notes_fts) AS rank FROM notes_fts f "
-                    "JOIN notes n ON n.id = f.rowid WHERE notes_fts MATCH ? "
-                    "ORDER BY rank LIMIT ?", (match, int(limit))).fetchall()
+                    "JOIN notes n ON n.id = f.rowid WHERE notes_fts MATCH ?"
+                    + scope + " ORDER BY rank LIMIT ?",
+                    [match] + scope_params + [int(limit)]).fetchall()
                 return _with_entry_counts(conn, [_decode_note(r) for r in rows])
             except sqlite3.OperationalError:
                 pass  # malformed query despite quoting — fall back to LIKE
         like = "%" + q + "%"
         rows = conn.execute(
-            "SELECT * FROM notes WHERE title LIKE ? OR body LIKE ? OR tags LIKE ? "
-            "ORDER BY COALESCE(updated_at, created_at) DESC LIMIT ?",
-            (like, like, like, int(limit))).fetchall()
+            "SELECT n.* FROM notes n WHERE (n.title LIKE ? OR n.body LIKE ? "
+            "OR n.tags LIKE ?)" + scope +
+            " ORDER BY COALESCE(n.updated_at, n.created_at) DESC LIMIT ?",
+            [like, like, like] + scope_params + [int(limit)]).fetchall()
         return _with_entry_counts(conn, [_decode_note(r) for r in rows])
     finally:
         conn.close()

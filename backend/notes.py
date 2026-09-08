@@ -102,7 +102,12 @@ def notes(status: str | None = None, area_id: int | None = None,
           exclude_archived: bool = False,
           limit: int = Query(100, ge=1, le=500), offset: int = Query(0, ge=0)):
     if q:
-        return {"notes": _engine(store.search_notes, q, limit=limit), "q": q}
+        # Search narrows the CURRENT view rather than replacing it: typing in
+        # the box inside an area used to silently drop the area.
+        return {"notes": _engine(store.search_notes, q, limit=limit,
+                                 status=status, area_id=area_id,
+                                 project_id=project_id, note_type=type, tag=tag,
+                                 exclude_archived=exclude_archived), "q": q}
     return {"notes": _engine(store.list_notes, status=status, area_id=area_id,
                              project_id=project_id, note_type=type, tag=tag,
                              exclude_archived=exclude_archived,
