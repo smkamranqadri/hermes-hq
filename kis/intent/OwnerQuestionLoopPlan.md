@@ -1,6 +1,6 @@
 # Owner Question Loop Plan
 
-**Status:** COMPLETE 2026-09-07 — Slice A (`d5b8616`+`8fb456a`), the options-always-show fix (`1904406`) and Slice B (`f2e3375`) all shipped, deployed and verified live. Owner walkthrough still pending.
+**Status:** COMPLETE 2026-09-07 — Slice A (`d5b8616`+`8fb456a`), the options-always-show fix (`1904406`) and Slice B (`f2e3375`) all shipped, deployed and verified live. **Owner-exercised 2026-09-07/08** — answering real questions on tasks #204/#205 surfaced three defects in the answer PATH (no feedback on tap, tap-was-send, panel vanishing on a lapsed session), all fixed in `3d12ee4`/`5c6c812`, plus the append-only precedence rule now in every brief (`6a75a7b`). See State → Proof.
 **Work mode:** Phase — two slices, each deployed and owner-reviewed before the next.
 
 ## Why
