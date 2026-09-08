@@ -5386,9 +5386,10 @@ def notes_for_task(task_id, db_path=None):
     """Notes linked to a task (the task-detail back-link)."""
     conn = _connect(db_path)
     try:
-        return [_decode_note(r) for r in conn.execute(
+        rows = [_decode_note(r) for r in conn.execute(
             "SELECT n.* FROM notes n JOIN note_links l ON l.note_id = n.id "
             "WHERE l.kind='task' AND l.target_id=? ORDER BY n.id", (task_id,)).fetchall()]
+        return _with_project_names(conn, rows)
     finally:
         conn.close()
 
@@ -5458,6 +5459,13 @@ def _scope_sql(status=None, area_id=None, project_id=None, note_type=None,
     return sql, params
 
 
+def _fts_match_query(q):
+    """Quote each term for an FTS5 MATCH query — user input must never hit
+    FTS query syntax. Shared by search_notes and note_facets's q-scoping so
+    the two can never build a different match string for the same q."""
+    return " ".join('"%s"' % t.replace('"', '""') for t in q.split() if t)
+
+
 def search_notes(q, limit=50, status=None, area_id=None, project_id=None,
                  note_type=None, tag=None, exclude_archived=False, db_path=None):
     """Note search: FTS5 (bm25-ranked) with a LIKE fallback.
@@ -5476,9 +5484,7 @@ def search_notes(q, limit=50, status=None, area_id=None, project_id=None,
     try:
         if NOTES_FTS:
             try:
-                # quote each term: user input must never hit FTS query syntax
-                match = " ".join('"%s"' % t.replace('"', '""')
-                                 for t in q.split() if t)
+                match = _fts_match_query(q)
                 rows = conn.execute(
                     "SELECT n.*, bm25(notes_fts) AS rank FROM notes_fts f "
                     "JOIN notes n ON n.id = f.rowid WHERE notes_fts MATCH ?"
@@ -5570,6 +5576,29 @@ def list_note_tags(db_path=None):
         conn.close()
 
 
+def _q_scope_sql(conn, q):
+    """The `q` narrowing fragment note_facets applies — built to agree with
+    search_notes about what q matches: FTS5 MATCH (via the same quoted match
+    string `_fts_match_query` builds for search_notes) when available, with
+    the identical LIKE fallback search_notes itself falls back to on a
+    malformed query or when FTS is off. A probe query decides which path to
+    take ONCE, so all of note_facets' several queries agree with each other
+    too. Returns (sql, params); sql is "" when q is blank."""
+    if not q:
+        return "", []
+    if NOTES_FTS:
+        try:
+            match = _fts_match_query(q)
+            conn.execute("SELECT 1 FROM notes_fts WHERE notes_fts MATCH ? LIMIT 1", (match,)).fetchone()
+            return (" AND n.id IN (SELECT rowid FROM notes_fts WHERE notes_fts MATCH ?)",
+                    [match])
+        except sqlite3.OperationalError:
+            pass  # malformed query despite quoting — fall back to LIKE, same as search_notes
+    like = "%" + q + "%"
+    return (" AND (n.title LIKE ? OR n.body LIKE ? OR n.tags LIKE ?)",
+            [like, like, like])
+
+
 def note_facets(status=None, area_id=None, project_id=None, note_type=None,
                 tag=None, q=None, exclude_archived=False, db_path=None):
     """Facet counts for the Library's filter selects.
@@ -5580,11 +5609,16 @@ def note_facets(status=None, area_id=None, project_id=None, note_type=None,
     picking a new value within a dimension never narrows the very list the
     owner is choosing from down to just what is already picked. Reuses
     `_scope_sql` for every filter it shares with list_notes/search_notes
-    rather than forking its SQL; `q` narrows facets too, with the same LIKE
-    fallback search_notes uses when FTS is unavailable — a facet count needs
-    matching rows, not bm25 ranking. Zero-count tags/projects/areas are
-    omitted (an INNER join against notes, so an area/project with no note in
-    scope just doesn't appear).
+    rather than forking its SQL. `q` narrows facets too, scored the SAME way
+    search_notes scores a hit (FTS5 MATCH via the shared `_fts_match_query`
+    builder, LIKE only as the fallback search_notes itself falls back to) —
+    facets used to score q with LIKE unconditionally while search_notes
+    scored with FTS, so mid-typing the refine row's counts and the note list
+    could disagree about how many notes q matched. Zero-count tags/projects/
+    areas are omitted (an INNER join against notes, so an area/project with
+    no note in scope just doesn't appear). The areas facet rolls a child
+    area's notes into its PARENT's count too, matching `_scope_sql`'s own
+    area_id rollup (picking a parent area already includes its children).
 
     `active`/`archived` are the archive-dimension counts: area/project/tag/
     type/q stay applied, but `status`/`exclude_archived` themselves are left
@@ -5593,11 +5627,6 @@ def note_facets(status=None, area_id=None, project_id=None, note_type=None,
     had nowhere to get a scoped N from and fell back to the GLOBAL archived
     count from notes_tree, which read wrong the moment an area was picked."""
     q = (q or "").strip()
-    q_sql, q_params = "", []
-    if q:
-        like = "%" + q + "%"
-        q_sql = " AND (n.title LIKE ? OR n.body LIKE ? OR n.tags LIKE ?)"
-        q_params = [like, like, like]
 
     def scope_for(omit):
         return _scope_sql(
@@ -5611,6 +5640,8 @@ def note_facets(status=None, area_id=None, project_id=None, note_type=None,
 
     conn = _connect(db_path)
     try:
+        q_sql, q_params = _q_scope_sql(conn, q)
+
         # tags: json_each over the scoped rows. json_valid is filtered BEFORE
         # the json_each join (in the inner SELECT) — the same corrupt-JSON
         # guard list_notes/search_notes apply, but here it has to happen
@@ -5634,7 +5665,9 @@ def note_facets(status=None, area_id=None, project_id=None, note_type=None,
         scope, params = scope_for("area")
         rows = conn.execute(
             "SELECT a.id, a.name, COUNT(n.id) AS n FROM areas a "
-            "JOIN notes n ON n.area_id = a.id WHERE a.archived=0" + scope + q_sql +
+            "JOIN notes n ON (n.area_id = a.id OR n.area_id IN "
+            "(SELECT id FROM areas c WHERE c.parent_id = a.id)) "
+            "WHERE a.archived=0" + scope + q_sql +
             " GROUP BY a.id ORDER BY n DESC, a.name",
             params + q_params).fetchall()
         areas = [{"id": r["id"], "name": r["name"], "count": r["n"]} for r in rows]

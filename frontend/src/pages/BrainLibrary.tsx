@@ -97,8 +97,11 @@ export function BrainLibrary() {
   // the owner never picks a tag that empties the list. `filters` is exactly
   // the same scope the note list itself uses — the facets endpoint narrows
   // each dimension by every filter EXCEPT its own, so switching a tag/
-  // project never narrows the very list it's choosing from.
-  const facets = useNoteFacets(filters)
+  // project never narrows the very list it's choosing from. `limit` is
+  // list-only (facets has no notion of it) — stripped so it isn't sent and
+  // doesn't churn the query key.
+  const { limit: _facetsLimit, ...facetFilters } = filters
+  const facets = useNoteFacets(facetFilters)
   // A facet selected via the URL might not appear in the current facet
   // result (e.g. the owner narrowed further and its count dropped to 0) —
   // keep it in the options list at count 0 so Clear stays reachable.
@@ -165,8 +168,8 @@ export function BrainLibrary() {
         </div>} />
 
       {/* Mobile: selects instead of the tree */}
-      <div className="mb-4 flex flex-wrap gap-2 lg:hidden">
-        <Select value={areaSel ?? ''} onChange={e => pick('area', e.target.value || null)}>
+      <div className="mb-4 flex flex-wrap gap-1.5 lg:hidden">
+        <Select value={areaSel ?? ''} onChange={e => pick('area', e.target.value || null)} className={REFINE_SELECT_CLS}>
           <option value="">All areas</option>
           {(areas.data?.areas ?? []).map(a => {
             // Navigation, not a filter — every area stays listed even at 0.
@@ -177,11 +180,11 @@ export function BrainLibrary() {
             return <option key={a.id} value={a.id}>{a.parent_id ? '· ' : ''}{a.name}{typeof fc === 'number' ? ` (${fc})` : ''}</option>
           })}
         </Select>
-        <Select value={typeSel ?? ''} onChange={e => pick('type', e.target.value || null)}>
+        <Select value={typeSel ?? ''} onChange={e => pick('type', e.target.value || null)} className={REFINE_SELECT_CLS}>
           <option value="">All types</option>
           {['note', 'playbook', 'wiki'].map(t => <option key={t}>{t}</option>)}
         </Select>
-        <Select value={view ?? ''} onChange={e => pick('view', e.target.value || null)}>
+        <Select value={view ?? ''} onChange={e => pick('view', e.target.value || null)} className={REFINE_SELECT_CLS}>
           <option value="">All notes</option>
           <option value="inbox">Inbox</option>
           <option value="filed">Filed</option>
@@ -230,9 +233,11 @@ export function BrainLibrary() {
                 <option value="">{activeLabel}</option>
                 <option value="1">{archiveLabel}</option>
               </Select>
-              {facets.isLoading ? (
-                // Disabled placeholder so the select never flashes empty
-                // while the facet-scoped options are still loading.
+              {!facets.data ? (
+                // Disabled placeholder only on the TRUE first load (no data
+                // at all yet) — placeholderData on useNoteFacets carries the
+                // previous result through every later filter change, so the
+                // select never flashes back to empty/disabled on a tap.
                 <Select disabled aria-label="Tag filter" className={REFINE_SELECT_CLS}><option>Loading tags…</option></Select>
               ) : (
                 <Select value={tagSel ?? ''} onChange={e => refine('tag', e.target.value || null)}
@@ -242,7 +247,7 @@ export function BrainLibrary() {
                 </Select>
               )}
               {areaSel && (
-                facets.isLoading ? (
+                !facets.data ? (
                   <Select disabled aria-label="Project filter" className={REFINE_SELECT_CLS}><option>Loading projects…</option></Select>
                 ) : (
                   <Select value={projSel ?? ''} onChange={e => refine('project', e.target.value || null)}

@@ -156,6 +156,86 @@ def test_zero_count_tags_and_areas_omitted(env):
     assert len(got["tags"]) == 1
 
 
+def test_type_filter_narrows_facets(env):
+    c, store, db = env
+    work = area_id(store, db, "Work")
+    store.create_note("a playbook note", status="active", area_id=work, note_type="playbook",
+                      tags=["how-to"], db_path=db)
+    store.create_note("a plain note", status="active", area_id=work, note_type="note",
+                      tags=["misc"], db_path=db)
+    got = store.note_facets(area_id=work, note_type="playbook", db_path=db)
+    assert got["tags"] == [{"tag": "how-to", "count": 1}]
+    assert got["active"] == 1
+
+
+def test_areas_facet_rolls_up_child_into_parent(env):
+    """`_scope_sql`'s area_id filter treats a parent pick as parent+children
+    (list_notes(area_id=parent) includes child-area notes) — the areas facet
+    must count the same way, or a parent area's own facet count would read
+    lower than what picking it actually returns."""
+    c, store, db = env
+    work = area_id(store, db, "Work")
+    sub = store.create_area("SubWork", parent_id=work, db_path=db)
+    store.create_note("parent-note", status="active", area_id=work, db_path=db)
+    store.create_note("child-note-1", status="active", area_id=sub, db_path=db)
+    store.create_note("child-note-2", status="active", area_id=sub, db_path=db)
+    got = store.note_facets(db_path=db)
+    by_id = {a["id"]: a["count"] for a in got["areas"]}
+    assert by_id[work] == 3       # parent's own note + both child notes
+    assert by_id[sub] == 2        # the child's own count stays un-rolled-up
+    # matches what actually picking the parent area returns
+    assert len(store.list_notes(area_id=work, status="active", db_path=db)) == 3
+
+
+def test_facets_active_count_matches_search_and_list_under_every_combo(env, tmp_path):
+    """The strongest invariant: for the SAME filters, facets['active'] must
+    equal the number of notes list_notes/search_notes actually returns —
+    across area+tag+q, archived+q, and type+q combinations. This is exactly
+    the case FTS vs LIKE q-scoring broke: a facet computed with LIKE could
+    disagree with an FTS-ranked search over the same q."""
+    c, store, db = env
+    work = area_id(store, db, "Work")
+    health = area_id(store, db, "Health")
+    os.makedirs(tmp_path / "alpha2", exist_ok=True)
+    alpha = next(p["id"] for p in store.list_projects(db_path=db) if p["slug"] == "alpha")
+    n1 = store.create_note("payments gateway rollout", status="active", area_id=work,
+                           project_id=alpha, tags=["fin", "team"], note_type="note", db_path=db)
+    n2 = store.create_note("payments gateway maintenance", status="active", area_id=work,
+                           tags=["fin"], note_type="playbook", db_path=db)
+    n3 = store.create_note("payments gateway retired", status="active", area_id=work,
+                           tags=["fin"], db_path=db)
+    store.update_note(n3, status="archived", db_path=db)
+    store.create_note("payments plan renewal", status="active", area_id=health,
+                      tags=["fin"], db_path=db)
+
+    def check(**filters):
+        # facets['active']/['archived'] deliberately ignore status/
+        # exclude_archived (the archive dimension) — so the comparison hits
+        # must too: every OTHER filter applies, then active/archived are
+        # counted among ALL of those hits, unfiltered by status.
+        q = filters.get("q")
+        dims = {k: v for k, v in filters.items() if k not in ("status", "exclude_archived", "q")}
+        if q:
+            hits = store.search_notes(q, limit=200, db_path=db, **dims)
+        else:
+            hits = store.list_notes(limit=200, db_path=db, **dims)
+        want_active = sum(1 for h in hits if h["status"] != "archived")
+        want_archived = sum(1 for h in hits if h["status"] == "archived")
+        facets = store.note_facets(**filters, db_path=db)
+        assert facets["active"] == want_active, "active mismatch for filters=%r: facets=%r want=%r" % (
+            filters, facets["active"], want_active)
+        assert facets["archived"] == want_archived, "archived mismatch for filters=%r: facets=%r want=%r" % (
+            filters, facets["archived"], want_archived)
+
+    check(q="payments", exclude_archived=True)                                   # bare q
+    check(q="gateway", area_id=work, exclude_archived=True)                       # area+q
+    check(q="gateway", area_id=work, tag="fin", exclude_archived=True)            # area+tag+q
+    check(q="payments", status="archived")                                        # archived+q
+    check(q="gateway", note_type="playbook", exclude_archived=True)               # type+q
+    check(area_id=work, tag="fin", exclude_archived=True)                         # no q, for comparison
+    check(project_id=alpha, exclude_archived=True)                                # project, no q
+
+
 def test_facets_api_requires_session_and_round_trips(env):
     c, store, db = env
     assert c.get("/api/notes/facets").status_code == 401

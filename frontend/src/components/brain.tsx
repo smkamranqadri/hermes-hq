@@ -264,7 +264,7 @@ export function TagPicker({ value, onChange, placeholder = 'payments, 1:1' }: {
           ))}
         </div>
       )}
-      <TextInput value={draft} placeholder={placeholder} aria-label="Add tags"
+      <TextInput value={draft} placeholder={placeholder} aria-label="Add tags" className="text-base"
         onChange={e => setDraft(e.target.value)}
         onBlur={() => { if (draft.trim()) commitDraft() }}
         onKeyDown={e => {
@@ -274,7 +274,12 @@ export function TagPicker({ value, onChange, placeholder = 'payments, 1:1' }: {
       {matches.length > 0 && (
         <div className="flex flex-wrap items-center gap-1.5">
           {shown.map(t => (
-            <button key={t.tag} type="button" onClick={() => toggle(t.tag)}
+            // onMouseDown preventDefault: without it, tapping a suggestion
+            // while text is still typed fires the input's onBlur FIRST
+            // (committing the typed draft as its own tag), then the click —
+            // so typing "pay" and tapping "payments" added BOTH, and the
+            // re-filtered list could shift the chip out from under the tap.
+            <button key={t.tag} type="button" onMouseDown={e => e.preventDefault()} onClick={() => toggle(t.tag)}
               aria-pressed={value.includes(t.tag)}
               className={clsx('inline-flex items-center gap-1 rounded-full border px-2.5 py-1 font-mono text-[11px]',
                 value.includes(t.tag) ? 'border-accent/50 bg-accent/15 text-accent-2' : 'border-line text-muted hover:text-fg')}>
@@ -784,6 +789,13 @@ export function EditProposalModal({ p, onClose }: { p: Proposal; onClose: () => 
     project_id: pay.project_id ? String(pay.project_id) : '', assignee: pay.assignee ?? 'owner',
   })
   const [parts, setParts] = useState<SplitPart[]>(() => (pay.parts ?? []).map(x => ({ ...x })))
+  // React key per part, kept in lockstep with `parts` but never sent in the
+  // payload (SplitPart has no id field). Keying the row by INDEX meant
+  // dropping part 1 shifted part 2 into slot 1 — React then reused part 1's
+  // DOM/state for it, so its TagPicker kept part 1's typed-but-uncommitted
+  // draft text instead of starting clean for the part that's actually there.
+  const partKeySeed = useRef(0)
+  const [partKeys, setPartKeys] = useState<string[]>(() => parts.map(() => String(partKeySeed.current++)))
   const [keepOriginal, setKeepOriginal] = useState(pay.archive_original === false)
   const [busy, setBusy] = useState(false)
   const setPart = (i: number, patch: Partial<SplitPart>) => setParts(ps => ps.map((x, j) => j === i ? { ...x, ...patch } : x))
@@ -868,12 +880,12 @@ export function EditProposalModal({ p, onClose }: { p: Proposal; onClose: () => 
           <>
             <div className="flex max-h-[50vh] flex-col gap-2 overflow-y-auto pr-1">
               {parts.map((part, i) => (
-                <div key={i} className="rounded-lg border border-line-subtle bg-inset p-2">
+                <div key={partKeys[i] ?? i} className="rounded-lg border border-line-subtle bg-inset p-2">
                   <div className="flex items-center gap-2">
                     <TextInput value={part.title} onChange={e => setPart(i, { title: e.target.value })} aria-label={`Part ${i + 1} title`} />
                     {parts.length > 1 && (
                       <button type="button" title="Drop this part" className="shrink-0 text-muted hover:text-needsyou"
-                        onClick={() => setParts(ps => ps.filter((_, j) => j !== i))}>✕</button>
+                        onClick={() => { setParts(ps => ps.filter((_, j) => j !== i)); setPartKeys(ks => ks.filter((_, j) => j !== i)) }}>✕</button>
                     )}
                   </div>
                   {part.body && <p className="mt-1 line-clamp-1 text-[11px] text-muted">{part.body}</p>}

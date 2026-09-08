@@ -220,7 +220,12 @@ export type NoteFacets = {
 export const useNoteFacets = (p: { status?: string; area_id?: number; project_id?: number; type?: string; tag?: string; q?: string; exclude_archived?: boolean }) => {
   const qs = new URLSearchParams()
   Object.entries(p).forEach(([k, v]) => { if (v !== undefined && v !== '' && v !== null) qs.set(k, String(v)) })
-  return useQuery({ queryKey: ['note-facets', p], queryFn: () => get<NoteFacets>(`/api/notes/facets?${qs}`), refetchInterval: NOTES_REFETCH })
+  return useQuery({
+    queryKey: ['note-facets', p], queryFn: () => get<NoteFacets>(`/api/notes/facets?${qs}`), refetchInterval: NOTES_REFETCH,
+    // Every filter change is a NEW query key — without this the refine
+    // selects flashed "Loading…" and lost their counts on every tap.
+    placeholderData: (prev: NoteFacets | undefined) => prev,
+  })
 }
 export const useNotes = (p: { status?: string; area_id?: number; project_id?: number; type?: string; tag?: string; q?: string; limit?: number; exclude_archived?: boolean }) => {
   const qs = new URLSearchParams()
