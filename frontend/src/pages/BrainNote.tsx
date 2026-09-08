@@ -7,7 +7,7 @@ import { useQueryClient } from '@tanstack/react-query'
 import { post, useNote, useRelatedNotes, when, type RelatedLinkItem, type RelatedNoteItem } from '../api'
 import { GlassCard } from '../components/GlassCard'
 import { Markdown } from '../components/chat/Markdown'
-import { AttachToNote, DisputedChip, FileNoteModal, NewReminderFromNoteModal, NewTaskFromNoteModal, NoteAttachments, NoteRow, ProposalBanner, TYPE_TONE } from '../components/brain'
+import { AttachToNote, DisputedChip, FileNoteModal, NewReminderFromNoteModal, NewTaskFromNoteModal, NoteAttachments, NoteRow, ProposalBanner, TYPE_TONE, PROVENANCE, PROVENANCE_HINT } from '../components/brain'
 import { Btn, ConfirmModal, TextArea } from '../components/Modal'
 import { Chip, Crumbs, Empty, Label, Loading, Skeleton } from '../components/ui'
 import { useToast } from '../components/Toast'
@@ -122,8 +122,7 @@ export function BrainNote() {
           {n.tags.map(t => <Chip key={t}>{t}</Chip>)}
         </button>
         {n.project && <Link to={`/projects/${n.project.slug}`}><Chip>{n.project.name}</Chip></Link>}
-        <Chip>{n.authored_by}</Chip>
-        <span className="ml-auto font-mono text-[10px] text-muted">updated {when(n.updated_at ?? n.created_at)}</span>
+        <span className="ml-auto font-mono text-[10px] text-muted">{n.authored_by !== 'owner' && <span title={PROVENANCE_HINT[n.authored_by] ?? ''}>{PROVENANCE[n.authored_by] ?? n.authored_by} · </span>}updated {when(n.updated_at ?? n.created_at)}</span>
       </div>
 
       <GlassCard className="mb-4">
