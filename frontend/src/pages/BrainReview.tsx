@@ -17,10 +17,15 @@ import { usePageTitle } from '../usePageTitle'
 
 const KIND_TONE: Record<Proposal['kind'], string> = {
   split: 'text-accent-2', file: 'text-queued', contradiction: 'text-needsyou', new_task: 'text-working',
+  append_entry: 'text-accent-2',
 }
 // Record-keyed (not an array) so a new kind can't compile without deciding
 // whether it is owner-editable before approval.
-const EDITABLE: Record<Proposal['kind'], boolean> = { split: true, file: true, contradiction: false, new_task: true }
+// append_entry is NOT editable: EditProposalModal already carries three
+// per-kind state shapes (recorded debt — "split into sub-forms when a 5th kind
+// lands"), and an append that cannot be undone is the wrong place to add a
+// fourth. A wrong target is rejected with feedback and re-proposed.
+const EDITABLE: Record<Proposal['kind'], boolean> = { split: true, file: true, contradiction: false, new_task: true, append_entry: false }
 
 export function BrainReview() {
   usePageTitle('Review — Second Brain')
@@ -42,6 +47,7 @@ export function BrainReview() {
   const approvedToast = (p: Proposal) => ({
     split: 'Split applied', file: p.payload?.archive ? 'Archived' : 'Filed',
     contradiction: 'Both notes flagged disputed', new_task: 'Task created & linked',
+    append_entry: `Thought added to note #${p.payload?.target_note_id ?? '?'}`,
   } satisfies Record<Proposal['kind'], string>)[p.kind]
   const counts = proposals.data?.counts
   const rows = proposals.data?.proposals ?? []

@@ -622,8 +622,49 @@ def _note_line(n, pending_ids):
     return "  #%-4d %s%s%s%s" % (n["id"], n["title"], tags, att, mark)
 
 
+def cmd_note_search(args):
+    """Find notes ALREADY in the Library. Without this the librarian triages
+    every capture blind to what exists and can only ever propose a new note."""
+    notes = store.search_notes(args.query, limit=args.limit)
+    if not notes:
+        _p("No notes match %r." % args.query)
+        return 0
+    pending = {p["note_id"] for p in store.list_proposals(status="pending", limit=500)}
+    # search_notes returns bare note rows; resolve the names the librarian needs
+    # to judge a hit (which area it lives in, whether it is already a thread).
+    areas = {a["id"]: a for a in store.list_areas()}
+    projects = {p["id"]: p["slug"] for p in store.list_projects()}
+
+    def where(n):
+        a = areas.get(n.get("area_id"))
+        if a:
+            parent = areas.get(a.get("parent_id"))
+            return (parent["name"] + " / " if parent else "") + a["name"]
+        return projects.get(n.get("project_id")) or "unfiled"
+
+    _p("Matches (%d) for %r:" % (len(notes), args.query))
+    for n in notes:
+        _p("%s" % _note_line(n, pending))
+        _p("        %s · %s · %d thought(s)"
+           % (n["status"], where(n), n.get("entry_count") or 0))
+    return 0
+
+
+def cmd_note_propose_entry(args):
+    payload = {"target_note_id": args.target}
+    if args.body:
+        payload["body"] = args.body
+    if args.keep_source:
+        payload["archive_source"] = False
+    pid = store.create_proposal(
+        "append_entry", args.id, payload, summary=args.summary,
+        classification="needs_attention")     # always — enforced in the store too
+    _proposal_result(pid, args.summary)
+    return 0
+
+
 def cmd_note_inbox(args):
-    notes = store.list_notes(status="inbox", limit=args.limit)
+    notes = store.list_notes(status="inbox", limit=args.limit, owner_first=True)
     if not notes:
         _p("Inbox is empty — nothing to triage.")
         return 0
@@ -1250,6 +1291,12 @@ def build_parser():
     ns = note_sub.add_parser("show", help="one note with body + entries")
     ns.add_argument("id", type=int)
     ns.set_defaults(fn=cmd_note_show)
+    nse = note_sub.add_parser("search", help="search the WHOLE Library (not just the "
+                                             "inbox) — do this before proposing a new "
+                                             "note, so a follow-up becomes a Thought")
+    nse.add_argument("query")
+    nse.add_argument("--limit", type=int, default=20)
+    nse.set_defaults(fn=cmd_note_search)
     note_sub.add_parser("areas", help="area tree with ids").set_defaults(fn=cmd_note_areas)
     note_sub.add_parser("tags", help="the closed tag taxonomy with in-use counts "
                                      "(propose only these; coin via --new-tags)"
@@ -1294,6 +1341,23 @@ def build_parser():
                     help="what disagrees with what (the owner reads this)")
     pc.add_argument("--summary", required=True)
     pc.set_defaults(fn=cmd_note_propose_contradiction)
+    pe = note_sub.add_parser("propose-entry",
+                             help="this capture belongs ON an existing note: "
+                                  "propose appending it there as a Thought "
+                                  "instead of creating a near-duplicate note")
+    pe.add_argument("id", type=int, help="the capture being triaged (the source)")
+    pe.add_argument("--target", type=int, required=True,
+                    help="the existing note it belongs on (find it with "
+                         "`wm note search`)")
+    pe.add_argument("--body", default=None,
+                    help="text to append. OMIT to append the source capture "
+                         "VERBATIM — entries carry no author, so a paraphrase "
+                         "would be indistinguishable from the owner's words")
+    pe.add_argument("--keep-source", dest="keep_source", action="store_true",
+                    help="leave the source capture in place (default: archive "
+                         "it, since its content now lives on the target)")
+    pe.add_argument("--summary", required=True)
+    pe.set_defaults(fn=cmd_note_propose_entry)
     pt = note_sub.add_parser("propose-task",
                              help="a note describes real work: propose creating "
                                   "a linked HQ task (the note stays a note)")

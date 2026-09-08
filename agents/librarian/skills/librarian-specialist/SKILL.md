@@ -12,7 +12,7 @@ A dispatched ingest run ("triage the Second Brain inbox"), a lint run ("fix lint
 ## Data model (what you are curating)
 - **Note**: title, body, `type` (note | playbook | wiki), `status` (inbox | active | archived), optional area OR project link, JSON tag list, `authored_by`. Dated **Thoughts** entries may hang off a note.
 - **Areas** are a two-level life taxonomy (Work, Family, Finance, …). **Projects** are HQ projects (by slug). A note files under an area or a project; either counts as "filed".
-- **Proposal**: your output. Kinds in play: `split` (one capture → N notes), `file` (put one note where it belongs — or straight to Archive with `--archive` when it's junk or museum material), `contradiction` (two notes disagree: BOTH get flagged `disputed`, keep-both — you never reconcile them yourself), and `new_task` (a note describes real work: a linked HQ task is created, the note stays a note). Classification `routine` (owner bulk-approves) or `needs_attention` (owner reads first). A pending proposal on a note means it is already triaged — leave it alone.
+- **Proposal**: your output. Kinds in play: `split` (one capture → N notes), `file` (put one note where it belongs — or straight to Archive with `--archive` when it's junk or museum material), `contradiction` (two notes disagree: BOTH get flagged `disputed`, keep-both — you never reconcile them yourself), `new_task` (a note describes real work: a linked HQ task is created, the note stays a note), and `append_entry` (this capture is a follow-up to a note that already exists: it becomes a **Thought** on that note instead of a near-duplicate beside it). Classification `routine` (owner bulk-approves) or `needs_attention` (owner reads first). A pending proposal on a note means it is already triaged — leave it alone.
 
 ## Orientation reads (run these FIRST, every run)
 1. `wm note inbox --full` — the worklist. Notes marked "(pending proposal — skip)" are done.
@@ -21,12 +21,16 @@ A dispatched ingest run ("triage the Second Brain inbox"), a lint run ("fix lint
 4. `wm project list` — project slugs for project-linked notes.
 5. `wm note proposals --status rejected` — owner feedback on your past proposals. Apply it before proposing anything new; do not re-file a rejected proposal unchanged.
 
+**Then, per note: `wm note search "<its key words>"` BEFORE you propose anything.** `wm note inbox` shows only untriaged captures — it is not the Library. Search is the only way to see what is already filed, and without it you will propose a brand-new note for something that already has one. A capture that is a follow-up, correction, or second thought on an existing note is an `append_entry`, not a new note.
+
 ## Approach
 1. For each untriaged inbox note, read the FULL body and decide: one topic or several?
 2. **Several topics (batch dump)** → `propose-split`. Write a parts JSON file: one part per coherent item, `title` = a short name (not the whole text), `body` = the owner's text for that item VERBATIM, plus `area_id`/`project_id`/`tags` when you are confident where it belongs. Leave a part unfiled (no area/project) when unsure — it lands back in the inbox as its own note.
-3. **One topic** → `propose-file` with the area or project it belongs to, plus tags.
+3. **One topic** → search the Library first (step above), then:
+   - **It continues a note that already exists** (a follow-up, a correction, a later thought on the same subject) → `propose-entry <id> --target <existing id>`. Omit `--body` so the owner's capture is appended VERBATIM; pass `--body` only when you are extracting one part of a longer capture. This is the difference between a library and a pile — prefer it whenever a real sibling exists.
+   - Otherwise → `propose-file` with the area or project it belongs to, plus tags.
    - **Junk or museum material** (keyboard mash, test noise, long-dead content worth keeping searchable) → `propose-file --archive`. Never force junk into a real area just to have somewhere to put it.
-   - **Contradicts an existing note** (search first: `wm note show` the likely sibling) → `propose-contradiction --other <id> --explain "what disagrees"`. Keep-both; the owner resolves it.
+   - **Contradicts an existing note** (find it with `wm note search`, then confirm with `wm note show <id>`) → `propose-contradiction --other <id> --explain "what disagrees"`. Keep-both; the owner resolves it.
    - **Describes real work to do** (a call to make, a thing to build) → `propose-task --title "..."` — and still file the note itself normally in a separate proposal if it needs filing.
 4. `--summary` is the one line the owner reads first: say what and WHY ("3 items: dentist reminder, BrightLane pricing thought, Urdu journal entry").
 5. Classify honestly: `--routine` only for obvious filings; anything ambiguous, personal-sensitive, or new-tag-coining stays needs_attention.
@@ -34,7 +38,8 @@ A dispatched ingest run ("triage the Second Brain inbox"), a lint run ("fix lint
 
 ## Commands (your COMPLETE surface)
 ```
-wm note inbox --full            # worklist
+wm note inbox --full            # worklist (untriaged captures ONLY — not the Library)
+wm note search "<terms>"        # the WHOLE Library — run this before every proposal
 wm note show <id>               # one note in full
 wm note areas | tags            # taxonomy orientation
 wm project list                 # project slugs
@@ -42,6 +47,7 @@ wm note proposals --status rejected   # owner feedback — read before proposing
 wm note propose-file <id> --area-id N | --project SLUG [--tags a,b] --summary "..." [--routine]
 wm note propose-file <id> --archive --summary "why it's junk/museum" [--routine]
 wm note propose-split <id> --parts /tmp/parts.json --summary "..." [--routine] [--keep-original]
+wm note propose-entry <id> --target <existing id> [--body "..."] [--keep-source] --summary "..."
 wm note propose-contradiction <id> --other <id2> --explain "what disagrees" --summary "..."
 wm note propose-task <id> --title "..." [--desc "..."] [--project SLUG] [--assignee P] --summary "..."
 wm note lint                    # deterministic hygiene report (lint runs start here)
@@ -64,6 +70,8 @@ Never invent work when `wm note lint` comes back clean — report clean and fini
 - Don't invent areas (propose into existing ids only) and don't scatter near-duplicate tags (`finance` vs `finances`). Tags outside `wm note tags` are rejected unless declared via `--new-tags`.
 - Don't touch notes that already carry a pending proposal.
 - Never reconcile contradicting notes yourself (no "correct" version, no merged summary) — `propose-contradiction` and let the owner decide. Classify it `needs_attention`.
+- **A Thought cannot be deleted.** There is no delete path for entries anywhere, so `propose-entry` is permanent once approved and is never `routine`. Be certain the target is the right note — search, then `wm note show` it to confirm — and prefer `--body` omitted so the owner's own words go in unaltered. A paraphrase is indistinguishable from his writing forever after, because entries carry no author.
+- `propose-entry` is for a genuine continuation of the SAME subject. Two notes that merely share a topic stay two notes; a capture that disagrees with an existing note is a `contradiction`, not a Thought.
 - `propose-task` default assignee is `owner` (the owner's own todo). Suggest an agent assignee only when the note explicitly asks for delegated work.
 
 ## Verification (before writing your completion JSON)

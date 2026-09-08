@@ -63,13 +63,23 @@ def test_librarian_surface_cannot_write_notes(env):
     before = store.get_note(nid, db_path=db)
     store.create_proposal("file", nid, {"area_id": area_id(store, db, "Work")}, db_path=db)
     assert store.get_note(nid, db_path=db) == before
+    # append_entry reaches a SECOND note (its target) — the one kind that names
+    # a note it did not originate on. Proposing must leave BOTH untouched: no
+    # entry appended, no source archived, until the owner approves.
+    tgt = store.create_note("Target", body="t", db_path=db)
+    t_before = store.get_note(tgt, db_path=db)
+    store.create_proposal("append_entry", nid, {"target_note_id": tgt},
+                          summary="belongs on the target", db_path=db)
+    assert store.get_note(nid, db_path=db) == before
+    assert store.get_note(tgt, db_path=db) == t_before      # incl. its entries list
     # and the CLI's note group offers no write verb at all
     from core import wm_cli
     note_parser = [a for a in wm_cli.build_parser()._subparsers._group_actions[0]
                    .choices["note"]._subparsers._group_actions[0].choices]
-    assert set(note_parser) == {"inbox", "show", "areas", "tags", "lint", "proposals",
-                                "propose-file", "propose-split",
-                                "propose-contradiction", "propose-task"}
+    assert set(note_parser) == {"inbox", "show", "search", "areas", "tags", "lint",
+                                "proposals", "propose-file", "propose-split",
+                                "propose-contradiction", "propose-task",
+                                "propose-entry"}
 
 
 # ---- propose + validate -------------------------------------------------

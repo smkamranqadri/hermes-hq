@@ -56,7 +56,7 @@ function ArchiveChip() {
   return <span className={pillCls('needsyou')}>→ archive</span>
 }
 
-export const KIND_LABEL: Record<Proposal['kind'], string> = { split: 'split', file: 'file', contradiction: 'contradiction', new_task: 'new task' }
+export const KIND_LABEL: Record<Proposal['kind'], string> = { split: 'split', file: 'file', contradiction: 'contradiction', new_task: 'new task', append_entry: 'add thought' }
 
 /** Record-keyed so adding a proposal kind fails compilation here instead of
  * silently inheriting another kind's button copy. */
@@ -66,6 +66,7 @@ export function approveLabel(p: Proposal): string {
     file: p.payload?.archive ? 'Approve → archive' : 'Approve filing',
     contradiction: 'Mark both disputed',
     new_task: 'Create task & link',
+    append_entry: `Add thought to note #${p.payload?.target_note_id ?? '?'}`,
   }
   return labels[p.kind]
 }
@@ -133,6 +134,22 @@ export function ProposalPayloadView({ p, compact = false }: { p: Proposal; compa
       </div>
       {p.payload?.description && <p className="mt-1 line-clamp-2 text-muted">{p.payload.description}</p>}
       <p className="mt-1 text-[11px] text-muted">Creates a real linked task — the note stays a note.</p>
+    </div>
+  )
+  if (p.kind === 'append_entry') return (
+    <div className="mt-2 rounded-lg border border-line-subtle bg-inset px-3 py-2 text-xs">
+      <div className="flex flex-wrap items-center gap-1.5">
+        <Chip tone="accent">thought</Chip>
+        <span className="text-muted">onto</span>
+        <Link to={`/brain/note/${p.payload?.target_note_id}`} className="font-medium hover:text-accent-2">note #{p.payload?.target_note_id}</Link>
+        {p.payload?.archive_source === false && <Chip>source stays</Chip>}
+      </div>
+      {p.payload?.body
+        ? <p className={clsx('mt-1 whitespace-pre-wrap text-muted', !compact && 'line-clamp-4')}>{p.payload.body}</p>
+        : <p className="mt-1 text-[11px] text-muted">Appends this capture verbatim.</p>}
+      {/* Entries have no delete path anywhere — say so before the click. */}
+      <p className="mt-1 text-[11px] text-needsyou">A thought cannot be removed once added.
+        {p.payload?.archive_source !== false && ' The source capture is archived.'}</p>
     </div>
   )
   return null

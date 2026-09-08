@@ -4883,9 +4883,13 @@ def _note_links(conn, note_id):
 
 
 def list_notes(status=None, area_id=None, project_id=None, note_type=None,
-               authored_by=None, tag=None, limit=200, offset=0, db_path=None):
+               authored_by=None, tag=None, limit=200, offset=0, owner_first=False,
+               db_path=None):
     """Filtered note list, newest-updated first. Bodies truncated for lists.
-    Filters compose (2b-ii: tag/project within an area selection)."""
+    Filters compose (2b-ii: tag/project within an area selection).
+    owner_first (Phase 3): sort owner-authored notes ahead of imported ones —
+    the librarian's inbox worklist, so a real capture is never stuck behind an
+    import wave."""
     sql, params = "SELECT * FROM notes WHERE 1=1", []
     if status is not None:
         if status not in NOTE_STATUSES:
@@ -4910,7 +4914,15 @@ def list_notes(status=None, area_id=None, project_id=None, note_type=None,
         sql += " AND type=?"; params.append(note_type)
     if authored_by is not None:
         sql += " AND authored_by=?"; params.append(authored_by)
-    sql += " ORDER BY pinned DESC, COALESCE(updated_at, created_at) DESC, id DESC"
+    sql += " ORDER BY pinned DESC"
+    if owner_first:
+        # Phase 3 import: a wave puts hundreds of authored_by='import' notes in
+        # the inbox, and the librarian's worklist IS this list. Without this the
+        # owner's own captures queue behind imported fragments for hours — and
+        # the 2b-i capture nudge cannot help, because the heartbeat already has
+        # work either way. Ordering only; nothing is hidden.
+        sql += ", CASE WHEN authored_by='owner' THEN 0 ELSE 1 END"
+    sql += ", COALESCE(updated_at, created_at) DESC, id DESC"
     sql += " LIMIT ? OFFSET ?"; params += [int(limit), int(offset)]
     conn = _connect(db_path)
     try:
@@ -5061,8 +5073,25 @@ def notes_for_task(task_id, db_path=None):
         conn.close()
 
 
+def _with_entry_counts(conn, rows):
+    """Attach entry_count to search hits in ONE grouped query.
+
+    The librarian reads this to judge whether a note is already an accumulating
+    thread before proposing to append to it, so a search result without it is
+    a search result it cannot act on.
+    """
+    if not rows:
+        return rows
+    counts = {r["note_id"]: r["n"] for r in conn.execute(
+        "SELECT note_id, COUNT(*) AS n FROM note_entries GROUP BY note_id")}
+    for r in rows:
+        r["entry_count"] = counts.get(r["id"], 0)
+    return rows
+
+
 def search_notes(q, limit=50, db_path=None):
-    """Global note search: FTS5 (bm25-ranked) with a LIKE fallback."""
+    """Global note search: FTS5 (bm25-ranked) with a LIKE fallback.
+    Hits carry entry_count; area/project names are resolved by the caller."""
     q = (q or "").strip()
     if not q:
         return []
@@ -5077,7 +5106,7 @@ def search_notes(q, limit=50, db_path=None):
                     "SELECT n.*, bm25(notes_fts) AS rank FROM notes_fts f "
                     "JOIN notes n ON n.id = f.rowid WHERE notes_fts MATCH ? "
                     "ORDER BY rank LIMIT ?", (match, int(limit))).fetchall()
-                return [_decode_note(r) for r in rows]
+                return _with_entry_counts(conn, [_decode_note(r) for r in rows])
             except sqlite3.OperationalError:
                 pass  # malformed query despite quoting — fall back to LIKE
         like = "%" + q + "%"
@@ -5085,7 +5114,7 @@ def search_notes(q, limit=50, db_path=None):
             "SELECT * FROM notes WHERE title LIKE ? OR body LIKE ? OR tags LIKE ? "
             "ORDER BY COALESCE(updated_at, created_at) DESC LIMIT ?",
             (like, like, like, int(limit))).fetchall()
-        return [_decode_note(r) for r in rows]
+        return _with_entry_counts(conn, [_decode_note(r) for r in rows])
     finally:
         conn.close()
 
@@ -5170,11 +5199,15 @@ def list_note_tags(db_path=None):
 # only in approve_proposal, which the OWNER reaches through the cookie-session
 # HTTP API. Keep it that way: do not add sanctioned agent paths into notes.
 # ---------------------------------------------------------------------------
-PROPOSAL_KINDS = ("split", "file", "contradiction", "new_task")
+PROPOSAL_KINDS = ("split", "file", "contradiction", "new_task", "append_entry")
 # Kinds that must ALWAYS cross the owner's eyes: never classified routine, so
 # bulk-approve can't silently mint a task or flag a dispute. When adding a
 # kind (P4: wiki_update), decide its place here explicitly.
-OWNER_EYES_KINDS = ("contradiction", "new_task")
+# append_entry is here BY CONSTRUCTION, not by taste: note_entries has no
+# delete path anywhere (no route, no CLI verb, no store function), so an
+# appended Thought is permanent. A kind whose effect cannot be undone can
+# never be bulk-approved.
+OWNER_EYES_KINDS = ("contradiction", "new_task", "append_entry")
 PROPOSAL_STATUSES = ("pending", "approved", "rejected", "superseded")
 PROPOSAL_CLASSES = ("routine", "needs_attention")
 MAX_SPLIT_PARTS = 50
@@ -5333,6 +5366,34 @@ def _validate_proposal_payload(conn, kind, payload, note_id=None):
             if row is not None and row["project_id"] is None:
                 raise ValueError("new_task payload needs a project_id — note #%s "
                                  "is not project-linked" % note_id)
+    elif kind == "append_entry":
+        # This capture belongs ON an existing note, as a Thought, rather than
+        # beside it as note #N+1. Approval appends to the target and archives
+        # the source; no content is rewritten and nothing is merged away.
+        unknown = set(payload) - {"target_note_id", "body", "archive_source"}
+        if unknown:
+            raise ValueError("append_entry payload has unknown fields: %s"
+                             % ", ".join(sorted(unknown)))
+        target = payload.get("target_note_id")
+        if not isinstance(target, int):
+            raise ValueError("append_entry payload needs target_note_id (int)")
+        if note_id is not None and target == note_id:
+            raise ValueError("a note cannot be appended to itself")
+        trow = conn.execute("SELECT id, status FROM notes WHERE id=?", (target,)).fetchone()
+        if trow is None:
+            raise ValueError("append_entry payload: no such note: %r" % target)
+        # An archived target is museum material; appending a live Thought to it
+        # would bury the Thought where the owner will not look for it. File the
+        # capture instead, or the owner un-archives the target first.
+        if trow["status"] == "archived":
+            raise ValueError("append_entry target note #%s is archived — propose "
+                             "a file instead, or the owner un-archives it first" % target)
+        body = payload.get("body")
+        if body is not None and (not isinstance(body, str) or not body.strip()):
+            raise ValueError("append_entry body must be a non-empty string when given")
+        if payload.get("archive_source") is not None \
+                and not isinstance(payload["archive_source"], bool):
+            raise ValueError("append_entry payload: archive_source must be true/false")
     else:
         raise ValueError("invalid proposal kind %r (one of %s)"
                          % (kind, ", ".join(PROPOSAL_KINDS)))
@@ -5454,6 +5515,9 @@ def approve_proposal(pid, payload_override=None, db_path=None):
                      archive_original is false.
     contradiction -> flag BOTH notes disputed and cross-link them (keep-both).
     new_task      -> create a real HQ task and link it (create-and-link).
+    append_entry  -> append the capture to an EXISTING note as a Thought
+                     (verbatim unless the payload carries its own body),
+                     cross-link the two, and archive the source capture.
 
     `payload_override` is the owner's edit-before-approve: the edited payload
     is validated, applied, and only then persisted onto the proposal row (so
@@ -5513,6 +5577,25 @@ def approve_proposal(pid, payload_override=None, db_path=None):
             update_note(a, edited_by=actor, disputed=True, db_path=db_path)
             link_note(a, "note", b, db_path=db_path)
         result = {"disputed": [p["note_id"], other]}
+    elif p["kind"] == "append_entry":
+        target = payload["target_note_id"]
+        # note_entries has NO author column, so a paraphrase by the librarian
+        # would be indistinguishable from the owner's own words forever after.
+        # Default to the source capture VERBATIM; an explicit body is the
+        # librarian extracting one part of a capture, and the owner sees it in
+        # the proposal before it is applied.
+        body = payload.get("body") or note.get("body") or ""
+        if not body.strip():
+            raise ValueError("append_entry proposal #%d has no body and note #%d "
+                             "is empty — nothing to append" % (pid, p["note_id"]))
+        eid = add_note_entry(target, body, db_path=db_path)
+        link_note(p["note_id"], "note", target, db_path=db_path)
+        archived = payload.get("archive_source", True)
+        if archived:
+            update_note(p["note_id"], edited_by=actor, status="archived",
+                        db_path=db_path)
+        result = {"entry_id": eid, "target_note_id": target,
+                  "archived_source": bool(archived)}
     elif p["kind"] == "new_task":
         proj = None
         if payload.get("project_id") is not None:

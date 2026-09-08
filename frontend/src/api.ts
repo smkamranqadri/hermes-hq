@@ -216,13 +216,14 @@ export type ProposalPayload = {
   new_tags?: string[]                                                   // declared tag coinage (registered at approval)
   other_note_id?: number; explanation?: string                          // contradiction
   title?: string; description?: string; assignee?: string              // new_task
+  target_note_id?: number; body?: string; archive_source?: boolean     // append_entry
 }
 export type Proposal = {
-  id: number; kind: 'split' | 'file' | 'contradiction' | 'new_task'; note_id: number
+  id: number; kind: 'split' | 'file' | 'contradiction' | 'new_task' | 'append_entry'; note_id: number
   payload: ProposalPayload | null
   summary: string; classification: 'routine' | 'needs_attention'
   status: 'pending' | 'approved' | 'rejected' | 'superseded'
-  author: string; feedback: string | null; result: { note_ids?: number[]; filed?: boolean; archived?: boolean; disputed?: number[]; task_id?: number } | null
+  author: string; feedback: string | null; result: { note_ids?: number[]; filed?: boolean; archived?: boolean; disputed?: number[]; task_id?: number; entry_id?: number; target_note_id?: number; archived_source?: boolean } | null
   created_at: number; decided_at: number | null; note_title: string | null; note_status: string | null
 }
 export type ProposalCounts = { pending: number; routine: number; needs_attention: number }
