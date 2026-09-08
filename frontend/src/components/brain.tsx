@@ -163,6 +163,11 @@ export function NoteRow({ n, areas, showBody = true }: { n: Note; areas?: Area[]
         {area && <Chip tone="accent">{area}</Chip>}
         {n.tags.slice(0, 4).map(t => <Chip key={t}>{t}</Chip>)}
         {n.status === 'archived' && <Chip>archived</Chip>}
+        {!!n.attachment_counts?.photo && <Chip>🖼 {n.attachment_counts.photo}</Chip>}
+        {!!n.attachment_counts?.voice && <Chip>🎤 {n.attachment_counts.voice}</Chip>}
+        {/* 2c: a memo with no text is waiting on the OWNER, not the librarian.
+            Standing rule — anything awaiting the owner shows on the row too. */}
+        {n.awaiting_transcript && <span className={pillCls('needsyou')} title="Voice memo with no text yet — the librarian skips it until you write what it said">needs your words</span>}
         {!!n.disputed && <DisputedChip />}
         {!!n.pending_proposal_id && <PendingProposalChip link={false} />}
       </div>
@@ -483,6 +488,35 @@ export function CaptureBox({ compact = false }: { compact?: boolean }) {
 /** 2c: a note's photos and voice memos. Photos render inline, voice plays in
  *  place, and an unrenderable format says so rather than showing a broken
  *  image. `onChange` lets the page refetch after a removal. */
+/** Attach to a note that already exists: uploads immediately, no staging —
+ *  the note is there to receive them. */
+export function AttachToNote({ noteId, onChange }: { noteId: number; onChange?: () => void }) {
+  const toast = useToast(); const qc = useQueryClient()
+  const [busy, setBusy] = useState(false)
+  const photoRef = useRef<HTMLInputElement>(null)
+  const send = async (items: Pending[]) => {
+    if (!items.length) return
+    setBusy(true)
+    try {
+      for (const p of items) await uploadAttachment(noteId, p)
+      toast(items.length === 1 ? 'Attached' : `Attached ${items.length} files`)
+      qc.invalidateQueries(); onChange?.()
+    } catch (e) { toast(e instanceof Error ? e.message : String(e), 'err') } finally { setBusy(false) }
+  }
+  return (
+    <div className="flex flex-wrap items-center gap-2">
+      <input ref={photoRef} type="file" accept="image/*" multiple hidden
+        onChange={e => {
+          const files = Array.from(e.target.files ?? [])
+          e.target.value = ''
+          void send(files.map(f => ({ file: f, name: f.name, kind: 'photo' as const, mime: f.type })))
+        }} />
+      <Btn kind="ghost" type="button" busy={busy} onClick={() => photoRef.current?.click()}>+ Photo</Btn>
+      <VoiceRecorder disabled={busy} onDone={p => void send([p])} />
+    </div>
+  )
+}
+
 export function NoteAttachments({ items, onChange }: { items: NoteAttachment[]; onChange?: () => void }) {
   const toast = useToast(); const qc = useQueryClient()
   const [busy, setBusy] = useState<number | null>(null)

@@ -3814,7 +3814,30 @@ def backup_db(db_path=None, backup_dir=None):
             b.close()
     finally:
         src.close()
+    _backup_attachments(backup_dir, name)
     return dest
+
+
+def _backup_attachments(backup_dir, db_backup_name):
+    """Copy note attachments alongside the DB backup (2c).
+
+    The DB is only half the second brain now: the rows point at photos and
+    voice memos on disk, and a backup that copies the index but not the bytes
+    restores to broken images. Named after the DB backup so a restore knows
+    which pair goes together. Best effort and never fatal — a failed copy must
+    not lose the database backup that already succeeded.
+    """
+    src = attachments_dir()
+    if not os.path.isdir(src):
+        return None
+    dest = os.path.join(backup_dir, db_backup_name.replace(".backup.db", ".attachments"))
+    try:
+        shutil.copytree(src, dest, dirs_exist_ok=True)
+        return dest
+    except Exception:
+        log = __import__("logging").getLogger("wm_store")
+        log.exception("attachment backup failed (db backup kept)")
+        return None
 
 
 def resolve_backup_dir(db_path=None):
@@ -4693,6 +4716,16 @@ ATTACHMENT_EXT = {
 UNRENDERABLE_IMAGE_MIMES = ("image/heic", "image/heif")
 
 
+# A note holding a voice memo and NO text is waiting on the owner, not on the
+# librarian: the agent cannot hear audio, so it would either file on a title or
+# spend a run saying "cannot tell". One SQL definition, used by the heartbeat,
+# the CLI worklist and the UI flag, so the three can never disagree about what
+# "voice-only" means. `n` is the notes alias the caller must use.
+VOICE_ONLY_SQL = ("TRIM(COALESCE(n.body,'')) = '' AND EXISTS "
+                  "(SELECT 1 FROM note_attachments a "
+                  " WHERE a.note_id = n.id AND a.kind = 'voice')")
+
+
 def attachments_dir(note_id=None):
     """<hq_home>/attachments[/<note_id>] — canonical location of the bytes."""
     base = os.environ.get("HERMES_HQ_ATTACHMENTS_DIR") or \
@@ -4885,6 +4918,12 @@ def list_notes(status=None, area_id=None, project_id=None, note_type=None,
         pending = {r["note_id"]: r["pid"] for r in conn.execute(
             "SELECT note_id, MAX(id) AS pid FROM proposals "
             "WHERE status='pending' GROUP BY note_id")}
+        att_counts = {}
+        for r in conn.execute("SELECT note_id, kind, COUNT(*) AS n "
+                              "FROM note_attachments GROUP BY note_id, kind"):
+            att_counts.setdefault(r["note_id"], {})[r["kind"]] = r["n"]
+        voice_only = {r["id"] for r in conn.execute(
+            "SELECT n.id FROM notes n WHERE %s" % VOICE_ONLY_SQL)}
         for r in rows:
             if r["body"] and len(r["body"]) > 400:
                 r["body"] = r["body"][:400]
@@ -4895,6 +4934,9 @@ def list_notes(status=None, area_id=None, project_id=None, note_type=None,
             # the review queue owns the decision: lists surface that a note is
             # already in the librarian's hands so the owner isn't double-filing
             r["pending_proposal_id"] = pending.get(r["id"])
+            r["attachment_counts"] = att_counts.get(r["id"], {})
+            # 2c: waiting on the owner to say what the memo said
+            r["awaiting_transcript"] = r["id"] in voice_only
         return rows
     finally:
         conn.close()
@@ -5576,7 +5618,10 @@ def heartbeat_check(name, db_path=None):
         try:
             n = conn.execute(
                 "SELECT COUNT(*) AS n FROM notes n WHERE n.status='inbox' AND NOT EXISTS "
-                "(SELECT 1 FROM proposals p WHERE p.note_id=n.id AND p.status='pending')"
+                "(SELECT 1 FROM proposals p WHERE p.note_id=n.id AND p.status='pending') "
+                # a voice memo with no text is waiting on the OWNER's words;
+                # dispatching the librarian at it just burns a model run
+                "AND NOT (%s)" % VOICE_ONLY_SQL
             ).fetchone()["n"]
         finally:
             conn.close()

@@ -170,6 +170,11 @@ export type Note = {
   status: 'inbox' | 'active' | 'archived'; area_id: number | null; project_id: number | null
   tags: string[]; authored_by: string; pinned: number; disputed: number; created_at: number; updated_at: number | null; entry_count?: number
   pending_proposal_id?: number | null
+  /** 2c: how many photos / voice memos hang off this note. */
+  attachment_counts?: { photo?: number; voice?: number }
+  /** 2c: a voice memo with NO text — waiting on the owner to write what it
+   *  said, and deliberately excluded from the librarian's worklist. */
+  awaiting_transcript?: boolean
 }
 export type NoteEntry = { id: number; note_id: number; body: string; created_at: number }
 export type NoteAttachment = {

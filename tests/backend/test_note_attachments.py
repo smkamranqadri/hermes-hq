@@ -173,3 +173,97 @@ def test_stored_name_cannot_escape_the_note_directory(env):
         except ValueError:
             continue                                          # refused outright
         assert os.path.realpath(p).startswith(base)           # or sanitised
+
+
+# ---- slice B: the librarian's boundary ---------------------------------
+
+def test_voice_only_note_is_the_owners_queue_not_the_librarians(env):
+    """A memo with no text cannot be triaged by an agent that cannot hear it.
+    The heartbeat must not mint a run for it, or every recording costs a model
+    call to be told 'cannot tell'."""
+    c, store, db = env
+    h = login(c)
+    # a normal capture DOES give the librarian work
+    typed = _note(c, h, "dentist tuesday")
+    assert store.heartbeat_check("librarian_ingest", db_path=db)[0] is True
+
+    # ...but a voice-only capture does not
+    c.post("/api/note/%d/edit" % typed, json={"status": "archived"}, headers=h)
+    voice = c.post("/api/notes", json={"title": "Voice memo · now", "body": ""},
+                   headers=h).json()["id"]
+    _upload(c, h, voice, data=M4A, kind="voice", mime="audio/mp4", name="memo.m4a")
+    has_work, detail = store.heartbeat_check("librarian_ingest", db_path=db)
+    assert has_work is False, detail
+    assert "0 untriaged" in detail
+
+    # the flag is on the row the owner sees, per the standing rule that
+    # anything awaiting the owner shows on every surface
+    row = [n for n in store.list_notes(status="inbox", db_path=db) if n["id"] == voice][0]
+    assert row["awaiting_transcript"] is True
+    assert row["attachment_counts"] == {"voice": 1}
+
+    # adding text releases it to the librarian
+    c.post("/api/note/%d/edit" % voice, json={"body": "it was about the dentist"}, headers=h)
+    assert store.heartbeat_check("librarian_ingest", db_path=db)[0] is True
+    row = [n for n in store.list_notes(status="inbox", db_path=db) if n["id"] == voice][0]
+    assert row["awaiting_transcript"] is False
+
+
+def test_a_photo_note_with_text_is_still_the_librarians_work(env):
+    """Only VOICE with no text is excluded — a photo alongside a written
+    capture is ordinary triageable content."""
+    c, store, db = env
+    h = login(c)
+    nid = _note(c, h, "whiteboard from standup")
+    _upload(c, h, nid)
+    assert store.heartbeat_check("librarian_ingest", db_path=db)[0] is True
+    row = [n for n in store.list_notes(status="inbox", db_path=db) if n["id"] == nid][0]
+    assert row["awaiting_transcript"] is False
+    assert row["attachment_counts"] == {"photo": 1}
+
+
+def test_wm_note_show_reports_attachments_but_never_bytes(env, capsys):
+    """The librarian must know a note HAS a photo/memo — otherwise it files an
+    apparently-empty body on the title alone. It must never get the bytes."""
+    c, store, db = env
+    h = login(c)
+    nid = _note(c, h, "Voice memo · now")
+    c.post("/api/note/%d/edit" % nid, json={"body": ""}, headers=h)
+    _upload(c, h, nid, data=M4A, kind="voice", mime="audio/mp4", name="memo.m4a")
+    from core import wm_cli
+    wm_cli.cmd_note_show(type("A", (), {"id": nid})())
+    out = capsys.readouterr().out
+    assert "attachments: 1 voice" in out
+    assert "VOICE-ONLY, UNTRANSCRIBED" in out and "do not propose a filing" in out
+    assert "fake audio" not in out                     # no bytes, ever
+    assert store.attachments_dir(nid) not in out       # not even the path
+
+
+# ---- slice B: backup ----------------------------------------------------
+
+def test_backup_copies_the_attachments_next_to_the_db(env, tmp_path):
+    """The DB is half the second brain now: a backup with the index but not
+    the bytes restores to broken images."""
+    c, store, db = env
+    h = login(c)
+    nid = _note(c, h)
+    a = _upload(c, h, nid).json()["attachment"]
+    dest = store.backup_db(db_path=db, backup_dir=str(tmp_path / "bk"))
+    assert os.path.isfile(dest)
+    copied = dest.replace(".backup.db", ".attachments")
+    assert os.path.isfile(os.path.join(copied, str(nid), a["stored_name"]))
+    with open(os.path.join(copied, str(nid), a["stored_name"]), "rb") as fh:
+        assert fh.read() == JPEG
+
+
+def test_backup_still_succeeds_when_attachments_cannot_be_copied(env, tmp_path, monkeypatch):
+    """A failed file copy must never lose the database backup that already
+    succeeded — attachments are best-effort, the DB is not."""
+    c, store, db = env
+    h = login(c)
+    _upload(c, h, _note(c, h))
+    def boom(*a, **kw):
+        raise OSError("disk full")
+    monkeypatch.setattr(store.shutil, "copytree", boom)
+    dest = store.backup_db(db_path=db, backup_dir=str(tmp_path / "bk2"))
+    assert os.path.isfile(dest)

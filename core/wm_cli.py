@@ -614,7 +614,12 @@ def cmd_reviews(args):
 def _note_line(n, pending_ids):
     tags = (" [%s]" % ", ".join(n["tags"])) if n.get("tags") else ""
     mark = "  (pending proposal — skip)" if n["id"] in pending_ids else ""
-    return "  #%-4d %s%s%s" % (n["id"], n["title"], tags, mark)
+    if not mark and n.get("awaiting_transcript"):
+        # 2c: a voice memo with no text is the OWNER's queue, not ours
+        mark = "  (voice-only, untranscribed — skip; waiting on the owner)"
+    counts = n.get("attachment_counts") or {}
+    att = (" {%s}" % ", ".join("%d %s" % (v, k) for k, v in sorted(counts.items()))) if counts else ""
+    return "  #%-4d %s%s%s%s" % (n["id"], n["title"], tags, att, mark)
 
 
 def cmd_note_inbox(args):
@@ -650,6 +655,16 @@ def cmd_note_show(args):
                   if l["kind"] == "note"]
         _p("  DISPUTED: conflicts with %s — the owner already adjudicated this "
            "pair; do not re-propose it" % (", ".join(others) or "another note"))
+    atts = n.get("attachments") or []
+    if atts:
+        kinds = {}
+        for a in atts:
+            kinds[a["kind"]] = kinds.get(a["kind"], 0) + 1
+        _p("  attachments: %s" % ", ".join("%d %s" % (v, k) for k, v in sorted(kinds.items())))
+        if kinds.get("voice") and not (n["body"] or "").strip():
+            _p("  VOICE-ONLY, UNTRANSCRIBED: you cannot hear audio and there is no "
+               "text yet. This note is waiting on the OWNER to write what it said — "
+               "do not propose a filing for it.")
     _p("  body:")
     for line in (n["body"] or "").splitlines():
         _p("    | " + line)
