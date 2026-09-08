@@ -75,6 +75,8 @@ export function approveLabel(p: Proposal): string {
  * note-page banner so every surface tells the same story. */
 export function ProposalPayloadView({ p, compact = false }: { p: Proposal; compact?: boolean }) {
   const areas = useAreas(); const projects = useProjects()
+  const location = useLocation()
+  const fromState = { from: location.pathname + location.search }
   const chips = (f: { area_id?: number; project_id?: number; tags?: string[]; type?: string; archive?: boolean }, inboxFallback = false) => {
     const area = areaLabel(areas.data?.areas, f.area_id ?? null)
     const proj = f.project_id ? (projects.data?.projects ?? []).find(x => x.id === f.project_id) : null
@@ -126,7 +128,7 @@ export function ProposalPayloadView({ p, compact = false }: { p: Proposal; compa
       <div className="flex flex-wrap items-center gap-1.5">
         <DisputedChip />
         <span className="text-muted">conflicts with</span>
-        <Link to={`/brain/note/${p.payload?.other_note_id}`} className="font-medium hover:text-accent-2">note #{p.payload?.other_note_id}</Link>
+        <Link to={`/brain/note/${p.payload?.other_note_id}`} state={fromState} className="font-medium hover:text-accent-2">note #{p.payload?.other_note_id}</Link>
       </div>
       {p.payload?.explanation && <p className="mt-1 text-muted">{p.payload.explanation}</p>}
       <p className="mt-1 text-[11px] text-muted">Keep-both: approving flags both notes, nothing is merged or rewritten.</p>
@@ -149,7 +151,7 @@ export function ProposalPayloadView({ p, compact = false }: { p: Proposal; compa
       <div className="flex flex-wrap items-center gap-1.5">
         <Chip tone="accent">thought</Chip>
         <span className="text-muted">onto</span>
-        <Link to={`/brain/note/${p.payload?.target_note_id}`} className="font-medium hover:text-accent-2">note #{p.payload?.target_note_id}</Link>
+        <Link to={`/brain/note/${p.payload?.target_note_id}`} state={fromState} className="font-medium hover:text-accent-2">note #{p.payload?.target_note_id}</Link>
         {p.payload?.archive_source === false && <Chip>source stays</Chip>}
       </div>
       {p.payload?.body

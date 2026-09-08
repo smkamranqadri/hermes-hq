@@ -1,6 +1,6 @@
 /** Library: folder tree (areas → sub-areas, projects, types, archive) +
  * global search over every note (FTS). Selection lives in the URL. */
-import { useState } from 'react'
+import { useEffect, useState } from 'react'
 import { useSearchParams } from 'react-router-dom'
 import clsx from 'clsx'
 import { useAreas, useNoteTags, useNotes, useNotesTree } from '../api'
@@ -33,10 +33,29 @@ export function BrainLibrary() {
   const tree = useNotesTree()
   const areas = useAreas()
   const tags = useNoteTags()
+  // `arch` is the ONLY door into the museum — `view=archived` used to be a
+  // second one, reading as a synonym of the Active/Archive refine below.
+  // Old links (or anything still emitting view=archived) get normalised to
+  // arch=1 so they land on the same list instead of a dead URL.
+  useEffect(() => {
+    if (sp.get('view') === 'archived') {
+      const n = new URLSearchParams(sp)
+      n.delete('view'); n.set('arch', '1')
+      setSp(n, { replace: true })
+    }
+  }, [sp, setSp])
   const pick = (k: 'area' | 'project' | 'type' | 'view', v: string | null) => {
     const n = new URLSearchParams()
     if (v) n.set(k, v)
     if (q) n.set('q', q)
+    // arch/tag are refine-level, not top-level — every pick carries them
+    // forward. project belongs to an area, so it only drops when the area
+    // itself changes; a type/view/project pick leaves it alone.
+    const arch = sp.get('arch'); if (arch) n.set('arch', arch)
+    const tag = sp.get('tag'); if (tag) n.set('tag', tag)
+    if (k !== 'area' && k !== 'project') {
+      const proj = sp.get('project'); if (proj) n.set('project', proj)
+    }
     setSp(n, { replace: true })
   }
   // 2b-ii sub-filters: tag (anywhere) and project (within an area) REFINE the
@@ -53,24 +72,25 @@ export function BrainLibrary() {
   // notes" stays the default selection and simply hides the museum unless the
   // owner asks for it. The toggle means Active (hide the museum) vs Archive
   // (ONLY the museum, still scoped to area/project/tag/type/q) — never a mix.
+  // arch wins over view: it is the one archive door, so it overrides Filed's
+  // status=active the same way it overrides the default's exclude_archived.
   const showArch = sp.get('arch') === '1'
   const archFilter = showArch ? { status: 'archived' } : { exclude_archived: true }
   const scoped = { area_id: areaSel ? Number(areaSel) : undefined, project_id: projSel ? Number(projSel) : undefined, type: typeSel ?? undefined, tag: tagSel ?? undefined, limit: 100 }
   const filters = q
     ? { ...scoped, q, ...archFilter }
-    : view === 'archived' ? { ...scoped, status: 'archived' }
+    : showArch ? { ...scoped, status: 'archived' }
     : view === 'inbox' ? { ...scoped, status: 'inbox' }
     : view === 'filed' ? { ...scoped, status: 'active' }
-    : { ...scoped, ...archFilter }
-  // The refine row only changes anything on "All notes" (no view) or while
-  // searching (search overrides view above) — on Inbox/Filed/Archive it would
-  // be a dead control reading as a synonym of the view select, so it hides.
-  const showArchRefine = view !== 'archived' && (!!q || !view)
+    : { ...scoped, exclude_archived: true }
+  // Shown on every view except Inbox — an inbox note is never archived, so
+  // the toggle would be a dead control there. Stays live while searching.
+  const showArchRefine = view !== 'inbox'
   const notes = useNotes(filters)
   const roots = (tree.data?.areas ?? []).filter(a => !a.parent_id)
   const children = (id: number) => (tree.data?.areas ?? []).filter(a => a.parent_id === id)
   const projName = projSel ? tree.data?.projects.find(p => String(p.id) === projSel)?.name : undefined
-  const baseLabel = q ? `“${q}”` : view === 'archived' ? 'Archive' : view === 'inbox' ? 'Inbox' : view === 'filed' ? 'Filed' : typeSel ? typeSel + 's' : projSel && !areaSel ? projName ?? 'Project' : areaSel ? (tree.data?.areas ?? []).find(a => String(a.id) === areaSel)?.name ?? 'Area' : 'All notes'
+  const baseLabel = q ? `“${q}”` : view === 'inbox' ? 'Inbox' : view === 'filed' ? 'Filed' : typeSel ? typeSel + 's' : projSel && !areaSel ? projName ?? 'Project' : areaSel ? (tree.data?.areas ?? []).find(a => String(a.id) === areaSel)?.name ?? 'Area' : 'All notes'
   // Clearing must not also throw away the area/tag the owner had selected —
   // only the query goes.
   const clearSearch = () => {
@@ -78,11 +98,12 @@ export function BrainLibrary() {
     const n = new URLSearchParams(sp); n.delete('q'); setSp(n, { replace: true })
   }
   const searchScope = areaSel ? ((tree.data?.areas ?? []).find(a => String(a.id) === areaSel)?.name ?? 'this area')
-    : view === 'archived' ? 'the Archive' : view === 'inbox' ? 'the Inbox'
+    : view === 'inbox' ? 'the Inbox'
     : projSel ? (projName ?? 'this project') : 'the Library'
   const selLabel = baseLabel
     + (areaSel && projSel ? ` · ${projName ?? 'project'}` : '')
     + (tagSel && !q && !view ? ` · #${tagSel}` : '')
+    + (showArch ? ' · Archive' : '')
   return (
     <section className="mx-auto max-w-6xl p-4 sm:p-6">
       <PageHeader crumb="second-brain // library" title="Library" right={
@@ -117,7 +138,6 @@ export function BrainLibrary() {
           <option value="">All notes</option>
           <option value="inbox">Inbox</option>
           <option value="filed">Filed</option>
-          <option value="archived">Archive</option>
         </Select>
       </div>
 
@@ -143,7 +163,6 @@ export function BrainLibrary() {
             <p className="mt-2 px-2 font-mono text-[10px] uppercase tracking-widest text-muted">Collections</p>
             <TreeRow label="Playbooks" count={tree.data?.counts?.playbook ?? 0} depth={1} active={typeSel === 'playbook'} onClick={() => pick('type', 'playbook')} />
             <TreeRow label="Wiki" count={tree.data?.counts?.wiki ?? 0} depth={1} active={typeSel === 'wiki'} onClick={() => pick('type', 'wiki')} />
-            <TreeRow label="Archive" count={tree.data?.counts?.archived ?? 0} depth={1} active={view === 'archived'} onClick={() => pick('view', 'archived')} />
           </div>
         </div>
 

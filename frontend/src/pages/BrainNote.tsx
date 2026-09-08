@@ -51,7 +51,7 @@ export function BrainNote() {
         <ConfirmModal title="Archive note" confirmLabel="Archive"
           message={`Archive “${n.title}”? It leaves the library views but stays searchable — nothing is deleted.`}
           onClose={() => setModal(null)}
-          onConfirm={async () => { await act('archive', () => post(`/api/note/${n.id}/edit`, { status: 'archived' }), 'Archived'); setModal(null); nav(from ?? '/brain/library') }} />
+          onConfirm={async () => { await act('archive', () => post(`/api/note/${n.id}/edit`, { status: 'archived' }), 'Archived'); setModal(null); nav(from ?? '/brain/library', { replace: true }) }} />
       )}
 
       <div className="mb-4 flex flex-wrap items-start justify-between gap-3">
@@ -145,7 +145,7 @@ export function BrainNote() {
                 <Chip tone="accent">{l.kind === 'task' ? 'task' : l.kind === 'note' ? 'conflicts with' : 'reminder'}</Chip>
                 {l.kind === 'task' && <Link to={`/tasks/${l.target_id}`} className="hover:text-accent-2">#{l.target_id} — {l.target?.title ?? '(deleted)'}</Link>}
                 {l.kind === 'schedule' && <Link to="/schedules" className="hover:text-accent-2">{l.target?.name ?? '(deleted)'} <span className="font-mono text-[10px] text-muted">{l.target?.cron}</span></Link>}
-                {l.kind === 'note' && <Link to={`/brain/note/${l.target_id}`} className="hover:text-accent-2">#{l.target_id} — {l.target?.title ?? '(deleted)'}</Link>}
+                {l.kind === 'note' && <Link to={`/brain/note/${l.target_id}`} state={{ from: loc.pathname + loc.search }} className="hover:text-accent-2">#{l.target_id} — {l.target?.title ?? '(deleted)'}</Link>}
                 {l.kind === 'task' && l.target?.status && <Chip>{l.target.status}</Chip>}
                 {l.kind === 'note' && !!l.target?.disputed && <DisputedChip />}
               </div>

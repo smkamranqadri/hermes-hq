@@ -1,4 +1,4 @@
-import { Link, useParams } from 'react-router-dom'
+import { Link, useLocation, useParams } from 'react-router-dom'
 import clsx from 'clsx'
 import { useQuery } from '@tanstack/react-query'
 import { get, useTask, useTaskNotes, useSystem, useWrite, ApiError, ago, when, markNotificationsRead, type TaskArtifact } from '../api'
@@ -122,6 +122,7 @@ function Fold({ title, children, desk = true }: { title: string; children: React
 
 export function TaskDetail() {
   const id = Number(useParams().id)
+  const location = useLocation()
   const q = useTask(id)
   const srcNotes = useTaskNotes(id)
   const sys = useSystem()
@@ -166,7 +167,7 @@ export function TaskDetail() {
             <GateChip taskId={t.id} on={!!t.owner_approval} canEdit={canEdit} />
             {t.goal_title && <span>· goal #{t.goal_id} {t.goal_title}</span>}
             {t.schedule_id != null && <Link to="/schedules" className="text-accent-2 hover:underline">· ⟳ created by a schedule</Link>}
-            {(srcNotes.data?.notes ?? []).map(n => <Link key={n.id} to={`/brain/note/${n.id}`} className="text-accent-2 hover:underline" title="This task was created from a Second Brain note">· ✎ from note “{n.title.length > 40 ? n.title.slice(0, 40) + '…' : n.title}”</Link>)}
+            {(srcNotes.data?.notes ?? []).map(n => <Link key={n.id} to={`/brain/note/${n.id}`} state={{ from: location.pathname + location.search }} className="text-accent-2 hover:underline" title="This task was created from a Second Brain note">· ✎ from note “{n.title.length > 40 ? n.title.slice(0, 40) + '…' : n.title}”</Link>)}
           </div>
         </div>
         {/* the board's reason is deliberately clipped to 120 chars; when the
