@@ -103,7 +103,13 @@ export function BrainNote() {
               <Btn kind="ghost" busy={busy === 'pin'} onClick={() => void act('pin', () => post(`/api/note/${n.id}/edit`, { pinned: !n.pinned }), n.pinned ? 'Unpinned' : 'Pinned')}>{n.pinned ? 'Unpin' : 'Pin'}</Btn>
               {n.status !== 'archived'
                 ? <Btn kind="warn" onClick={() => setModal('archive')}>Archive</Btn>
-                : <Btn kind="ghost" busy={busy === 'restore'} onClick={() => void act('restore', () => post(`/api/note/${n.id}/edit`, { status: 'active' }), 'Restored')}>Restore</Btn>}
+                : (() => {
+                    // A homeless note can't restore to active (store rule) —
+                    // land it back in the inbox instead of round-tripping a 409.
+                    const homeless = !n.area_id && !n.project_id
+                    const status = homeless ? 'inbox' : 'active'
+                    return <Btn kind="ghost" busy={busy === 'restore'} onClick={() => void act('restore', () => post(`/api/note/${n.id}/edit`, { status }), 'Restored')}>{homeless ? 'Restore to inbox' : 'Restore'}</Btn>
+                  })()}
             </div>
           </>
         )}

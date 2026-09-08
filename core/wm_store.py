@@ -5119,6 +5119,19 @@ def update_note(note_id, edited_by="owner", note_type=None, status=None,
                 sets.append("type=?"); params.append(note_type)
             if status is not None:
                 sets.append("status=?"); params.append(status)
+            # A note may only END UP active with a home. Covers an explicit
+            # status='active' with no area/project, and clearing area/project
+            # (or both) on an already-active note down to homeless. Checked
+            # against the RESULTING state (old value unless this call changes
+            # it), before any write lands — the whole transaction still rolls
+            # back on this raise, same as the "no such area" checks above.
+            new_status = status if status is not None else old["status"]
+            if new_status == "active":
+                new_area = fields["area_id"] if "area_id" in fields else old["area_id"]
+                new_project = fields["project_id"] if "project_id" in fields else old["project_id"]
+                if new_area is None and new_project is None:
+                    raise ValueError("A note needs an area or a project before "
+                                     "it can be filed as active.")
             if not sets:
                 raise ValueError("nothing to update")
             sets.append("updated_at=?"); params.append(time.time())

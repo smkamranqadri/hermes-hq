@@ -251,6 +251,13 @@ export function FileNoteModal({ n, onClose }: { n: Note; onClose: () => void }) 
     type: n.type as string, tags: n.tags.join(', '),
   })
   const [busy, setBusy] = useState(false)
+  // A note may only END UP active with a home (core/wm_store.py update_note).
+  // inbox -> active on Save, and an already-active note stays active here —
+  // either way, clearing both fields down to nothing must block Save rather
+  // than round-trip a 409.
+  const wouldBeActive = n.status === 'inbox' || n.status === 'active'
+  const homeless = !f.area_id && !f.project_id
+  const blocked = wouldBeActive && homeless
   const save = async () => {
     setBusy(true)
     try {
@@ -278,7 +285,8 @@ export function FileNoteModal({ n, onClose }: { n: Note; onClose: () => void }) 
           </SelectInput>
         </Field>
         <Field label="Tags" hint="Comma-separated."><TextInput value={f.tags} onChange={e => setF(x => ({ ...x, tags: e.target.value }))} placeholder="payments, 1:1" /></Field>
-        <div className="flex justify-end gap-2"><Btn kind="ghost" onClick={onClose}>Cancel</Btn><Btn onClick={() => void save()} busy={busy}>{n.status === 'inbox' ? 'File note' : 'Save'}</Btn></div>
+        {blocked && <p className="text-xs text-muted">A note needs an area or a project to be filed.</p>}
+        <div className="flex justify-end gap-2"><Btn kind="ghost" onClick={onClose}>Cancel</Btn><Btn onClick={() => void save()} busy={busy} disabled={blocked}>{n.status === 'inbox' ? 'File note' : 'Save'}</Btn></div>
       </div>
     </Modal>
   )
