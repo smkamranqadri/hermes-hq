@@ -5,15 +5,13 @@
 
 ## Now
 Task: **none in progress.** **Second Brain 2c (photo + voice capture) shipped 2026-09-08** and the owner confirmed it on real devices — Phase 2 is complete end to end; next is **Phase 3 — Import**. Everything opened this session shipped, deployed and was verified live (proof below): Second Brain **2b-i + 2b-ii** (Phase 2b complete), the **owner question loop** (Slice A + the options-always-show fix + Slice B), and the **commit contract** (Slice A gate + Slice B worktree cleanup). A later housekeeping pass (see Proof) swept the worktrees cross-repo, triaged the board from 20 dormant rows to 6 parked ones, closed #156, and fixed owner todos reading as agent-queue work. The pipeline itself has no open work.
-**Owner desk: #189 and #198, both `manual`, both the owner's own test rows — now correctly shown as "Yours to do" under Needs you** (#189 "test2"; #198 "test" — a reminder minted from note #1, see below). #156 closed 2026-09-07 (environment does not match — arm64 cannot build Android APKs; the limit was already accepted in Knowledge → Known limits, so the task was the last thing still open on it). Notifications: all read (owner triaged 2026-09-07). Second Brain is at inbox 0, 0 pending proposals, lint clean.
+**The owner's desk is CLEAR.** #189 and #198 (his own "test2"/"test" rows, the second a reminder minted from note #1) were closed 2026-09-07; #156 was closed the same day on the arm64 environment limit. The board's only open rows are the six parked below. Second Brain: inbox 0, 0 pending proposals, lint clean.
 **Parked, not dead: the job-search lane.** Board triage 2026-09-07 closed 14 dormant `planned` rows but deliberately KEPT six — "Lisbon Founding-Engineer Search" #120 (verify visa/sponsorship for Pinecrest/Larkfield/Jobgether *before* any sends — this one gates the rest), #121 tracking sheet + profile updates, #122 Wave 1 sends (Vitarc, Sirdab, Jobgether), #123 Wave 2 (Pinecrest, Larkfield), #124 follows + open-to post + cadence, and #127 "Social Media Content — current-week content plan". Created 2026-09-01, untouched since; owner parked them 2026-09-07 rather than reviving. These are the ONLY open non-owner rows on the board.
 Closed 2026-09-07 on recorded evidence: #191/#192 (reviewer CLI migration, merged `a4130e6` + verified live), #177 (personal-brand pushed to its private remote), #199/#197 (spent verification fixtures — **goal #30 phase-gate workflow is now fully done**), #202 (commit-contract verification record).
 
 ## Next
 **Second Brain Phase 3 — Import** is the next phase (5 dumps at `/opt/data/notes-dump/`, ~967 units / 69 dup groups; plan via `/kis:plan`). The 2b walkthrough and the 2c greenlight are DONE (2026-09-07/08): the owner exercised the review queue (approved split #43 → notes #21/#22/#23), the question loop, and photo+voice capture on both devices.
-Owner decisions open: **#189/#198** (your own "test" rows — do or delete). #156 is closed (env limit).
 Parked 2026-09-05: **DocsPlan** (`intent/DocsPlan.md` — user docs at `/help`, MkDocs Material, docs DoD gate) — resume = `/kis:act`.
-P1+2a shipped + owner-reviewed 2026-09-05/06 (`54327b0` `e2e796e` `27446b3` `a48f246`; mockup https://claude.ai/code/artifact/28097e1a-2343-442f-a21e-ed014e507eb3).
 
 ## Blocker
 None.
