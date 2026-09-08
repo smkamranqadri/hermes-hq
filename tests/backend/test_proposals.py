@@ -645,7 +645,11 @@ def test_lint_findings_and_notification(env):
     import time as _t
     c, store, db = env
     assert store.lint_library(db_path=db) == []                      # clean start
-    store.create_note("orphan", status="active", db_path=db)         # filed nowhere
+    orphan = store.create_note("orphan", db_path=db)                 # filed nowhere
+    conn0 = store._connect(db)
+    with conn0:                          # simulate a pre-rule orphan (lint's own surface)
+        conn0.execute("UPDATE notes SET status='active' WHERE id=?", (orphan,))
+    conn0.close()
     old = store.create_note("stale", db_path=db)                     # inbox, backdated
     big = store.create_note("dump", body="x" * (store.LINT_OVERSIZED_BODY + 1), db_path=db)
     conn = store._connect(db)
@@ -681,7 +685,11 @@ def test_lint_heartbeat_schedule(env):
     conn.close()
     assert store.fire_due(db_path=db)[0][1] == "skipped"             # clean => free
     assert store.list_tasks(db_path=db) == []
-    store.create_note("orphan", status="active", db_path=db)
+    orphan = store.create_note("orphan", db_path=db)
+    conn0 = store._connect(db)
+    with conn0:                          # simulate a pre-rule orphan (lint's own surface)
+        conn0.execute("UPDATE notes SET status='active' WHERE id=?", (orphan,))
+    conn0.close()
     conn = store._connect(db)
     with conn:
         conn.execute("UPDATE schedules SET next_fire_at=1.0 WHERE id=?", (sid,))
@@ -694,8 +702,9 @@ def test_lint_heartbeat_schedule(env):
 def test_tag_filter_survives_malformed_tags(env):
     """One row with corrupt tags JSON must not fail the whole filter query."""
     c, store, db = env
-    good = store.create_note("good", status="active", tags=["deep"], db_path=db)
-    bad = store.create_note("corrupt", status="active", db_path=db)
+    work = area_id(store, db, "Work")
+    good = store.create_note("good", status="active", area_id=work, tags=["deep"], db_path=db)
+    bad = store.create_note("corrupt", status="active", area_id=work, db_path=db)
     conn = store._connect(db)
     with conn:
         conn.execute("UPDATE notes SET tags='not-json' WHERE id=?", (bad,))

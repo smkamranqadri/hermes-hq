@@ -251,13 +251,13 @@ export function FileNoteModal({ n, onClose }: { n: Note; onClose: () => void }) 
     type: n.type as string, tags: n.tags.join(', '),
   })
   const [busy, setBusy] = useState(false)
+  const home = !!f.area_id || !!f.project_id
   // A note may only END UP active with a home (core/wm_store.py update_note).
-  // inbox -> active on Save, and an already-active note stays active here —
-  // either way, clearing both fields down to nothing must block Save rather
-  // than round-trip a 409.
-  const wouldBeActive = n.status === 'inbox' || n.status === 'active'
-  const homeless = !f.area_id && !f.project_id
-  const blocked = wouldBeActive && homeless
+  // An inbox note saved with no home just stays inbox — a tag- or type-only
+  // edit on a fresh capture must never be blocked. An already-active note
+  // clearing both fields down to nothing WOULD go homeless-active, which the
+  // store refuses; block Save there instead of round-tripping a 409.
+  const blocked = n.status === 'active' && !home
   const save = async () => {
     setBusy(true)
     try {
@@ -265,9 +265,9 @@ export function FileNoteModal({ n, onClose }: { n: Note; onClose: () => void }) 
         area_id: f.area_id ? Number(f.area_id) : undefined, clear_area: !f.area_id,
         project_id: f.project_id ? Number(f.project_id) : undefined, clear_project: !f.project_id,
         type: f.type, tags: tagsFrom(f.tags),
-        status: n.status === 'inbox' ? 'active' : undefined,
+        status: n.status === 'inbox' && home ? 'active' : undefined,
       })
-      toast(n.status === 'inbox' ? 'Filed' : 'Saved'); qc.invalidateQueries(); onClose()
+      toast(n.status === 'inbox' && home ? 'Filed' : 'Saved'); qc.invalidateQueries(); onClose()
     } catch (e) { toast(e instanceof Error ? e.message : String(e), 'err') } finally { setBusy(false) }
   }
   return (
@@ -285,7 +285,9 @@ export function FileNoteModal({ n, onClose }: { n: Note; onClose: () => void }) 
           </SelectInput>
         </Field>
         <Field label="Tags" hint="Comma-separated."><TextInput value={f.tags} onChange={e => setF(x => ({ ...x, tags: e.target.value }))} placeholder="payments, 1:1" /></Field>
-        {blocked && <p className="text-xs text-muted">A note needs an area or a project to be filed.</p>}
+        {n.status === 'inbox'
+          ? !home && <p className="text-xs text-muted">Pick an area or a project to file it; saving without one keeps it in the inbox.</p>
+          : blocked && <p className="text-xs text-muted">A note needs an area or a project to be filed.</p>}
         <div className="flex justify-end gap-2"><Btn kind="ghost" onClick={onClose}>Cancel</Btn><Btn onClick={() => void save()} busy={busy} disabled={blocked}>{n.status === 'inbox' ? 'File note' : 'Save'}</Btn></div>
       </div>
     </Modal>
@@ -730,6 +732,12 @@ export function EditProposalModal({ p, onClose }: { p: Proposal; onClose: () => 
     } catch (e) { toast(e instanceof Error ? e.message : String(e), 'err') } finally { setBusy(false) }
   }
   const projectList = projects.data?.projects ?? []
+  // A file proposal may only END UP active with a home (core/wm_store.py
+  // update_note / _validate_proposal_payload) — archiving is the one
+  // exception. Block the approve button the same way FileNoteModal blocks
+  // Save, instead of round-tripping a 409.
+  const fileHomeless = p.kind === 'file' && !file.area_id && !file.new_area.trim()
+    && !file.project_id && !file.archive
   return (
     <Modal title={`Edit ${KIND_LABEL[p.kind]} proposal #${p.id}`} onClose={onClose}>
       <div className="flex flex-col gap-3">
@@ -739,7 +747,7 @@ export function EditProposalModal({ p, onClose }: { p: Proposal; onClose: () => 
             {(file.new_area || !file.area_id) && (
               <Field label="…or a new area"
                      hint={file.area_id ? 'Ignored — you picked an existing area above.'
-                                        : 'Approving CREATES this area. Leave empty to file with no area.'}>
+                                        : 'Approving CREATES this area. The note needs an area or a project (or Archive) to be filed.'}>
                 <TextInput value={file.new_area} placeholder="e.g. DIY"
                            onChange={e => setFile(x => ({ ...x, new_area: e.target.value }))} />
               </Field>
@@ -750,6 +758,7 @@ export function EditProposalModal({ p, onClose }: { p: Proposal; onClose: () => 
               <input type="checkbox" checked={file.archive} onChange={e => setFile(x => ({ ...x, archive: e.target.checked }))} />
               Send to Archive (junk/museum — stays searchable)
             </label>
+            {fileHomeless && <p className="text-xs text-muted">A note needs an area or a project to be filed.</p>}
           </>
         )}
         {p.kind === 'new_task' && (
@@ -794,7 +803,8 @@ export function EditProposalModal({ p, onClose }: { p: Proposal; onClose: () => 
         )}
         <div className="flex justify-end gap-2">
           <Btn kind="ghost" onClick={onClose}>Cancel</Btn>
-          <Btn onClick={() => void save()} busy={busy} disabled={p.kind === 'new_task' && !task.title.trim()}>Approve with edits</Btn>
+          <Btn onClick={() => void save()} busy={busy}
+               disabled={(p.kind === 'new_task' && !task.title.trim()) || fileHomeless}>Approve with edits</Btn>
         </div>
       </div>
     </Modal>

@@ -4665,6 +4665,11 @@ def create_note(title, body="", note_type="note", status="inbox", area_id=None,
                          % (status, ", ".join(NOTE_STATUSES)))
     if authored_by not in NOTE_AUTHORS:
         raise ValueError("invalid authored_by %r" % (authored_by,))
+    # Same home rule as update_note (5074): a note may only be MINTED active
+    # with a home. A brand-new note has no "old" state to fall back on, so
+    # this is unconditional whenever status='active' is requested.
+    if status == "active" and area_id is None and project_id is None:
+        raise ValueError(_NOTE_NEEDS_HOME_MSG)
     tags_json = _encode_tags(tags)
     conn = _connect(db_path)
     try:
@@ -5070,6 +5075,14 @@ def list_notes(status=None, area_id=None, project_id=None, note_type=None,
 
 _NOTE_EDITABLE = ("title", "body", "area_id", "project_id", "tags", "pinned", "disputed")
 
+# A note may only END UP `active` with an area or a project. One message,
+# checked in three places: create_note (mint), update_note (edit/refile/
+# restore — the backstop for every write path), and _validate_proposal_payload
+# for kind 'file' (so a doomed proposal is refused at propose/approve time,
+# BEFORE new_tags/new_area register anything — not just when update_note
+# finally applies it).
+_NOTE_NEEDS_HOME_MSG = "A note needs an area or a project before it can be filed as active."
+
 
 def update_note(note_id, edited_by="owner", note_type=None, status=None,
                 db_path=None, **fields):
@@ -5125,13 +5138,21 @@ def update_note(note_id, edited_by="owner", note_type=None, status=None,
             # against the RESULTING state (old value unless this call changes
             # it), before any write lands — the whole transaction still rolls
             # back on this raise, same as the "no such area" checks above.
+            #
+            # Fires ONLY when the edit actually touches status/area/project —
+            # not on every edit of an already-homeless active note (a lint
+            # orphan). Title/body/tags/pinned/disputed edits on such a note
+            # must keep working; this is the backstop for the paths that DO
+            # move status or filing (owner activate/refile, restore,
+            # approve_proposal — which always passes status), not a blanket
+            # re-check of notes this call never touches.
             new_status = status if status is not None else old["status"]
-            if new_status == "active":
+            if (status is not None or "area_id" in fields or "project_id" in fields) \
+                    and new_status == "active":
                 new_area = fields["area_id"] if "area_id" in fields else old["area_id"]
                 new_project = fields["project_id"] if "project_id" in fields else old["project_id"]
                 if new_area is None and new_project is None:
-                    raise ValueError("A note needs an area or a project before "
-                                     "it can be filed as active.")
+                    raise ValueError(_NOTE_NEEDS_HOME_MSG)
             if not sets:
                 raise ValueError("nothing to update")
             sets.append("updated_at=?"); params.append(time.time())
@@ -5510,6 +5531,16 @@ def _validate_proposal_payload(conn, kind, payload, note_id=None):
                 for k in ("area_id", "project_id", "tags", "type")):
             raise ValueError("file payload needs at least one of area_id, "
                              "project_id, tags, type, new_area (or archive: true)")
+        # The note-level home rule (create_note/update_note), pulled forward
+        # to validation time: a file payload that isn't archiving and carries
+        # none of area_id/project_id/new_area is a DOOMED proposal — it would
+        # go active with no home the moment it is applied. Catching it here
+        # (not just when update_note later raises) means it is refused before
+        # new_tags/new_area register anything, and at `wm note propose-file`
+        # time too, not only at approval.
+        if not archive and payload.get("area_id") is None \
+                and payload.get("project_id") is None and new_area is None:
+            raise ValueError(_NOTE_NEEDS_HOME_MSG)
     elif kind == "split":
         parts = payload.get("parts")
         if not isinstance(parts, list) or not parts:

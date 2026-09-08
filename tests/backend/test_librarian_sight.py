@@ -84,7 +84,8 @@ def test_append_entry_is_never_routine(env):
     bulk-approved — enforced in the store, not only in the CLI."""
     c, store, db = env
     src = store.create_note("follow-up", body="also they pay relocation", db_path=db)
-    tgt = store.create_note("Lisbon search", body="notes", status="active", db_path=db)
+    tgt = store.create_note("Lisbon search", body="notes", status="active",
+                            area_id=area_id(store, db, "Career"), db_path=db)
     assert "append_entry" in store.OWNER_EYES_KINDS
     with pytest.raises(ValueError, match="needs_attention"):
         store.create_proposal("append_entry", src, {"target_note_id": tgt},
@@ -94,7 +95,8 @@ def test_append_entry_is_never_routine(env):
 def test_append_entry_payload_validation(env):
     c, store, db = env
     src = store.create_note("s", body="b", db_path=db)
-    tgt = store.create_note("t", body="b", status="active", db_path=db)
+    tgt = store.create_note("t", body="b", status="active",
+                            area_id=area_id(store, db, "Work"), db_path=db)
     bad = [
         ({}, "target_note_id"),                                  # missing target
         ({"target_note_id": "7"}, "target_note_id"),             # not an int
@@ -126,7 +128,7 @@ def test_approval_appends_verbatim_and_creates_no_new_note(env):
     does NOT grow."""
     c, store, db = env
     tgt = store.create_note("Lisbon search", body="tracking the lane",
-                            status="active", db_path=db)
+                            status="active", area_id=area_id(store, db, "Career"), db_path=db)
     src = store.create_note("Pinecrest sponsors", body="Pinecrest confirmed sponsorship",
                             db_path=db)
     n_before = len(store.list_notes(limit=500, db_path=db))
@@ -152,7 +154,8 @@ def test_approval_appends_verbatim_and_creates_no_new_note(env):
 
 def test_approval_honours_an_explicit_body_and_keep_source(env):
     c, store, db = env
-    tgt = store.create_note("Standup", body="9:30", status="active", db_path=db)
+    tgt = store.create_note("Standup", body="9:30", status="active",
+                            area_id=area_id(store, db, "Work"), db_path=db)
     src = store.create_note("dump", body="line one\nstandup moved to 10:00\nline three",
                             db_path=db)
     pid = store.create_proposal("append_entry", src,
@@ -171,7 +174,8 @@ def test_approval_fails_cleanly_when_the_target_vanished(env):
     """Re-validation happens against CURRENT state: a target archived after the
     proposal was written must not append anything."""
     c, store, db = env
-    tgt = store.create_note("t", body="b", status="active", db_path=db)
+    tgt = store.create_note("t", body="b", status="active",
+                            area_id=area_id(store, db, "Work"), db_path=db)
     src = store.create_note("s", body="follow-up", db_path=db)
     pid = store.create_proposal("append_entry", src, {"target_note_id": tgt}, db_path=db)
     store.update_note(tgt, edited_by="owner", status="archived", db_path=db)
@@ -188,7 +192,8 @@ def test_empty_capture_cannot_be_appended_verbatim(env):
     """A voice-only capture has no text; appending it verbatim would add an
     empty Thought that can never be deleted."""
     c, store, db = env
-    tgt = store.create_note("t", body="b", status="active", db_path=db)
+    tgt = store.create_note("t", body="b", status="active",
+                            area_id=area_id(store, db, "Work"), db_path=db)
     src = store.create_note("voice memo", body="", db_path=db)
     pid = store.create_proposal("append_entry", src, {"target_note_id": tgt}, db_path=db)
     h = login(c)
@@ -336,7 +341,8 @@ def test_exclude_archived_returns_inbox_and_active_but_not_archive(env):
     notes interleaved with the ones the owner is triaging."""
     c, store, db = env
     inbox = store.create_note("captured", body="x", db_path=db)
-    active = store.create_note("filed", body="x", status="active", db_path=db)
+    active = store.create_note("filed", body="x", status="active",
+                               area_id=area_id(store, db, "Work"), db_path=db)
     arch = store.create_note("museum", body="x", status="archived", db_path=db)
 
     every = {n["id"] for n in store.list_notes(limit=500, db_path=db)}
@@ -366,7 +372,8 @@ def test_exclude_archived_composes_with_the_other_filters(env):
 
 def test_notes_api_exposes_the_filter(env):
     c, store, db = env
-    store.create_note("live one", body="x", status="active", db_path=db)
+    store.create_note("live one", body="x", status="active",
+                      area_id=area_id(store, db, "Work"), db_path=db)
     store.create_note("museum one", body="x", status="archived", db_path=db)
     login(c)
     every = c.get("/api/notes").json()["notes"]
@@ -394,7 +401,7 @@ def test_search_respects_the_area_you_are_looking_at(env):
 def test_search_hides_the_archive_when_asked(env):
     c, store, db = env
     live = store.create_note("standup live", body="daily standup", status="active",
-                             db_path=db)
+                             area_id=area_id(store, db, "Work"), db_path=db)
     store.create_note("standup old", body="daily standup", status="archived",
                       db_path=db)
     assert len(store.search_notes("standup", db_path=db)) == 2
@@ -410,7 +417,7 @@ def test_search_scope_applies_to_the_like_fallback_too(env):
     a = store.create_note("odd one", body="pipe | star * paren (", status="active",
                           area_id=work, db_path=db)
     store.create_note("odd two", body="pipe | star * paren (", status="active",
-                      db_path=db)
+                      area_id=area_id(store, db, "Home"), db_path=db)
     got = store.search_notes("star *", area_id=work, db_path=db)
     assert [n["id"] for n in got] == [a]
 
@@ -420,7 +427,8 @@ def test_search_api_carries_the_filters(env):
     work = area_id(store, db, "Work")
     a = store.create_note("api scoped", body="findme", status="active",
                           area_id=work, db_path=db)
-    store.create_note("api global", body="findme", status="active", db_path=db)
+    store.create_note("api global", body="findme", status="active",
+                      area_id=area_id(store, db, "Home"), db_path=db)
     login(c)
     assert len(c.get("/api/notes?q=findme").json()["notes"]) == 2
     scoped = c.get("/api/notes?q=findme&area_id=%d" % work).json()["notes"]
