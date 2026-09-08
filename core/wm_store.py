@@ -482,12 +482,17 @@ CREATE TABLE IF NOT EXISTS push_subscriptions (
 
 -- Second Brain (intent/SecondBrainPlan.md, Phase 1) -------------------------
 CREATE TABLE IF NOT EXISTS areas (
-    id         INTEGER PRIMARY KEY,
-    name       TEXT NOT NULL,
-    parent_id  INTEGER REFERENCES areas(id),
-    position   INTEGER DEFAULT 0,
-    created_at REAL,
-    archived   INTEGER DEFAULT 0
+    id          INTEGER PRIMARY KEY,
+    name        TEXT NOT NULL,
+    parent_id   INTEGER REFERENCES areas(id),
+    position    INTEGER DEFAULT 0,
+    created_at  REAL,
+    archived    INTEGER DEFAULT 0,
+    -- What belongs here and, just as importantly, what does NOT (naming where
+    -- the excluded thing goes instead). This is the librarian's filing rule:
+    -- `wm note areas` prints it, and without it the agent guesses the boundary
+    -- -- which is what the wave-1 review spent its rejections correcting.
+    description TEXT
 );
 CREATE UNIQUE INDEX IF NOT EXISTS idx_areas_name
     ON areas(name, COALESCE(parent_id, 0));
@@ -692,6 +697,9 @@ def _migrate(conn):
             except ValueError:
                 continue
         _register_tags(conn, sorted(seen), "owner")
+    # Area descriptions pass: an area carries the rule for what belongs in it.
+    if "description" not in _table_columns(conn, "areas"):
+        conn.execute("ALTER TABLE areas ADD COLUMN description TEXT")
     # Second Brain 2c: photo + voice attachments (see SCHEMA_SQL for why the
     # layout is flat by note id). CREATE IF NOT EXISTS makes this idempotent on
     # a live DB that predates the table.
@@ -4611,11 +4619,12 @@ def _fts_sync(conn, note_id):
         (note_id, row["title"] or "", body, tags))
 
 
-def create_area(name, parent_id=None, db_path=None):
+def create_area(name, parent_id=None, description=None, db_path=None):
     """Create a life area (or sub-area). Returns the new id."""
     if not isinstance(name, str) or not name.strip():
         raise ValueError("area name is required")
     name = name.strip()
+    description = _clean_area_description(description)
     conn = _connect(db_path)
     try:
         with conn:
@@ -4628,10 +4637,10 @@ def create_area(name, parent_id=None, db_path=None):
                     raise ValueError("areas are two-level: cannot nest under a sub-area")
             try:
                 cur = conn.execute(
-                    "INSERT INTO areas(name, parent_id, position, created_at) "
+                    "INSERT INTO areas(name, parent_id, position, created_at, description) "
                     "VALUES(?,?,COALESCE((SELECT MAX(position)+1 FROM areas "
-                    "WHERE COALESCE(parent_id,0)=COALESCE(?,0)), 0),?)",
-                    (name, parent_id, parent_id, time.time()))
+                    "WHERE COALESCE(parent_id,0)=COALESCE(?,0)), 0),?,?)",
+                    (name, parent_id, parent_id, time.time(), description))
             except sqlite3.IntegrityError:
                 raise ValueError("area %r already exists at this level" % name)
             return cur.lastrowid
@@ -4639,7 +4648,109 @@ def create_area(name, parent_id=None, db_path=None):
         conn.close()
 
 
+_UNSET = object()          # "caller said nothing" -- distinct from "set it to NULL"
+
+
+def _clean_area_description(description):
+    """Trim a description; an all-whitespace one becomes None, which CLEARS the
+    field. Callers must distinguish "not provided" (_UNSET) from this None, or
+    clearing a description is indistinguishable from not touching it."""
+    if description is None:
+        return None
+    if not isinstance(description, str):
+        raise ValueError("area description must be text")
+    return description.strip() or None
+
+
+def update_area(area_id, name=None, description=_UNSET, archived=None, db_path=None):
+    """Edit an area: rename, (re)write its description, retire or restore it.
+
+    Retiring is how an area is REMOVED -- there is no delete path, matching the
+    archive-only note lifecycle. `list_areas` and `notes_tree` both filter
+    `archived=0`, so one flip hides an area from every filing surface at once
+    while its historical notes keep pointing at it.
+
+    That is also why retiring is GUARDED. An area still holding live notes
+    would strand them: an `active` note would lose the home policy 12 requires,
+    and an `inbox` note would point at an area no surface can show. Both are
+    refused with the count, so the caller refiles first.
+    """
+    if name is None and description is _UNSET and archived is None:
+        raise ValueError("nothing to update")
+    if name is not None and (not isinstance(name, str) or not name.strip()):
+        raise ValueError("area name is required")
+    if description is not _UNSET:
+        description = _clean_area_description(description)
+    conn = _connect(db_path)
+    try:
+        with conn:
+            old = conn.execute("SELECT * FROM areas WHERE id=?", (area_id,)).fetchone()
+            if old is None:
+                raise ValueError("no such area: %r" % area_id)
+            if archived:
+                # Live == anything the owner can still reach in the Library:
+                # active AND inbox. Only archived notes may trail a retired area.
+                live = conn.execute(
+                    "SELECT COUNT(*) AS n FROM notes "
+                    "WHERE area_id=? AND status <> 'archived'", (area_id,)
+                ).fetchone()["n"]
+                if live:
+                    raise ValueError(
+                        "cannot retire area %r: %d note%s still filed here — "
+                        "refile or archive them first"
+                        % (old["name"], live, "" if live == 1 else "s"))
+                kids = conn.execute(
+                    "SELECT COUNT(*) AS n FROM areas "
+                    "WHERE parent_id=? AND archived=0", (area_id,)).fetchone()["n"]
+                if kids:
+                    raise ValueError(
+                        "cannot retire area %r: %d live sub-area%s under it"
+                        % (old["name"], kids, "" if kids == 1 else "s"))
+            sets, params = [], []
+            if name is not None:
+                sets.append("name=?"); params.append(name.strip())
+            if description is not _UNSET:
+                # None here means CLEAR, which is why the sentinel exists.
+                sets.append("description=?"); params.append(description)
+            if archived is not None:
+                sets.append("archived=?"); params.append(1 if archived else 0)
+            params.append(area_id)
+            try:
+                conn.execute("UPDATE areas SET %s WHERE id=?" % ", ".join(sets), params)
+            except sqlite3.IntegrityError:
+                raise ValueError("area %r already exists at this level" % name)
+    finally:
+        conn.close()
+    changed = [k for k, v in (("name", name), ("description", description),
+                              ("archived", archived))
+               if v is not None and v is not _UNSET]
+    if description is None:
+        changed.append("description cleared")
+    log_activity("area_updated",
+                 detail="area #%d (%s)" % (area_id, ", ".join(changed)),
+                 db_path=db_path)
+    return get_area(area_id, db_path=db_path)
+
+
+def get_area(area_id, db_path=None):
+    """One area by id, archived or not (label resolution must still work for a
+    retired area -- see list_areas)."""
+    conn = _connect(db_path)
+    try:
+        row = conn.execute("SELECT * FROM areas WHERE id=?", (area_id,)).fetchone()
+        return dict(row) if row else None
+    finally:
+        conn.close()
+
+
 def list_areas(db_path=None, archived=False):
+    """Areas for filing surfaces (default) or for LABEL resolution.
+
+    `archived=False` is the filing view: retired areas are gone, so nothing can
+    be filed into one. `archived=True` returns every area including retired
+    ones -- what a caller needs to render the home of a note that was filed
+    before its area was retired. Filing surfaces must never pass True.
+    """
     conn = _connect(db_path)
     try:
         sql = "SELECT * FROM areas"
@@ -4711,13 +4822,18 @@ def get_note(note_id, db_path=None):
             (note_id,)).fetchall()]
         d["links"] = _note_links(conn, note_id)
         d["attachments"] = _note_attachments(conn, note_id)
-        area = conn.execute("SELECT id, name, parent_id FROM areas WHERE id=?",
-                            (d["area_id"],)).fetchone() if d["area_id"] else None
+        # No archived filter: a note filed in a RETIRED area must still show
+        # where it lives (the page marks it retired rather than blanking it).
+        area = conn.execute(
+            "SELECT id, name, parent_id, archived, description FROM areas WHERE id=?",
+            (d["area_id"],)).fetchone() if d["area_id"] else None
         if area is not None:
             parent = conn.execute("SELECT name FROM areas WHERE id=?",
                                   (area["parent_id"],)).fetchone() if area["parent_id"] else None
             d["area"] = {"id": area["id"], "name": area["name"],
-                         "parent": parent["name"] if parent else None}
+                         "parent": parent["name"] if parent else None,
+                         "archived": area["archived"],
+                         "description": area["description"]}
         else:
             d["area"] = None
         proj = conn.execute("SELECT slug, name FROM projects WHERE id=?",

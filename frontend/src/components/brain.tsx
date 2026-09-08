@@ -173,9 +173,27 @@ export function areaLabel(areas: Area[] | undefined, id: number | null) {
   return parent ? `${parent.name} / ${a.name}` : a.name
 }
 
+/** True when the note's area has been RETIRED. Retiring is how an area is
+ * removed (there is no delete), and its archived notes keep pointing at it —
+ * so the row still names the home, just muted, instead of dropping the chip
+ * and reading as "never filed". Same provenance treatment `authored_by` got. */
+export function areaRetired(areas: Area[] | undefined, id: number | null) {
+  if (!id || !areas) return false
+  return !!areas.find(x => x.id === id)?.archived
+}
+
+/** The area chip for a list row: accent while the area is live, muted and
+ * marked once it is retired. */
+export function AreaChip({ areas, id }: { areas: Area[] | undefined; id: number | null }) {
+  const label = areaLabel(areas, id)
+  if (!label) return null
+  return areaRetired(areas, id)
+    ? <Chip><span title="This area was retired — the note keeps its filing">{label} · retired</span></Chip>
+    : <Chip tone="accent">{label}</Chip>
+}
+
 /** One note in a list — Library results, project tab, Home recents. */
 export function NoteRow({ n, areas, showBody = true }: { n: Note; areas?: Area[]; showBody?: boolean }) {
-  const area = areaLabel(areas, n.area_id)
   const location = useLocation()
   // Carry where we came from so archiving (on the note page) can return here
   // instead of always bouncing to the unfiltered Library.
@@ -190,7 +208,7 @@ export function NoteRow({ n, areas, showBody = true }: { n: Note; areas?: Area[]
       </div>
       {showBody && n.body && <p className="mt-1 line-clamp-2 text-xs text-muted">{n.body}</p>}
       <div className="mt-1.5 flex min-w-0 flex-wrap items-center gap-1.5">
-        {area && <Chip tone="accent">{area}</Chip>}
+        <AreaChip areas={areas} id={n.area_id} />
         {/* The note page shows area + project + tags + authored_by — a row
             missing the project chip read as "not all tags shown" (owner
             report). Same plain-Chip look as the note page, no Link inside
@@ -332,6 +350,13 @@ export function AreaSelect({ value, onChange, areas }: { value: string; onChange
   )
 }
 
+/** The selected area's filing rule, for surfaces that file. Empty string when
+ * nothing is selected or the area has no description yet. */
+export function areaDescription(areas: Area[] | undefined, id: string) {
+  if (!id || !areas) return ''
+  return (areas.find(a => a.id === Number(id))?.description ?? '').trim()
+}
+
 /** Project picker by id — shared for the same reason. */
 /** Project options with the tree's live note counts merged in (tree lists only
  *  projects that hold notes; the rest stay countless rather than showing 0). */
@@ -382,6 +407,12 @@ export function FileNoteModal({ n, onClose }: { n: Note; onClose: () => void }) 
       <div className="flex flex-col gap-3">
         <Field label="Area">
           <AreaSelect value={f.area_id} onChange={v => setF(x => ({ ...x, area_id: v }))} areas={tree.data?.areas ?? []} />
+          {/* The description says what belongs here and what does not — the
+              same rule the librarian files by. Showing it at the moment of
+              filing is the point; omitted when the area has none yet. */}
+          {areaDescription(tree.data?.areas, f.area_id) && (
+            <p className="mt-1 text-xs text-muted">{areaDescription(tree.data?.areas, f.area_id)}</p>
+          )}
         </Field>
         <Field label="Project" hint="Project-linked notes show on that project's page.">
           <ProjectSelect value={f.project_id} onChange={v => setF(x => ({ ...x, project_id: v }))} projects={withProjectCounts(projects.data?.projects ?? [], tree.data?.projects)} />

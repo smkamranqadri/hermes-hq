@@ -791,17 +791,34 @@ def cmd_note_show(args):
 
 
 def cmd_note_areas(args):
+    """The librarian's filing rule, not just a list of ids.
+
+    Each area's description says what belongs there AND what does not (naming
+    where the excluded thing goes instead). Without it the agent guesses the
+    boundary, which is exactly what the wave-1 review spent its rejections
+    correcting -- so the description prints right under the name, indented, and
+    an area still missing one says so out loud rather than looking finished.
+    """
     areas = store.list_areas()
     top = [a for a in areas if a["parent_id"] is None]
     kids = {}
     for a in areas:
         if a["parent_id"] is not None:
             kids.setdefault(a["parent_id"], []).append(a)
-    _p("Areas (two-level; use the id in propose payloads):")
+
+    def _line(a, indent):
+        _p("%s#%-3d %s" % (indent, a["id"], a["name"]))
+        desc = (a.get("description") or "").strip()
+        _p("%s     %s" % (indent, desc if desc
+                          else "(no description yet — ask the owner before filing here)"))
+
+    _p("Areas (two-level; use the id in propose payloads).")
+    _p("File by the description, not by the name. A note that fits TWO areas is")
+    _p("not `--routine`: propose it and name the ambiguity for the owner.")
     for a in top:
-        _p("  #%-3d %s" % (a["id"], a["name"]))
+        _line(a, "  ")
         for k in kids.get(a["id"], []):
-            _p("      #%-3d %s" % (k["id"], k["name"]))
+            _line(k, "      ")
     return 0
 
 

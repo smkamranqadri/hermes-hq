@@ -80,6 +80,9 @@ export function BrainNote() {
   if (q.isLoading) return <section className="mx-auto max-w-4xl p-4 sm:p-6"><Loading rows={4} /></section>
   if (q.isError || !n) return <section className="mx-auto max-w-4xl p-6"><Empty error title={`Could not load note #${id}`} note={String(q.error ?? '404')} /></section>
   const areaLabel = n.area ? (n.area.parent ? `${n.area.parent} / ${n.area.name}` : n.area.name) : null
+  // A retired area still names this note's home — muted and marked, never
+  // dropped, or an archived note would read as though it was never filed.
+  const areaGone = !!n.area?.archived
   return (
     <section className="mx-auto max-w-4xl p-4 sm:p-6">
       <Crumbs items={[['Second Brain', '/brain'], ['Library', '/brain/library'], [`#${n.id}`]]} />
@@ -118,7 +121,11 @@ export function BrainNote() {
         )}
         <span className={clsx('font-mono text-[10px] uppercase tracking-wider', TYPE_TONE[n.type])}>{n.type}</span>
         <button type="button" onClick={() => setModal('file')} title="Edit area, project, tags" className="flex flex-wrap items-center gap-1.5 hover:opacity-80">
-          {areaLabel ? <Chip tone="accent">{areaLabel}</Chip> : <Chip>no area — set ✎</Chip>}
+          {areaLabel
+            ? (areaGone
+                ? <Chip><span title="This area was retired — the note keeps its filing">{areaLabel} · retired</span></Chip>
+                : <Chip tone="accent">{areaLabel}</Chip>)
+            : <Chip>no area — set ✎</Chip>}
           {n.tags.map(t => <Chip key={t}>{t}</Chip>)}
         </button>
         {n.project && <Link to={`/projects/${n.project.slug}`}><Chip>{n.project.name}</Chip></Link>}

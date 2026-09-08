@@ -25,13 +25,15 @@
 
 12. **Area is required for a note to become `active`.** Capture stays frictionless (inbox needs nothing); the transition to `active` — owner edit, refile, or proposal approval — must carry an area **or** a project. Enforce in code like the tag taxonomy (store-level, so every path inherits it). Existing area-less active notes: surface via lint (`orphan` already exists) rather than mass-migrate.
 
-## Taxonomy questions (feed these into the area-descriptions interview — owner is still forming views; do NOT pre-decide)
+## Taxonomy questions — **ANSWERED 2026-09-08, see `intent/AreaDescriptionsPlan.md`** (do not re-ask)
 
 - **Note #112**: a side project that is *related to* BrightLane and Work — the multi-home case again (area DIY-style single-home vs project links).
 - **Content**: is it what he needs to *consume* (reading/watch lists) or what he plans to *post*? Possibly two things wearing one name.
 - **Career** now accumulates social media + personal brand: split the area, or tags, or projects?
 - **Journal**: unclear what belongs in it at all.
 These four are exactly what `areas.description` (the planned descriptions pass) exists to answer — draft descriptions from his settled filings + rejection feedback, interview him on these four explicitly, and write the exclusions ("Content — what I plan to publish; consumption lists live in …").
+
+**Outcomes (owner-interviewed 2026-09-08 — the answers and their reasoning live in `intent/AreaDescriptionsPlan.md`):** #112 multi-home → **no rule, decide per note**; an area stays single-valued and an ambiguous note is never filed `routine`. Content → **split**: `Content` = what I publish, new area **`Reading`** = what I consume. Career → **not split**: personal-brand strategy stays in Career, the artifacts it produces go to Content. Journal → **retired** (it never held a real note), and **Home retired** with it. The pass also prunes rather than only describing: 18 areas → **17**.
 
 ## Order suggestion for the next session
 

@@ -34,17 +34,48 @@ def _engine(fn, *a, **kw):
 class AreaIn(BaseModel):
     name: str = Field(min_length=1, max_length=80)
     parent_id: int | None = None
+    description: str | None = None
+
+
+class AreaPatch(BaseModel):
+    """Every field optional: a PATCH that names none of them is refused by the
+    store ("nothing to update") rather than silently no-op'ing."""
+    name: str | None = Field(default=None, min_length=1, max_length=80)
+    description: str | None = None
+    archived: bool | None = None
 
 
 @router.get("/areas")
-def areas():
-    return {"areas": store.list_areas(db_path=_db())}
+def areas(include_archived: bool = False):
+    """Filing surfaces take the default (retired areas absent, so nothing can
+    be filed into one). `include_archived=1` is for LABEL resolution — a note
+    filed before its area was retired still has to render its home."""
+    return {"areas": store.list_areas(db_path=_db(), archived=include_archived)}
 
 
 @router.post("/areas")
 def create_area(body: AreaIn):
-    aid = _engine(store.create_area, body.name, parent_id=body.parent_id)
+    aid = _engine(store.create_area, body.name, parent_id=body.parent_id,
+                  description=body.description)
     return {"id": aid, "areas": store.list_areas(db_path=_db())}
+
+
+@router.patch("/areas/{area_id}")
+def update_area(area_id: int, body: AreaPatch):
+    """Only the fields the caller actually SENT are forwarded.
+
+    `description: str | None` cannot tell "absent" from "explicit null" on its
+    own, so a PATCH that renames an area would otherwise wipe its description.
+    `model_fields_set` is that distinction, and it is what lets an explicit
+    `{"description": null}` still clear the field on purpose.
+    """
+    sent = body.model_fields_set
+    patch = {k: getattr(body, k) for k in ("name", "description", "archived")
+             if k in sent}
+    if not patch:
+        raise HTTPException(409, "nothing to update")
+    area = _engine(store.update_area, area_id, **patch)
+    return {"area": area, "areas": store.list_areas(db_path=_db())}
 
 
 # ---- notes -------------------------------------------------------------

@@ -135,10 +135,21 @@ export function BrainLibrary() {
   // alone don't cap that; max-w + truncation do (the full text is still
   // there in the opened dropdown, only the closed box's LABEL truncates).
   const REFINE_SELECT_CLS = 'w-auto min-w-0 max-w-[42vw] flex-none text-sm overflow-hidden text-ellipsis whitespace-nowrap'
+  // Name an area from the tree first (live areas, with counts) and fall back to
+  // the retired-inclusive list, so a bookmark into a retired area still reads
+  // as that area rather than a generic "Area".
+  const areaName = (id: string) =>
+    (tree.data?.areas ?? []).find(a => String(a.id) === id)?.name
+    ?? (areas.data?.areas ?? []).find(a => String(a.id) === id)?.name
+  const areaDesc = areaSel
+    ? ((tree.data?.areas ?? []).find(a => String(a.id) === areaSel)?.description
+       ?? (areas.data?.areas ?? []).find(a => String(a.id) === areaSel)?.description
+       ?? '').trim()
+    : ''
   const roots = (tree.data?.areas ?? []).filter(a => !a.parent_id)
   const children = (id: number) => (tree.data?.areas ?? []).filter(a => a.parent_id === id)
   const projName = projSel ? tree.data?.projects.find(p => String(p.id) === projSel)?.name : undefined
-  const baseLabel = q ? `“${q}”` : view === 'inbox' ? 'Inbox' : view === 'filed' ? 'Filed' : typeSel ? typeSel + 's' : projSel && !areaSel ? projName ?? 'Project' : areaSel ? (tree.data?.areas ?? []).find(a => String(a.id) === areaSel)?.name ?? 'Area' : 'All notes'
+  const baseLabel = q ? `“${q}”` : view === 'inbox' ? 'Inbox' : view === 'filed' ? 'Filed' : typeSel ? typeSel + 's' : projSel && !areaSel ? projName ?? 'Project' : areaSel ? areaName(areaSel) ?? 'Area' : 'All notes'
   // Clearing must not also throw away the area/tag the owner had selected —
   // only the query goes.
   const clearSearch = () => {
@@ -146,7 +157,7 @@ export function BrainLibrary() {
     const n = new URLSearchParams(sp); n.delete('q'); setSp(n, { replace: true })
   }
   const searchScope = showArch ? 'the Archive'
-    : areaSel ? ((tree.data?.areas ?? []).find(a => String(a.id) === areaSel)?.name ?? 'this area')
+    : areaSel ? (areaName(areaSel) ?? 'this area')
     : view === 'inbox' ? 'the Inbox'
     : projSel ? (projName ?? 'this project') : 'the Library'
   const selLabel = baseLabel
@@ -177,13 +188,17 @@ export function BrainLibrary() {
       <div className="mb-4 flex flex-wrap gap-1.5 lg:hidden">
         <Select value={areaSel ?? ''} onChange={e => pick('area', e.target.value || null)} className={REFINE_SELECT_CLS}>
           <option value="">All areas</option>
-          {(areas.data?.areas ?? []).map(a => {
-            // Navigation, not a filter — every area stays listed even at 0.
+          {(areas.data?.areas ?? []).filter(a => !a.archived || String(a.id) === areaSel).map(a => {
+            // Navigation, not a filter — every LIVE area stays listed even at 0.
+            // `useAreas()` carries retired areas so labels resolve; they are
+            // filtered out here because a retired area is not somewhere to go,
+            // with one exception: the one currently selected stays listed (same
+            // rule as the refine selects) or the owner could not clear it.
             // The count (from the SAME scoped facets the refine row uses)
             // is appended where available so the owner sees what a jump
             // would land on before tapping it.
             const fc = facets.data?.areas.find(f => f.id === a.id)?.count
-            return <option key={a.id} value={a.id}>{a.parent_id ? '· ' : ''}{a.name}{typeof fc === 'number' ? ` (${fc})` : ''}</option>
+            return <option key={a.id} value={a.id}>{a.parent_id ? '· ' : ''}{a.name}{a.archived ? ' · retired' : ''}{typeof fc === 'number' ? ` (${fc})` : ''}</option>
           })}
         </Select>
         <Select value={typeSel ?? ''} onChange={e => pick('type', e.target.value || null)} className={REFINE_SELECT_CLS}>
@@ -239,6 +254,10 @@ export function BrainLibrary() {
             <Label>{selLabel}</Label>
             {notes.data && <span className="font-mono text-[10px] text-muted">{rows.length < total ? `${rows.length} of ${total}` : total} note{total === 1 ? '' : 's'}</span>}
           </div>
+          {/* An area's description is its filing rule — what belongs here and
+              what does not. It reads at the top of the area it describes, and
+              only there: no area selected means no rule to state. */}
+          {areaSel && areaDesc && <p className="mb-3 max-w-2xl text-xs text-muted">{areaDesc}</p>}
           {showArchRefine && (
             // Compact on mobile: content-sized selects (w-auto/min-w-0) with
             // a small gap so two fit per row at 390px instead of each one

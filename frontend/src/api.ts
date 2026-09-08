@@ -163,7 +163,7 @@ export const useRunQuestion = (runId: number | null | undefined) =>
 export const useNotifications = () => useQuery({ queryKey: ['notifications'], queryFn: () => get<{ notifications: Notification[]; unread: number }>('/api/notifications?limit=50'), refetchInterval: 15000 })
 
 // ---- Second Brain ------------------------------------------------------
-export type Area = { id: number; name: string; parent_id: number | null; position: number; archived: number; note_count?: number }
+export type Area = { id: number; name: string; parent_id: number | null; position: number; archived: number; description?: string | null; note_count?: number }
 export type NoteLink = { note_id: number; kind: 'task' | 'schedule' | 'note'; target_id: number; target: { id: number; title?: string; name?: string; status?: string; cron?: string; enabled?: number; disputed?: number } | null }
 export type Note = {
   id: number; title: string; body: string; body_truncated?: boolean; type: 'note' | 'playbook' | 'wiki'
@@ -192,7 +192,7 @@ export type NoteAttachment = {
 export const attachmentUrl = (id: number) => `/api/attachment/${id}`
 export type NoteFull = Note & {
   entries: NoteEntry[]; links: NoteLink[]; attachments: NoteAttachment[]
-  area: { id: number; name: string; parent: string | null } | null
+  area: { id: number; name: string; parent: string | null; archived?: number; description?: string | null } | null
   project: { slug: string; name: string } | null
 }
 export type NotesTree = { areas: Area[]; projects: { id: number; slug: string; name: string; note_count: number }[]; counts: Record<string, number> }
@@ -203,7 +203,11 @@ export type NotesTree = { areas: Area[]; projects: { id: number; slug: string; n
 // the lists let the header read "Review · 3" over an empty queue.
 export const NOTES_REFETCH = 15000
 
-export const useAreas = () => useQuery({ queryKey: ['areas'], queryFn: () => get<{ areas: Area[] }>('/api/areas') })
+// Label resolution, so it asks for RETIRED areas too: a note filed before its
+// area was retired must still render its home instead of a blank chip.
+// Filing surfaces do NOT use this — they read useNotesTree()'s areas, which
+// the store filters to archived=0, so a retired area can never be filed into.
+export const useAreas = () => useQuery({ queryKey: ['areas', 'all'], queryFn: () => get<{ areas: Area[] }>('/api/areas?include_archived=1') })
 export const useNotesTree = () => useQuery({ queryKey: ['notes-tree'], queryFn: () => get<NotesTree>('/api/notes/tree'), refetchInterval: NOTES_REFETCH })
 export const useNoteTags = () => useQuery({ queryKey: ['note-tags'], queryFn: () => get<{ tags: { tag: string; count: number }[] }>('/api/notes/tags') })
 // LibraryPolishPlan Slice C: the Library's filter selects (tag/project) and
