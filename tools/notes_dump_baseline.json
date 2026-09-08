@@ -1,0 +1,54 @@
+{
+  "flagged_secret_keywords": 43,
+  "per_source": {
+    "apple-notes": {
+      "auto_archive": 0,
+      "duplicate": 3,
+      "empty": 47,
+      "librarian": 200,
+      "quarantine": 1,
+      "total": 251
+    },
+    "focus": {
+      "auto_archive": 0,
+      "duplicate": 2,
+      "empty": 0,
+      "librarian": 105,
+      "quarantine": 0,
+      "total": 107
+    },
+    "keep": {
+      "auto_archive": 95,
+      "duplicate": 11,
+      "empty": 0,
+      "librarian": 296,
+      "quarantine": 0,
+      "total": 402
+    },
+    "obsidian": {
+      "auto_archive": 15,
+      "duplicate": 67,
+      "empty": 4,
+      "librarian": 119,
+      "quarantine": 3,
+      "total": 208
+    },
+    "old-hermes": {
+      "auto_archive": 0,
+      "duplicate": 0,
+      "empty": 0,
+      "librarian": 1,
+      "quarantine": 0,
+      "total": 1
+    }
+  },
+  "quarantined_count": 4,
+  "totals": {
+    "auto_archive": 110,
+    "duplicate": 83,
+    "empty": 51,
+    "librarian": 721,
+    "quarantine": 4,
+    "total": 969
+  }
+}

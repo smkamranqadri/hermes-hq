@@ -9,20 +9,26 @@
 
 Import five note dumps at `/opt/data/notes-dump/` into the Second Brain reversibly, with the museum bulk auto-archived and searchable, provable junk dropped, secrets quarantined, and the living set triaged one-by-one through the Review Queue.
 
-## Measured baseline (derived 2026-09-08; replaces the remembered "~967 units / 69 dup groups")
+## Measured baseline (SHIPPED as W0b 2026-09-08 — `tools/analyze_notes_dump.py` + `tools/notes_dump_baseline.json`)
 
-The DoD reconciles against `tools/analyze_notes_dump.py`, not against prose. Re-runnable; output committed as a fixture.
+The DoD reconciles against the tool, not against prose. Re-runnable (`--check` exits non-zero on drift), and it shares `backend/notes_import.py` with the importer so the baseline cannot diverge from the code that actually runs.
 
-| source | total | empty | hash dup | archive clone | keep auto | → librarian |
+| source | total | secret | empty | dup | archived | → librarian |
 |---|---|---|---|---|---|---|
-| focus | 107 | 0 | 0 | 0 | 0 | 107 |
+| focus | 107 | 0 | 0 | 2 | 0 | 105 |
 | old-hermes | 1 | 0 | 0 | 0 | 0 | 1 |
-| obsidian | 208 | 4 | 68 | 82 | 0 | 54 |
-| apple-notes | 251 | 47 | 3 | 0 | 0 | 201 |
-| keep | 402 | 0 | 11 | 0 | 95 | 296 |
-| **TOTAL** | **969** | **51** | **82** | **82** | **95** | **659** |
+| obsidian | 208 | 3 | 4 | 67 | 15 | 119 |
+| apple-notes | 251 | 1 | 47 | 3 | 0 | 200 |
+| keep | 402 | 0 | 0 | 11 | 95 | 296 |
+| **TOTAL** | **969** | **4** | **51** | **83** | **110** | **721** |
 
-Corpus 1.46 M chars (~366 k tokens); the 659 the librarian reads are the bulk of it.
+**This supersedes the first table in this plan (51/82/82/95/659), which was wrong in two ways the tool exposed:**
+1. **The walk-order bug this plan warned about was present in the plan's own numbers.** `obsidian/Archive` sorts before `obsidian/Notes`, so the ad-hoc script kept the *Archive* copy and dropped the **live** one. `_keeper_rank` now ranks non-Archive first explicitly, so the live copy always wins.
+2. **"Archive clone" was over-counted and over-dropping.** After correct dedupe only **15** Archive files share a live filename, and those have *different* content — superseded drafts, not clones. They are now **archived searchable**, not discarded. The `archive_clone` decision no longer exists: a byte-identical Archive copy is simply a `duplicate`.
+
+**Only `empty` (51) and `duplicate` (83) drop anything, and both are provably lossless** — an empty unit has no content, a duplicate's content survives in its keeper (whose ident is recorded on the dropped row). Every unit with unique text is kept.
+
+Corpus 1.46 M chars (~366 k tokens). Also measured: **4** units carry real key material (1 `AKIA…`, 3 `PRIVATE KEY` blocks) and **43** more merely mention password/token/api-key words — those import normally, flagged, never quarantined.
 
 Source shapes, all verified:
 - **keep** — one 165 KB `.txt`, UTF-8 BOM, units separated by exactly 4 blank lines. Parser must split on `\n{5,}` (`\n{4,}` happens to give the same 402 here, but only by luck of this dump).
@@ -49,9 +55,11 @@ Source shapes, all verified:
 - **Reversibility** is the origin tag plus `notes.content_hash` — both already in the schema (`wm_store.py:505`, `authored_by` accepts `import`). Origin stays *just a tag*, per SecondBrainPlan.
 - **Raw dumps stay immutable.** The importer only reads `/opt/data/notes-dump/`.
 
-## Wave 0 — Librarian sight (before any dump is imported)
+## Wave 0 — Librarian sight (before any dump is imported) — **SHIPPED 2026-09-08** (`289e7c0`)
 
-The librarian today has **no context of the existing library** and no way to add to an existing note. Its CLI is `inbox, show, areas, tags, lint, proposals, propose-*`: `inbox` lists only untriaged captures, `show` needs an id it cannot discover, and there is no search. `PROPOSAL_KINDS` (`wm_store.py:5173`) offers only `split | file | contradiction | new_task`, so its only way to place related content is a **new note, every time**. Importing 969 units through that produces scattered near-duplicates instead of notes that accumulated Thoughts.
+Delivered as planned: `wm note search`, the `append_entry` kind (owner-eyes by construction, verbatim body default, `EDITABLE: false`), `list_notes(owner_first=)` on the worklist, and the SKILL.md fixes. Suite 231 → 242. Live-verified end to end on :9010. Mechanics now live in Knowledge → technical.md → Second Brain.
+
+The librarian before this had **no context of the existing library** and no way to add to an existing note. Its CLI is `inbox, show, areas, tags, lint, proposals, propose-*`: `inbox` lists only untriaged captures, `show` needs an id it cannot discover, and there is no search. `PROPOSAL_KINDS` (`wm_store.py:5173`) offers only `split | file | contradiction | new_task`, so its only way to place related content is a **new note, every time**. Importing 969 units through that produces scattered near-duplicates instead of notes that accumulated Thoughts.
 
 This also fixes a shipped self-contradiction: `agents/librarian/skills/librarian-specialist/SKILL.md:29` instructs "search first: `wm note show` the likely sibling" — there is no search to do first. The 2b-i contradiction proof only worked because the planted pair sat in the inbox together, so both ids were visible.
 
@@ -64,17 +72,19 @@ This also fixes a shipped self-contradiction: `agents/librarian/skills/librarian
 
 | # | source | units → librarian | why here |
 |---|---|---|---|
-| 1 | focus | 107 | the live system; filing is a deterministic `domain:` → area lookup, so it proves the pipeline with the least librarian judgment in the way |
+| 1 | focus | 105 | the live system; filing is a deterministic `domain:` → area lookup, so it proves the pipeline with the least librarian judgment in the way |
 | 2 | old-hermes | 1 | trivial volume, exercises the `split` kind on a structured doc |
-| 3 | obsidian | 54 | exercises clone precedence and hash dedupe hardest (150 of 208 drop) |
-| 4 | apple-notes | 201 | exercises attachments (76 images) and hostile filenames |
+| 3 | obsidian | 119 | exercises keeper precedence and hash dedupe hardest (67 dup + 15 superseded drafts + 3 quarantined) |
+| 4 | apple-notes | 200 | exercises attachments (76 images) and hostile filenames |
 | 5 | keep | 296 | biggest and weakest signal — **re-planned after wave 4**, once librarian judgment quality is observable rather than assumed |
 
 ## Acceptance checks
 
-**W0** — librarian finds a filed note by search and proposes `append_entry` against it; approval appends a Thought and creates **no** new note; `append_entry` classified `routine` is refused; an owner capture made during a backlog is picked first; suite green (baseline 231).
+**W0 — MET 2026-09-08.** Librarian found a filed note by search and proposed `append_entry` against it; approval appended a Thought and created no new note; `routine` refused; owner capture picked first during a backlog; suite 242.
 
-**W0c (importer core)** — `--dry-run` reconciles to the table above with **zero units unaccounted**; the AWS key and 3 private-key blocks appear in quarantine and **nowhere in `hq.db`** (verified by grepping the DB); the 87 keyword-only files import normally; clone precedence gives the same result under a reversed walk order.
+**W0b — MET 2026-09-08.** `tools/analyze_notes_dump.py` reconciles the real dumps to 969 units with zero unaccounted; the baseline is committed at `tools/notes_dump_baseline.json` and `--check` exits non-zero on drift (verified against a deliberately corrupted copy); the 4 real secrets are detected and the 43 keyword-only hits are not; classification is deterministic across runs and independent of walk order. Suite 242 → **260** (+18 `test_notes_import.py`).
+
+**W0c (importer core)** — `--dry-run` reconciles to the committed baseline with **zero units unaccounted**; the AWS key and 3 private-key blocks appear in quarantine and **nowhere in `hq.db`** (verified by grepping the DB); the 43 keyword-only files import normally; the run is idempotent (`content_hash`).
 
 **W1** — 107 notes; 36 archived, 41 filed to the right area by domain lookup; the three same-title `Multi-branch` files survive as three distinct notes; **zero HQ tasks created**; re-running the import creates nothing (`content_hash`).
 
