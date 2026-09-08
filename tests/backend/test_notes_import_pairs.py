@@ -194,9 +194,10 @@ def test_apply_appends_the_task_verbatim_and_creates_no_extra_note(env):
 
 
 def test_the_note_is_created_before_its_mirror_regardless_of_walk_order(env):
-    """`Tasks/` sorts before `Notes/`... no: it sorts AFTER, which is exactly
-    why the ordering must be explicit rather than lucky. Two passes: every
-    CREATE lands before any APPEND."""
+    """`Notes/` sorts before `Tasks/`, so a single-pass importer happens to get
+    this right — which is exactly why the ordering must be explicit rather than
+    lucky. The subdirectories here invert that walk order; two passes (every
+    CREATE before any APPEND) make it not matter."""
     store, imp, db, tmp = env
     dump = str(tmp / "dump")
     # 'AAA' forces the task to be walked first in both trees' sort order
@@ -310,6 +311,133 @@ def test_a_dry_run_previews_the_append_and_writes_nothing(env):
     assert res["planned"]["append"] == 1
     assert len(res["appended"]) == 1
     assert store.list_notes(limit=500, db_path=db) == []
+
+
+def test_the_dry_run_preview_equals_what_the_run_does(env):
+    """A preview that says "would append 8" for a run that appends 6 is a lie
+    the owner would only discover after writing. The byte-identical mirrors
+    must collapse in the PREVIEW too."""
+    store, imp, db, tmp = env
+    dump = str(tmp / "dump")
+    kf(dump, "Notes", "Multi-branch", "multi branch setup", domain="Home")
+    for sub in ("a", "b", "c"):
+        kf(dump, "Tasks", "Multi-branch", "- [ ] Multi-branch", domain="Home",
+           status="open", source="note", sub=sub)
+
+    preview = imp.import_source(dump, "focus", store, db_path=db, dry_run=True)
+    real = imp.import_source(dump, "focus", store, db_path=db, dry_run=False)
+
+    assert store.list_notes(limit=500, db_path=db)          # the dry run wrote nothing
+    assert len(preview["appended"]) == len(real["appended"]) == 1
+    assert preview["appended_already"] == real["appended_already"] == 2
+    assert len(preview["created"]) == len(real["created"]) == 1
+
+
+def test_a_preview_over_an_existing_note_sees_the_thought_already_there(env):
+    """The per-target set is SEEDED from the note's real entries, so a second
+    dry run over an imported wave previews nothing rather than a repeat."""
+    store, imp, db, tmp = env
+    dump = str(tmp / "dump")
+    kf(dump, "Notes", "Pair", "the real text", domain="Work")
+    kf(dump, "Tasks", "Pair", "- [ ] Pair", domain="Work", status="open", source="note")
+    imp.import_source(dump, "focus", store, db_path=db, dry_run=False)
+
+    again = imp.import_source(dump, "focus", store, db_path=db, dry_run=True)
+    assert again["appended"] == [] and again["appended_already"] == 1
+
+
+def test_a_split_pair_from_an_earlier_wave_is_reported_for_merging(env):
+    """The fallback is permanent: a task created as its own note stays
+    `already_imported` forever, and when its target imports later there are two
+    notes and nothing on either row saying so. That signal is `merge_needed`."""
+    store, imp, db, tmp = env
+    dump = str(tmp / "dump")
+    kf(dump, "Tasks", "Pair", "- [ ] Pair", domain="Work", status="open", source="note")
+    imp.import_source(dump, "focus", store, db_path=db, dry_run=False)
+
+    kf(dump, "Notes", "Pair", "the real text", domain="Work")   # the note arrives later
+    wave2 = imp.import_source(dump, "focus", store, db_path=db, dry_run=False)
+
+    assert wave2["appended"] == [] and wave2["already_imported"] == 1
+    assert len(wave2["merge_needed"]) == 1
+    m = wave2["merge_needed"][0]
+    ids = sorted(n["id"] for n in store.list_notes(limit=500, db_path=db))
+    assert sorted([m["note_id"], m["target_note_id"]]) == ids     # BOTH ids, named
+    assert m["title"] == "Pair"
+    # ...and it keeps being reported, because nothing was silently repaired
+    third = imp.import_source(dump, "focus", store, db_path=db, dry_run=False)
+    assert len(third["merge_needed"]) == 1
+    assert len(store.list_notes(limit=500, db_path=db)) == 2
+
+
+def test_a_held_target_reports_the_split_on_the_NEXT_run(env):
+    """The fallback itself is not a merge signal — there is no target note yet.
+    It becomes one only once the target really exists."""
+    store, imp, db, tmp = env
+    dump = str(tmp / "dump")
+    kf(dump, "Notes", "Deploy", "the key is %s" % FAKE_KEY, domain="Work")
+    kf(dump, "Tasks", "Deploy", "- [ ] Deploy", domain="Work",
+       status="open", source="note")
+
+    first = imp.import_source(dump, "focus", store, db_path=db, dry_run=False)
+    assert len(first["append_fallback"]) == 1 and first["merge_needed"] == []
+
+    kf(dump, "Notes", "Deploy", "how to deploy, no key now", domain="Work")
+    second = imp.import_source(dump, "focus", store, db_path=db, dry_run=False)
+    assert len(second["merge_needed"]) == 1
+
+
+def test_a_mirror_carrying_attachments_binds_them_to_the_target_and_says_so(env):
+    """A mirror has no note row of its own, so its files have nowhere to go.
+    None of the 8 real mirrors carries any; dropping them silently if one ever
+    did would be the same class of loss the pre-pass exists to prevent."""
+    store, imp, db, tmp = env
+    dump = str(tmp / "dump")
+    kf(dump, "Notes", "Shot", "the real text", domain="Work")
+    kf(dump, "Tasks", "Shot", "- [ ] Shot", domain="Work", status="open", source="note")
+    d = os.path.join(dump, "focus", "Tasks", "Shot (Attachments)")
+    os.makedirs(d)
+    with open(os.path.join(d, "s.png"), "wb") as fh:
+        fh.write(b"\x89PNG\r\n\x1a\n" + b"\x00" * 32)
+
+    units = ni.classify(ni.read_source(dump, "focus"))
+    for u in units:                     # focus has no attachment reader
+        if u.ident.endswith("Tasks/Shot.md"):
+            u.meta["attachments"] = [os.path.join(d, "s.png")]
+    plans = ni.plan_all(units, {})
+    res = {"created": [], "errors": [], "attachments": 0, "already_imported": 0,
+           "appended": [], "appended_already": 0, "append_fallback": [],
+           "merge_needed": [], "warnings": [], "quarantined": []}
+    note_ids = {}
+    for p in plans:
+        if p.action == ni.CREATE:
+            ni._create(p, store, res, note_ids, True, db_path=db)
+    for p in plans:
+        if p.action == ni.APPEND:
+            ni._append_mirror(p, store, res, note_ids, {}, False, {},
+                              db_path=db)
+
+    assert res["attachments"] == 1
+    assert len(res["warnings"]) == 1 and "attachment" in res["warnings"][0]
+    n = store.get_note(store.list_notes(limit=5, db_path=db)[0]["id"], db_path=db)
+    assert len(n["attachments"]) == 1              # bound to the TARGET note
+
+
+def test_an_imported_note_carries_no_origin_tag_but_stays_traceable(env):
+    """Owner decision (2026-09-08, final): no `focus` tag on imported
+    notes. The source is still recoverable — content_hash IS the dump digest."""
+    store, imp, db, tmp = env
+    dump = str(tmp / "dump")
+    kf(dump, "Notes", "Pair", "the real text", domain="Work")
+    kf(dump, "Tasks", "Pair", "- [ ] Pair", domain="Work", status="open", source="note")
+    imp.import_source(dump, "focus", store, db_path=db, dry_run=False)
+
+    n = store.get_note(store.list_notes(limit=5, db_path=db)[0]["id"], db_path=db)
+    assert n["tags"] == []
+    assert store.taxonomy_tags(db_path=db) == [] or \
+        "focus" not in store.taxonomy_tags(db_path=db)
+    assert imp.source_of_content_hash(n["content_hash"], dump) == \
+        ("focus", "focus/Notes/Pair.md")
 
 
 # ---- the committed baseline (real dumps) --------------------------------

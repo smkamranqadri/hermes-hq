@@ -500,6 +500,27 @@ class Plan:
         self.target = target
 
 
+def _import_tags(unit):
+    """Tags an imported note is BORN with — today, none.
+
+    Owner decision (2026-09-08, final): NO origin tag. Stamping every imported
+    note `focus` / `obsidian` / `keep` / ... put hundreds of unrelated
+    notes into one shared-tags group and drowned the Related card; the owner
+    has stripped it from all 97 live notes, and future waves must not re-add it.
+
+    Provenance does not depend on it. `authored_by='import'` says a note was
+    imported at all, and `notes.content_hash` IS the dump's own digest
+    (`Unit.sha256`), so re-running the analysis over the dumps names the exact
+    source file behind any imported note — see `source_of_content_hash`.
+
+    It stays a list rather than a bare `[]` because a future reader that really
+    parses a source's own tags has somewhere to put them; `split_frontmatter`
+    is flat `key: value` and the dumps write `tags:` as YAML lists, so nothing
+    is extracted today.
+    """
+    return []
+
+
 def _clean_title(unit):
     """Apple filenames include `..md`, `.md` and `. (2).md`, whose derived
     titles are empty or bare punctuation. Fall back to the first line of the
@@ -583,11 +604,11 @@ def plan_unit(unit, areas_by_name=None, target=None):
         return Plan(unit, SKIP, reason=unit.reason)
 
     if target is not None:
-        return Plan(unit, APPEND, target=target, tags=[unit.source],
+        return Plan(unit, APPEND, target=target, tags=_import_tags(unit),
                     reason="mirrors the note %s — appended there as a Thought"
                            % target.ident)
 
-    tags = [unit.source]
+    tags = _import_tags(unit)
     if unit.decision == AUTO_ARCHIVE:
         return Plan(unit, CREATE, status="archived", tags=tags, reason=unit.reason)
 
@@ -644,6 +665,19 @@ def fixture_of(report):
     }
 
 
+def source_of_content_hash(content_hash, dump_root, sources=SOURCES):
+    """`(source, ident)` of the dump record an imported note came from, or None.
+
+    This is the whole provenance story now that imported notes carry no origin
+    tag: `notes.content_hash` IS `Unit.sha256`, so the immutable dumps are the
+    ledger and no schema column had to be added to keep one.
+    """
+    for u in read_all(dump_root, sources):
+        if u.sha256 == content_hash:
+            return (u.source, u.ident)
+    return None
+
+
 # --- execution (the ONLY part of this module that writes) -------------------
 
 # Stands in for the row a dry run would have created, so the preview reports
@@ -682,7 +716,8 @@ def import_source(dump_root, source, store, db_path=None, dry_run=True,
     res = {"source": source, "dry_run": bool(dry_run),
            "planned": plan_summary(plans), "created": [], "quarantined": [],
            "already_imported": 0, "attachments": 0, "errors": [],
-           "appended": [], "appended_already": 0, "append_fallback": []}
+           "appended": [], "appended_already": 0, "append_fallback": [],
+           "merge_needed": [], "warnings": []}
     note_ids = {}                       # unit ident -> the note row it became
 
     for p in plans:
@@ -707,24 +742,36 @@ def import_source(dump_root, source, store, db_path=None, dry_run=True,
             res["created"].append((u.ident, p.status))
             note_ids[u.ident] = _PLANNED    # so an APPEND can see its target
             continue
-        try:
-            nid = store.create_note(
-                _clean_title(u), body=u.body, status=p.status,
-                area_id=p.area_id, tags=p.tags, authored_by="import",
-                content_hash=u.sha256, db_path=db_path)
-        except ValueError as e:
-            res["errors"].append("%s: %s" % (u.ident, e))
-            continue
-        note_ids[u.ident] = nid
-        res["created"].append((u.ident, p.status))
-        if with_attachments:
-            res["attachments"] += _attach(store, nid, u, res, db_path=db_path)
+        _create(p, store, res, note_ids, with_attachments, db_path=db_path)
 
+    seen_entries = {}                   # target ident -> normalized entry bodies
     for p in plans:
         if p.action == APPEND:
-            _append_mirror(p, store, res, note_ids, dry_run, areas,
-                           with_attachments, db_path=db_path)
+            _append_mirror(p, store, res, note_ids, seen_entries, dry_run,
+                           areas, with_attachments, db_path=db_path)
     return res
+
+
+def _create(plan, store, res, note_ids, with_attachments, db_path=None):
+    """Create the note one plan asks for, and record it. Returns the id or None.
+
+    The mirror fallback lands here too, so a task that could not be appended is
+    filed by exactly the same rules as one that was never a mirror.
+    """
+    u = plan.unit
+    try:
+        nid = store.create_note(
+            _clean_title(u), body=u.body, status=plan.status,
+            area_id=plan.area_id, tags=plan.tags, authored_by="import",
+            content_hash=u.sha256, db_path=db_path)
+    except ValueError as e:
+        res["errors"].append("%s: %s" % (u.ident, e))
+        return None
+    note_ids[u.ident] = nid
+    res["created"].append((u.ident, plan.status))
+    if with_attachments:
+        res["attachments"] += _attach(store, nid, u, res, db_path=db_path)
+    return nid
 
 
 def _target_note_id(plan, store, note_ids, db_path=None):
@@ -737,72 +784,93 @@ def _target_note_id(plan, store, note_ids, db_path=None):
     return store.note_by_content_hash(t.sha256, db_path=db_path)
 
 
-def _append_mirror(plan, store, res, note_ids, dry_run, areas_by_name,
-                   with_attachments=True, db_path=None):
+def _entry_bodies(plan, store, target_id, seen, db_path=None):
+    """The normalized entry bodies already on this mirror's target note.
+
+    Cached per target and UPDATED as this run appends, which is what makes a
+    dry run and a real run agree: three byte-identical mirrors collapse into
+    one Thought in the preview exactly as they do on disk.
+    """
+    key = plan.target.ident
+    if key not in seen:
+        bodies = set()
+        if isinstance(target_id, int):
+            note = store.get_note(target_id, db_path=db_path) or {}
+            bodies = {normalize(e["body"]) for e in note.get("entries") or []}
+        seen[key] = bodies
+    return seen[key]
+
+
+def _append_mirror(plan, store, res, note_ids, seen_entries, dry_run,
+                   areas_by_name, with_attachments=True, db_path=None):
     """Land one APPEND plan: the task's text as a Thought on its note.
 
     Idempotency has TWO halves, because a re-run can arrive from two different
     pasts:
 
     * wave 1 imported these tasks as notes of their own, BEFORE this rule
-      existed. Such a unit's content_hash is already on a note, so it is
-      `already_imported` exactly as before — re-running wave 1 stays a no-op
-      and nothing is retroactively merged (the live pairs are the librarian's
-      job, not the importer's).
+      existed. Such a unit's content_hash is already on a note, so it stays
+      `already_imported` — the importer never retroactively merges live notes.
+      It does REPORT the split (`merge_needed`) so the librarian pass has the
+      two ids instead of having to rediscover them.
     * a wave imported under this rule left no note for the task, so the
       content_hash check finds nothing. `note_entries` has no content_hash
-      column and no delete path, so the guard is the entries themselves:
-      an entry whose normalized body already matches is not appended again.
-      That also collapses the three byte-identical `Multi-branch setup for
-      online payments` mirrors into ONE Thought rather than three.
+      column and no delete path, so the guard is the entry bodies themselves.
     """
     u = plan.unit
-    if store.note_by_content_hash(u.sha256, db_path=db_path) is not None:
+    own = store.note_by_content_hash(u.sha256, db_path=db_path)
+    if own is not None:
         res["already_imported"] += 1
+        target_id = _target_note_id(plan, store, note_ids, db_path=db_path)
+        note_ids[u.ident] = own
+        if target_id is not None and target_id != own:
+            # Two notes for one item, and neither row says so. This is the ONLY
+            # signal the librarian gets, so it carries both ids: the fallback
+            # (or an older wave) is permanent, and a later wave importing the
+            # target would otherwise re-split in silence.
+            res["merge_needed"].append({
+                "title": _clean_title(u), "ident": u.ident,
+                "target_ident": plan.target.ident, "note_id": own,
+                "target_note_id": target_id if isinstance(target_id, int) else None})
         return
 
     target_id = _target_note_id(plan, store, note_ids, db_path=db_path)
     if target_id is None:
         # The note was held back (secret), dropped (empty/duplicate), errored,
         # or fell outside a --limit slice. Losing the task's text to a missing
-        # target would be a silent deletion, so it becomes its own note again.
-        # Filed by its OWN frontmatter, exactly as an unpaired task would be —
-        # the fallback must not also downgrade where the note lands.
-        own = plan_unit(u, areas_by_name)
+        # target would be a silent deletion, so it becomes its own note again,
+        # filed by its OWN frontmatter exactly as an unpaired task would be.
+        own_plan = plan_unit(u, areas_by_name)
         res["append_fallback"].append(
             "%s: mirror target %s has no note (held, skipped or out of range)"
             " — created as its own note" % (u.ident, plan.target.ident))
         if dry_run:
-            res["created"].append((u.ident, own.status))
+            res["created"].append((u.ident, own_plan.status))
             return
-        try:
-            nid = store.create_note(
-                _clean_title(u), body=u.body, status=own.status,
-                area_id=own.area_id, tags=own.tags, authored_by="import",
-                content_hash=u.sha256, db_path=db_path)
-        except ValueError as e:
-            res["errors"].append("%s: %s" % (u.ident, e))
-            return
-        note_ids[u.ident] = nid
-        res["created"].append((u.ident, own.status))
-        if with_attachments:
-            res["attachments"] += _attach(store, nid, u, res, db_path=db_path)
+        _create(own_plan, store, res, note_ids, with_attachments, db_path=db_path)
         return
 
-    if dry_run:
-        res["appended"].append((u.ident, plan.target.ident))
-        return
-    note = store.get_note(target_id, db_path=db_path) or {}
+    bodies = _entry_bodies(plan, store, target_id, seen_entries, db_path=db_path)
     body = u.body                      # VERBATIM: the checkbox line says open/done
-    if any(normalize(e["body"]) == normalize(body)
-           for e in note.get("entries") or []):
+    if normalize(body) in bodies:
         res["appended_already"] += 1
         return
-    try:
-        store.add_note_entry(target_id, body, db_path=db_path)
-    except ValueError as e:
-        res["errors"].append("%s -> note #%s: %s" % (u.ident, target_id, e))
-        return
+    bodies.add(normalize(body))
+    if not dry_run:
+        try:
+            store.add_note_entry(target_id, body, db_path=db_path)
+        except ValueError as e:
+            res["errors"].append("%s -> note #%s: %s" % (u.ident, target_id, e))
+            return
+        if with_attachments and (u.meta.get("attachments") or []):
+            # A mirror has no note row of its own, so its files would vanish.
+            # None of the 8 real mirrors carries any; if one ever does, it is
+            # bound to the target and SAID, never dropped quietly.
+            n = _attach(store, target_id, u, res, db_path=db_path)
+            res["attachments"] += n
+            res["warnings"].append(
+                "%s: mirror carried %d attachment(s) — bound to its target"
+                " note #%s" % (u.ident, n, target_id))
     res["appended"].append((u.ident, plan.target.ident))
     # No `link_note` here on purpose: the mirror never becomes a row of its own,
     # so there is no second id to link, and note_links has no unit-level kind.

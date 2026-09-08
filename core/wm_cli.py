@@ -655,10 +655,22 @@ def cmd_note_import(args):
            " lands there as a Thought, not as a second note)"
            % ("appended" if args.apply else "would append", len(res["appended"])))
         if res["appended_already"]:
-            _p("  %-13s %4d   (that Thought is already on the note)"
-               % ("already there", res["appended_already"]))
+            _p("  %-16s %4d   (that Thought is already on the note)"
+               % ("already a Thought", res["appended_already"]))
     for why in res["append_fallback"]:
         _p("  NOTE  %s" % why)
+    for w in res["warnings"]:
+        _p("  WARN  %s" % w)
+    if res["merge_needed"]:
+        # Neither row records the split, so this print is the librarian's only
+        # handle on it. Both ids, every time.
+        _p("  %d note(s) mirror one item but were imported as two — the"
+           " librarian merges these, the importer never does:"
+           % len(res["merge_needed"]))
+        for m in res["merge_needed"]:
+            _p("    #%-5s + #%-5s  %s"
+               % (m["note_id"], m["target_note_id"] if m["target_note_id"]
+                  else "(new)", m["title"][:70]))
     _p("  %-13s %4d   (empty or byte-identical duplicate — nothing lost)"
        % ("skipped", p["skip"]))
     _p("  %-13s %4d   (secret: no note row, bytes 0600 outside hq_home)"

@@ -77,6 +77,12 @@ def test_dry_run_reports_already_imported_truthfully(env):
 # ---- apply --------------------------------------------------------------
 
 def test_apply_creates_notes_with_import_provenance(env):
+    """Provenance is `authored_by` + the content hash, and NOTHING else.
+
+    Owner decision (2026-09-08, final): no origin tag. Stamping every imported
+    note `focus` put hundreds of unrelated notes in one shared-tags
+    group and drowned the Related card; it was stripped from all 97 live notes.
+    """
     store, ni, db, tmp = env
     dump = str(tmp / "dump")
     kf_note(dump, "Pay bill", domain="Home", status="open", body="pay it &amp; log it")
@@ -87,10 +93,13 @@ def test_apply_creates_notes_with_import_provenance(env):
     n = store.get_note(notes[0]["id"], db_path=db)
     assert n["authored_by"] == "import"
     assert n["content_hash"]                      # reversible / dedupe handle
-    assert "focus" in n["tags"]            # origin is just a tag
+    assert n["tags"] == []                        # no origin tag, ever
     assert n["body"] == "pay it & log it"         # entities resolved on the way in
-    # owner/import writes ARE the taxonomy authority, so the origin tag registers
-    assert "focus" in store.taxonomy_tags(db_path=db)
+    # ...and no source name leaked into the taxonomy either
+    assert "focus" not in store.taxonomy_tags(db_path=db)
+    # the source is still recoverable: content_hash IS the dump's own digest
+    assert ni.source_of_content_hash(n["content_hash"], dump) == \
+        ("focus", "focus/Tasks/Pay bill.md")
 
 
 def test_reimport_is_a_no_op(env):
