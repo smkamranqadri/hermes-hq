@@ -27,17 +27,19 @@ DEFAULT_ROOT = "/opt/data/notes-dump"
 DEFAULT_FIXTURE = os.path.join(os.path.dirname(os.path.abspath(__file__)),
                                "notes_dump_baseline.json")
 
-HEAD = ("source", "total", "secret", "empty", "dup", "archived", "->lib")
+HEAD = ("source", "total", "secret", "empty", "dup", "archived", "->lib",
+        "->append")
 
 
 def print_table(report):
     rows = ni.report_rows(report)
     w = max(len(r[0]) for r in rows) + 2
-    print("{:<{w}}{:>7}{:>8}{:>7}{:>6}{:>10}{:>8}".format(*HEAD, w=w))
+    fmt = "{:<{w}}{:>7}{:>8}{:>7}{:>6}{:>10}{:>8}{:>10}"
+    print(fmt.format(*HEAD, w=w))
     for r in rows:
         if r[0] == "TOTAL":
-            print("-" * (w + 50))
-        print("{:<{w}}{:>7}{:>8}{:>7}{:>6}{:>10}{:>8}".format(*r, w=w))
+            print("-" * (w + 60))
+        print(fmt.format(*r, w=w))
     t = report["totals"]
     print()
     print("reconciles: %s (%d units, %d accounted)"
@@ -46,6 +48,11 @@ def print_table(report):
     print("librarian reads %d unit(s); %d flagged for secret KEYWORDS "
           "(imported normally, not quarantined)"
           % (t[ni.LIBRARIAN], report["flagged_secret_keywords"]))
+    # ->append is a SUBSET of the kept units, not a sixth decision: those units
+    # land as a Thought on their mirror note instead of as a note of their own,
+    # so the reconciliation above is unaffected by it.
+    print("%d unit(s) mirror a note of the same title and are appended there "
+          "as a Thought (no second note)" % t["append"])
     if report["quarantined"]:
         print()
         print("QUARANTINED (%d) — no note row is ever created for these:"

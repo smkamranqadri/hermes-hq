@@ -8,8 +8,11 @@ Three layers, and the split is deliberate:
    "the librarian must read this". Every unit gets exactly one decision, so the
    totals always reconcile — the property the Phase 3 DoD checks.
 3. **Plan + execute** — where each unit LANDS, and the writing itself. Only
-   `import_source` and `_attach` touch the database; everything above them is
-   pure and testable without one.
+   `import_source`, `_append_mirror` and `_attach` touch the database;
+   everything above them is pure and testable without one. Planning is also
+   where MIRROR PAIRS are resolved (`find_mirror_pairs`): a source that
+   creates-and-links can hold one item twice, and the second copy becomes a
+   Thought on the first rather than a near-duplicate note.
 
 `tools/analyze_notes_dump.py` runs layers 1–2 and nothing else, which is why
 the DoD's baseline cannot drift from the importer: they are the same code.
@@ -410,18 +413,25 @@ def classify(units):
 def analyze(dump_root, sources=SOURCES):
     """Full read-only pass. Returns a reconciliation report."""
     units = classify(read_all(dump_root, sources))
+    # The pair count comes from the REAL planner, not a second implementation
+    # of the rule: `plan_all` is what the importer runs. Areas are irrelevant
+    # to whether a unit is a mirror, so it is called without them.
+    appends = {p.unit.ident for p in plan_all(units) if p.action == APPEND}
     per_source = {}
     for s in sources:
-        per_source[s] = dict({d: 0 for d in DECISIONS}, total=0)
+        per_source[s] = dict({d: 0 for d in DECISIONS}, total=0, append=0)
     for u in units:
         row = per_source.setdefault(
-            u.source, dict({d: 0 for d in DECISIONS}, total=0))
+            u.source, dict({d: 0 for d in DECISIONS}, total=0, append=0))
         row["total"] += 1
         row[u.decision] += 1
-    totals = dict({d: 0 for d in DECISIONS}, total=len(units))
+        if u.ident in appends:
+            row["append"] += 1
+    totals = dict({d: 0 for d in DECISIONS}, total=len(units), append=0)
     for row in per_source.values():
         for d in DECISIONS:
             totals[d] += row[d]
+        totals["append"] += row["append"]
     accounted = sum(totals[d] for d in DECISIONS)
     return {
         "dump_root": dump_root,
@@ -441,17 +451,23 @@ def analyze(dump_root, sources=SOURCES):
 
 
 def report_rows(report):
-    """(source, total, quarantine, empty, duplicate, auto_archive, librarian)."""
+    """(source, total, quarantine, empty, duplicate, auto_archive, librarian,
+    append).
+
+    `append` is NOT a sixth decision and does not enter the reconciliation: it
+    is a SUBSET of the kept units (see `find_mirror_pairs`) that land as a
+    Thought on another unit's note instead of as a note of their own.
+    """
     rows = []
     for s in report["sources"]:
         r = report["per_source"].get(s)
         if r is None:
             continue
         rows.append((s, r["total"], r[QUARANTINE], r[EMPTY], r[DUPLICATE],
-                     r[AUTO_ARCHIVE], r[LIBRARIAN]))
+                     r[AUTO_ARCHIVE], r[LIBRARIAN], r["append"]))
     t = report["totals"]
     rows.append(("TOTAL", t["total"], t[QUARANTINE], t[EMPTY], t[DUPLICATE],
-                 t[AUTO_ARCHIVE], t[LIBRARIAN]))
+                 t[AUTO_ARCHIVE], t[LIBRARIAN], t["append"]))
     return rows
 
 
@@ -466,18 +482,22 @@ def report_rows(report):
 SKIP = "skip"            # empty or duplicate — provably lossless
 CREATE = "create"
 HOLD = "hold"            # quarantined: no note row, ever
+APPEND = "append"        # a mirror of a note unit: a Thought on it, not a note
 
 
 class Plan:
-    __slots__ = ("unit", "action", "status", "area_id", "tags", "reason")
+    __slots__ = ("unit", "action", "status", "area_id", "tags", "reason", "target")
 
-    def __init__(self, unit, action, status=None, area_id=None, tags=None, reason=""):
+    def __init__(self, unit, action, status=None, area_id=None, tags=None,
+                 reason="", target=None):
         self.unit = unit
         self.action = action
         self.status = status
         self.area_id = area_id
         self.tags = tags or []
         self.reason = reason
+        # APPEND only: the Unit whose note receives this unit's text.
+        self.target = target
 
 
 def _clean_title(unit):
@@ -490,13 +510,82 @@ def _clean_title(unit):
     return title_from(unit.body, fallback="%s import" % unit.source)[:300]
 
 
-def plan_unit(unit, areas_by_name=None):
-    """Decide what one classified unit becomes. Pure: no DB writes."""
+def _unit_type(unit):
+    return (unit.meta.get("type") or "").strip().lower()
+
+
+def _pair_key(title):
+    """Titles compare case-insensitively and whitespace-insensitively — the
+    mirror pair is created by the SOURCE APP from one string, so anything that
+    survives a round trip through two files still names the same item."""
+    return normalize(title or "").casefold()
+
+
+def find_mirror_pairs(units):
+    """Map `ident -> note Unit` for every task unit that MIRRORS a note unit.
+
+    focus creates-and-links: one item can exist twice in the dump, as
+    `Tasks/<Title>.md` (whose body is the `- [ ]` / `- [x]` checkbox line) and
+    as `Notes/<Title>.md` (the free text). The two bodies differ, so the digest
+    correctly keeps both — and importing both produced the duplicate-title
+    pairs the owner found in the library.
+
+    Owner decision (2026-09-08, final): `source:` frontmatter + the same title
+    means the task is the note's mirror. The task's text becomes a Thought ON
+    the note; it is not a second note. A `type: task` unit WITHOUT `source:`,
+    or one whose title names no note, is untouched and lands as its own note.
+
+    Pure — it only annotates `unit.meta` (`pair_target`, and `pair_ambiguous`
+    when more than one note claimed the title) so a report can explain itself.
+    """
+    # Keyed by (source, title): pairing is a fact about ONE dump's internal
+    # shape. Without the source in the key the analyzer (which reads every
+    # dump at once) would find pairs the importer (which reads one) cannot,
+    # and the committed baseline would describe an import that never happens.
+    notes_by_title = {}
+    for u in units:
+        if _unit_type(u) == "note":
+            notes_by_title.setdefault((u.source, _pair_key(u.title)), []).append(u)
+    for cands in notes_by_title.values():
+        cands.sort(key=lambda u: u.ident)       # deterministic, not walk order
+
+    pairs = {}
+    for u in units:
+        if _unit_type(u) != "task" or not (u.meta.get("source") or "").strip():
+            continue
+        cands = notes_by_title.get((u.source, _pair_key(u.title)))
+        if not cands:
+            continue
+        domain = (u.meta.get("domain") or "").strip().lower()
+        same_domain = [c for c in cands
+                       if (c.meta.get("domain") or "").strip().lower() == domain]
+        # Prefer the note filed in the same domain; otherwise the first by
+        # ident, and SAY SO rather than picking silently.
+        target = (same_domain or cands)[0]
+        if len(cands) > 1:
+            u.meta["pair_ambiguous"] = [c.ident for c in cands]
+        u.meta["pair_target"] = target.ident
+        pairs[u.ident] = target
+    return pairs
+
+
+def plan_unit(unit, areas_by_name=None, target=None):
+    """Decide what one classified unit becomes. Pure: no DB writes.
+
+    `target` is the mirror note from `find_mirror_pairs` (see `plan_all`); it
+    is only ever honoured for a unit the pre-pass would otherwise CREATE, so a
+    quarantined or duplicate task can never leak in as somebody's Thought.
+    """
     areas_by_name = areas_by_name or {}
     if unit.decision == QUARANTINE:
         return Plan(unit, HOLD, reason=unit.reason)
     if unit.decision in (EMPTY, DUPLICATE):
         return Plan(unit, SKIP, reason=unit.reason)
+
+    if target is not None:
+        return Plan(unit, APPEND, target=target, tags=[unit.source],
+                    reason="mirrors the note %s — appended there as a Thought"
+                           % target.ident)
 
     tags = [unit.source]
     if unit.decision == AUTO_ARCHIVE:
@@ -518,12 +607,20 @@ def plan_unit(unit, areas_by_name=None):
 
 
 def plan_all(units, areas_by_name=None):
-    return [plan_unit(u, areas_by_name) for u in units]
+    """Plan a WHOLE source at once.
+
+    Pairing is a cross-unit fact, so it lives here rather than in `plan_unit`:
+    the analyzer calls `plan_all` too, which is what keeps the committed
+    baseline's pair count identical to what the importer will really do.
+    """
+    units = list(units)
+    pairs = find_mirror_pairs(units)
+    return [plan_unit(u, areas_by_name, target=pairs.get(u.ident)) for u in units]
 
 
 def plan_summary(plans):
     out = {"create_inbox": 0, "create_active": 0, "create_archived": 0,
-           "skip": 0, "hold": 0}
+           "skip": 0, "hold": 0, "append": 0}
     for p in plans:
         if p.action == CREATE:
             out["create_" + p.status] += 1
@@ -537,11 +634,10 @@ def plan_summary(plans):
 def fixture_of(report):
     """The comparable shape the DoD reconciles against — counts only, no
     content, so it is safe to commit and stable across runs."""
+    keys = ("total",) + tuple(DECISIONS) + ("append",)
     return {
-        "totals": {k: report["totals"][k] for k in
-                   ("total",) + tuple(DECISIONS)},
-        "per_source": {s: {k: report["per_source"][s][k] for k in
-                           ("total",) + tuple(DECISIONS)}
+        "totals": {k: report["totals"][k] for k in keys},
+        "per_source": {s: {k: report["per_source"][s][k] for k in keys}
                        for s in report["per_source"]},
         "flagged_secret_keywords": report["flagged_secret_keywords"],
         "quarantined_count": len(report["quarantined"]),
@@ -549,6 +645,10 @@ def fixture_of(report):
 
 
 # --- execution (the ONLY part of this module that writes) -------------------
+
+# Stands in for the row a dry run would have created, so the preview reports
+# an append rather than a fallback it would never actually take.
+_PLANNED = "planned"
 
 ATTACH_MIME = {".jpg": "image/jpeg", ".jpeg": "image/jpeg", ".png": "image/png",
                ".gif": "image/gif", ".heic": "image/heic", ".webp": "image/webp"}
@@ -568,20 +668,27 @@ def import_source(dump_root, source, store, db_path=None, dry_run=True,
     Idempotent: a unit whose content_hash is already on a note is reported as
     `already_imported` and skipped, so re-running a wave neither duplicates
     notes nor re-quarantines bytes.
+
+    TWO passes, and the order is load-bearing: every CREATE runs before any
+    APPEND, so a mirror task can always find the note it belongs on even when
+    the walk happened to reach `Tasks/` first.
     """
     units = classify(read_source(dump_root, source))
-    plans = plan_all(units, _areas_by_name(store, db_path=db_path))
+    areas = _areas_by_name(store, db_path=db_path)
+    plans = plan_all(units, areas)
     if limit is not None:
         plans = plans[:int(limit)]
 
     res = {"source": source, "dry_run": bool(dry_run),
            "planned": plan_summary(plans), "created": [], "quarantined": [],
-           "already_imported": 0, "attachments": 0, "errors": []}
+           "already_imported": 0, "attachments": 0, "errors": [],
+           "appended": [], "appended_already": 0, "append_fallback": []}
+    note_ids = {}                       # unit ident -> the note row it became
 
     for p in plans:
         u = p.unit
-        if p.action == SKIP:
-            continue
+        if p.action in (SKIP, APPEND):
+            continue                    # APPEND is the second pass, below
         if p.action == HOLD:
             if not dry_run:
                 store.quarantine_unit(u.source, u.ident, u.reason, u.sha256,
@@ -591,11 +698,14 @@ def import_source(dump_root, source, store, db_path=None, dry_run=True,
 
         # idempotency is checked even on a dry run, so the preview tells the
         # truth about what a real run would actually do
-        if store.note_by_content_hash(u.sha256, db_path=db_path) is not None:
+        existing = store.note_by_content_hash(u.sha256, db_path=db_path)
+        if existing is not None:
             res["already_imported"] += 1
+            note_ids[u.ident] = existing
             continue
         if dry_run:
             res["created"].append((u.ident, p.status))
+            note_ids[u.ident] = _PLANNED    # so an APPEND can see its target
             continue
         try:
             nid = store.create_note(
@@ -605,10 +715,97 @@ def import_source(dump_root, source, store, db_path=None, dry_run=True,
         except ValueError as e:
             res["errors"].append("%s: %s" % (u.ident, e))
             continue
+        note_ids[u.ident] = nid
         res["created"].append((u.ident, p.status))
         if with_attachments:
             res["attachments"] += _attach(store, nid, u, res, db_path=db_path)
+
+    for p in plans:
+        if p.action == APPEND:
+            _append_mirror(p, store, res, note_ids, dry_run, areas,
+                           with_attachments, db_path=db_path)
     return res
+
+
+def _target_note_id(plan, store, note_ids, db_path=None):
+    """The note this mirror belongs on: the row created in THIS run, or the one
+    a previous wave already created from the same target unit."""
+    t = plan.target
+    nid = note_ids.get(t.ident)
+    if nid is not None:
+        return nid
+    return store.note_by_content_hash(t.sha256, db_path=db_path)
+
+
+def _append_mirror(plan, store, res, note_ids, dry_run, areas_by_name,
+                   with_attachments=True, db_path=None):
+    """Land one APPEND plan: the task's text as a Thought on its note.
+
+    Idempotency has TWO halves, because a re-run can arrive from two different
+    pasts:
+
+    * wave 1 imported these tasks as notes of their own, BEFORE this rule
+      existed. Such a unit's content_hash is already on a note, so it is
+      `already_imported` exactly as before — re-running wave 1 stays a no-op
+      and nothing is retroactively merged (the live pairs are the librarian's
+      job, not the importer's).
+    * a wave imported under this rule left no note for the task, so the
+      content_hash check finds nothing. `note_entries` has no content_hash
+      column and no delete path, so the guard is the entries themselves:
+      an entry whose normalized body already matches is not appended again.
+      That also collapses the three byte-identical `Multi-branch setup for
+      online payments` mirrors into ONE Thought rather than three.
+    """
+    u = plan.unit
+    if store.note_by_content_hash(u.sha256, db_path=db_path) is not None:
+        res["already_imported"] += 1
+        return
+
+    target_id = _target_note_id(plan, store, note_ids, db_path=db_path)
+    if target_id is None:
+        # The note was held back (secret), dropped (empty/duplicate), errored,
+        # or fell outside a --limit slice. Losing the task's text to a missing
+        # target would be a silent deletion, so it becomes its own note again.
+        # Filed by its OWN frontmatter, exactly as an unpaired task would be —
+        # the fallback must not also downgrade where the note lands.
+        own = plan_unit(u, areas_by_name)
+        res["append_fallback"].append(
+            "%s: mirror target %s has no note (held, skipped or out of range)"
+            " — created as its own note" % (u.ident, plan.target.ident))
+        if dry_run:
+            res["created"].append((u.ident, own.status))
+            return
+        try:
+            nid = store.create_note(
+                _clean_title(u), body=u.body, status=own.status,
+                area_id=own.area_id, tags=own.tags, authored_by="import",
+                content_hash=u.sha256, db_path=db_path)
+        except ValueError as e:
+            res["errors"].append("%s: %s" % (u.ident, e))
+            return
+        note_ids[u.ident] = nid
+        res["created"].append((u.ident, own.status))
+        if with_attachments:
+            res["attachments"] += _attach(store, nid, u, res, db_path=db_path)
+        return
+
+    if dry_run:
+        res["appended"].append((u.ident, plan.target.ident))
+        return
+    note = store.get_note(target_id, db_path=db_path) or {}
+    body = u.body                      # VERBATIM: the checkbox line says open/done
+    if any(normalize(e["body"]) == normalize(body)
+           for e in note.get("entries") or []):
+        res["appended_already"] += 1
+        return
+    try:
+        store.add_note_entry(target_id, body, db_path=db_path)
+    except ValueError as e:
+        res["errors"].append("%s -> note #%s: %s" % (u.ident, target_id, e))
+        return
+    res["appended"].append((u.ident, plan.target.ident))
+    # No `link_note` here on purpose: the mirror never becomes a row of its own,
+    # so there is no second id to link, and note_links has no unit-level kind.
 
 
 def _attach(store, note_id, unit, res, db_path=None):

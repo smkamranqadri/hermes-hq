@@ -650,6 +650,15 @@ def cmd_note_import(args):
     if res["already_imported"]:
         _p("  %-13s %4d   (same content_hash — nothing to do)"
            % ("already there", res["already_imported"]))
+    if res["appended"] or res["appended_already"]:
+        _p("  %-13s %4d   (mirror of a note of the same title — the task text"
+           " lands there as a Thought, not as a second note)"
+           % ("appended" if args.apply else "would append", len(res["appended"])))
+        if res["appended_already"]:
+            _p("  %-13s %4d   (that Thought is already on the note)"
+               % ("already there", res["appended_already"]))
+    for why in res["append_fallback"]:
+        _p("  NOTE  %s" % why)
     _p("  %-13s %4d   (empty or byte-identical duplicate — nothing lost)"
        % ("skipped", p["skip"]))
     _p("  %-13s %4d   (secret: no note row, bytes 0600 outside hq_home)"
