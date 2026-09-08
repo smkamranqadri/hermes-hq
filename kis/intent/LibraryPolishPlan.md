@@ -1,6 +1,6 @@
 # Library Polish — owner feedback backlog from the wave-1 review
 
-**Status:** BACKLOG, logged 2026-09-08 during the owner's first full review of the imported notes. **Not planned yet** — the owner will start a fresh conversation to work these; plan there via `/kis:plan` (small items may bundle into one Standard pass). Three decisions below are already owner-answered — do not re-ask them.
+**Status:** PLANNED 2026-09-08 (Phase, slices A–G below), owner-interviewed the same day. Wave-1 review is FINISHED (owner-confirmed 2026-09-08). Execution: a Sonnet subagent builds each slice in its own worktree, an Opus subagent reviews (code, then live at 390×844), the orchestrator merges + deploys per slice; subagents never touch `kis/`. Decisions in this file are owner-answered — do not re-ask them.
 **Context:** wave 1 (focus, 107 notes) is live; the owner is triaging librarian proposals. Waves 2–5 (~670 more notes) are HELD until this review + the area descriptions land.
 
 ## Bugs (diagnosed where marked ✓)
@@ -36,3 +36,53 @@ These four are exactly what `areas.description` (the planned descriptions pass) 
 ## Order suggestion for the next session
 
 Descriptions interview (needs his finished review) → quick bug fixes (1, 2, 10, 4) → policy 12 → pickers/filters (5, 6) → related notes (9) → pagination (7) → mirror-pair librarian pass (3) → then wave 2.
+
+## Plan (2026-09-08) — slices, in order
+
+Common contract for every slice: builder works on branch `polish/<slice>` in a worktree, `npm ci` there, suite via the main checkout's `.venv/bin/python -m pytest tests/backend -q` (must stay 0 failed; baseline 294), frontend `npm run build` must pass (`tsc -b`), commits on the branch, leaves the tree clean, never edits `kis/`. Reviewer reads the diff against this plan, tags Critical/Important/Minor, then after deploy verifies live at 390×844 `isMobile` (scrollWidth 390, 0 page errors, screenshots). Deploy = pre-deploy `wm backup`, ff-merge, `npm run build` (live at once), `hermes-hq service restart` only when backend changed, health 200, `wm check`. Owner re-logs in after a restart and checks on the phone.
+
+**Additional item (found 2026-09-08 by `wm note lint`):** near-duplicate tags `BrightLane` / `brightlane`. Data, not code — the owner merges them via the taxonomy when convenient; not in any slice.
+
+### Slice A — quick bugs (1, 2, 4, 10). Frontend only, Standard.
+- **1** `pages/BrainNote.tsx:45-50`: after archiving, return to where the owner came from. `NoteRow` (`components/brain.tsx:175`) passes `state={{from: pathname+search}}` on its Link; BrainNote navigates to `location.state.from` when present, else `/brain/library`. Restore stays on the note page.
+- **2** `AreaSelect` (`brain.tsx:207-220`): a parentless area with no children renders as a flat `<option>`; `<optgroup>` only when it has children. Today all 18 areas are top-level, so the select must print each name once.
+- **4** `NoteRow` (`brain.tsx:189`): drop `slice(0, 4)`, render every tag in a wrapping row (`flex-wrap`, `min-w-0`).
+- **10** `pages/BrainLibrary.tsx:151-154`: the refine control becomes **Active / Archive** and **Archive shows only archived notes in the current scope** (owner decision A, 2026-09-08 — no mixed list). Wire: `arch` param → `status=archived` with the same area/project/tag/type/q filters, instead of `exclude_archived=false`. Check the view select still reads distinctly ("Filed" vs "Active" — if the two read as synonyms, the refine label wins and the builder flags it in its report).
+- Accept: build passes; live at 390×844 — archive from an area-filtered list returns to that list; refile select lists each area once; a note with 6 tags shows 6 chips; Archive shows archived-only rows for area Work.
+
+### Slice B — policy 12: area or project required to become `active`. Backend + frontend, Standard.
+- Store-level, beside the taxonomy check (`core/wm_store.py` `_validate_filing` 5372, `update_note` 5074, `approve_proposal` file 5793 / split 5846): a note may only END UP `active` with `area_id` or `project_id` set — covers `update_note` (explicit `status='active'`, and clearing area/project on an already-active note), proposal `file` approval (`new_area` counts as an area), split parts (already inbox when unfiled — pin with a test). Refusal is a `ValueError` → **409** with a sentence the UI can show; approval re-validates BEFORE touching anything (existing rule).
+- Import (`backend/notes_import.py:513`) already requires an area for `active` — pin with a test, no change.
+- Restore (`BrainNote.tsx:101`): an archived note with no area/project restores to **`inbox`** (button reads "Restore to inbox"), one with a home restores to `active`.
+- `FileNoteModal` (`brain.tsx:250-269`): Save disabled until an area or project is chosen; helper text says why; a 409 still renders honestly.
+- Existing area-less active notes: none today (0); `lint` `orphan` stays the surface.
+- Accept: suite +tests for every path above (update_note both directions, file approval with/without area, new_area, split parts, restore-to-inbox); live 409 on a raw POST; mobile modal shows the disabled state.
+
+### Slice C — tag/area pickers (5) + scoped filters (6). Backend + frontend, Standard.
+- Backend: `GET /api/notes/facets` taking the list filters (`status/area_id/project_id/type/tag/q/exclude_archived`) and returning `{tags:[{tag,count}], projects:[{id,name,count}], areas:[{id,name,count}]}` counted over the CURRENT selection via `_scope_sql` (`wm_store.py` ~5238); store function + tests (counts respect area + archive state; a tag absent from the scope is absent from the list).
+- Library filters (`BrainLibrary.tsx:149-165`): tag and project selects come from facets and list only options with count > 0, with counts; the currently selected value stays listed even at 0 so the owner can clear it.
+- `TagPicker` in `brain.tsx` replacing the three free-text tag inputs (`FileNoteModal` 269, `EditProposalModal` file 729 and split 764): a text field (free text still allowed, comma-separated, 16 px) plus the registered tags as tappable chips with counts (from `/api/notes/tags`), filtered by what is typed, tap toggles; selected chips show above. **Not the system-wide combobox** (item 11 — deferred).
+- `AreaSelect` options show note counts from `useNotesTree()`.
+- Accept: suite +tests; live — filter lists shrink when an area is chosen; picker chips toggle on the phone; free-text coinage still works.
+
+### Slice D — related notes (9). Backend + frontend, Standard.
+- Store `related_notes(note_id, cap=6)` → `GET /api/note/{id}/related`: three labelled groups in this order — **Linked** (existing `_note_links` targets, note↔note and note↔task/schedule), **Shared tags** (active notes sharing ≥1 tag, ordered by shared-tag count desc then updated desc, excluding self and linked), **Same area** (same `area_id`, active, newest first, excluding the above). Each group capped at 6 with `more: <total>`.
+- BrainNote: a "Related" card below the body with the three groups labelled so they read differently; "more" links to the Library pre-filtered (tag / area). Empty groups are omitted; the card is omitted when all three are empty (honest empty state rule).
+- Accept: tests for ordering/exclusion/caps; live on a Work note (49 notes) the card stays short and the "more" link lands on the filtered Library.
+
+### Slice E — pagination (7). Backend + frontend, Standard.
+- List endpoint (`backend/notes.py:98`) gains a total: keep the array body for existing callers and add header `X-Total-Count` (or an opt-in `with_total=1` envelope — builder picks, reviewer checks no caller breaks). Search path included.
+- Library: page size 50, `useInfiniteQuery` on `offset`, a "Load more (shown / total)" button with `Btn busy`, skeleton on first load only; filters reset paging. Inbox worklist ordering (`owner_first`) must survive paging.
+- Accept: test paging + total; live — with 139 notes "Filed" shows 50 then loads the rest; scrollWidth 390.
+
+### Slice F — tags in the Library tree (8). Frontend only, Fast/Standard.
+- Sidebar tree (`BrainLibrary.tsx:118-142`): a **Tags** section under Areas using the facets of the current view, count per tag, click sets `tag`; mobile keeps the select. Collapsible if > 12 tags.
+- Accept: live at 1440 and 390.
+
+### Slice G — mirror-pair pass (3). Importer change (Standard) + a librarian task through the pipeline.
+- `backend/notes_import.py`: for focus, a `type: task` unit whose `source:` frontmatter names a note unit with the same title is planned as an ENTRY (Thought) on that note — task text verbatim, task unit not a separate note; `tools/analyze_notes_dump.py` counts the pairs; baseline JSON regenerated and `--check` green; tests on a fixture pair. Re-running wave 1 stays a no-op (already-imported units are matched by ident).
+- Live pairs (6): a `wm` task for the `librarian` profile listing the six pairs by note id, instructing one `append_entry` proposal per pair (task text as the Thought, `archive_source: true`), owner approves each in the queue. Created by the orchestrator via `wm`, not a subagent; runs only after A–F are live.
+- Accept: analyzer table shows the pairs; 6 proposals in the queue; after approval 6 fewer duplicate-title groups in lint.
+
+### Then
+Area-descriptions interview (four taxonomy questions above, now over 18 areas — four with zero active notes: Health, Home, Journal, Study) → wave 2 per `intent/ImportPlan.md`.
