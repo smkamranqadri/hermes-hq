@@ -200,7 +200,7 @@ export function NoteRow({ n, areas, showBody = true }: { n: Note; areas?: Area[]
         {n.status === 'archived' && <Chip>archived</Chip>}
         {/* owner authorship is the default and would be noise on every row —
             only import/librarian authorship is worth a chip here. */}
-        {n.authored_by !== 'owner' && <Chip>{n.authored_by}</Chip>}
+        {n.authored_by !== 'owner' && <span className="font-mono text-[10px] text-muted" title={PROVENANCE_HINT[n.authored_by] ?? ''}>{PROVENANCE[n.authored_by] ?? n.authored_by}</span>}
         {!!n.attachment_counts?.photo && <Chip>🖼 {n.attachment_counts.photo}</Chip>}
         {!!n.attachment_counts?.voice && <Chip>🎤 {n.attachment_counts.voice}</Chip>}
         {/* 2c: a memo with no text is waiting on the OWNER, not the librarian.
@@ -213,6 +213,15 @@ export function NoteRow({ n, areas, showBody = true }: { n: Note; areas?: Area[]
   )
 }
 
+/** `authored_by` is provenance, not a tag: who wrote the note's original text.
+ *  The owner's own notes show nothing (the default); the other two read as a
+ *  muted word with a hover hint, never as a chip in the tag row — the owner
+ *  read the bare "import"/"owner" chips as tags he had not set. */
+export const PROVENANCE: Record<string, string> = { import: 'imported', librarian: 'by the librarian' }
+export const PROVENANCE_HINT: Record<string, string> = {
+  import: 'Brought in by an import wave — the text is from the source, not typed here.',
+  librarian: 'Written by the librarian agent (a wiki or playbook compiled from your notes).',
+}
 export const tagsFrom = (s: string) => s.split(',').map(t => t.trim()).filter(Boolean)
 
 const TAG_SUGGEST_CAP = 24
