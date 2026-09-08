@@ -50,8 +50,11 @@ export function BrainLibrary() {
     if (q) n.set('q', q)
     // arch/tag are refine-level, not top-level — every pick carries them
     // forward. project belongs to an area, so it only drops when the area
-    // itself changes; a type/view/project pick leaves it alone.
-    const arch = sp.get('arch'); if (arch) n.set('arch', arch)
+    // itself changes; a type/view/project pick leaves it alone. Exception:
+    // an inbox note is never archived, so picking Inbox drops arch — else
+    // Archive -> Inbox landed on ?view=inbox&arch=1 with the refine hidden
+    // and the query silently asking for archived inbox notes (none exist).
+    const arch = sp.get('arch'); if (arch && !(k === 'view' && v === 'inbox')) n.set('arch', arch)
     const tag = sp.get('tag'); if (tag) n.set('tag', tag)
     if (k !== 'area' && k !== 'project') {
       const proj = sp.get('project'); if (proj) n.set('project', proj)
@@ -74,7 +77,10 @@ export function BrainLibrary() {
   // (ONLY the museum, still scoped to area/project/tag/type/q) — never a mix.
   // arch wins over view: it is the one archive door, so it overrides Filed's
   // status=active the same way it overrides the default's exclude_archived.
-  const showArch = sp.get('arch') === '1'
+  // Recognise the legacy view=archived synchronously too — the redirect
+  // effect above only rewrites the URL, it must not gate the first query,
+  // or a cold view=archived link would fetch the wrong (active) list once.
+  const showArch = sp.get('arch') === '1' || view === 'archived'
   const archFilter = showArch ? { status: 'archived' } : { exclude_archived: true }
   const scoped = { area_id: areaSel ? Number(areaSel) : undefined, project_id: projSel ? Number(projSel) : undefined, type: typeSel ?? undefined, tag: tagSel ?? undefined, limit: 100 }
   const filters = q
@@ -97,7 +103,8 @@ export function BrainLibrary() {
     setDraft('')
     const n = new URLSearchParams(sp); n.delete('q'); setSp(n, { replace: true })
   }
-  const searchScope = areaSel ? ((tree.data?.areas ?? []).find(a => String(a.id) === areaSel)?.name ?? 'this area')
+  const searchScope = showArch ? 'the Archive'
+    : areaSel ? ((tree.data?.areas ?? []).find(a => String(a.id) === areaSel)?.name ?? 'this area')
     : view === 'inbox' ? 'the Inbox'
     : projSel ? (projName ?? 'this project') : 'the Library'
   const selLabel = baseLabel
@@ -175,7 +182,7 @@ export function BrainLibrary() {
             <div className="mb-3 flex flex-wrap gap-2">
               <Select value={showArch ? '1' : ''} onChange={e => refine('arch', e.target.value || null)} aria-label="Archive filter">
                 <option value="">Active</option>
-                <option value="1">Archive</option>
+                <option value="1">Archive{typeof tree.data?.counts?.archived === 'number' ? ` (${tree.data.counts.archived})` : ''}</option>
               </Select>
               <Select value={tagSel ?? ''} onChange={e => refine('tag', e.target.value || null)} aria-label="Tag filter">
                 <option value="">All tags</option>

@@ -90,7 +90,7 @@ export function SecondBrain() {
             <Label>Library</Label>
             <div className="mt-2 grid grid-cols-2 gap-2 text-center">
               {([['note', 'notes'], ['playbook', 'playbooks'], ['wiki', 'wiki'], ['archived', 'archived']] as const).map(([k, label]) => (
-                <Link key={k} to={k === 'archived' ? '/brain/library?view=archived' : `/brain/library?type=${k}`} className="rounded-lg border border-line-subtle bg-inset px-2 py-2 hover:border-line">
+                <Link key={k} to={k === 'archived' ? '/brain/library?arch=1' : `/brain/library?type=${k}`} className="rounded-lg border border-line-subtle bg-inset px-2 py-2 hover:border-line">
                   <p className="font-mono text-lg font-semibold">{tree.data?.counts?.[k] ?? 0}</p>
                   <Label>{label}</Label>
                 </Link>
