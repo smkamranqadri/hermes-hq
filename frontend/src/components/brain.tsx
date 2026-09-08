@@ -324,11 +324,16 @@ export function AreaSelect({ value, onChange, areas }: { value: string; onChange
 }
 
 /** Project picker by id — shared for the same reason. */
-export function ProjectSelect({ value, onChange, projects }: { value: string; onChange: (v: string) => void; projects: { id: number; name: string }[] }) {
+/** Project options with the tree's live note counts merged in (tree lists only
+ *  projects that hold notes; the rest stay countless rather than showing 0). */
+export const withProjectCounts = (projects: { id: number; name: string }[], tree?: { id: number; note_count?: number }[]) =>
+  projects.map(p => { const t = tree?.find(x => x.id === p.id); return t ? { ...p, note_count: t.note_count ?? 0 } : p })
+
+export function ProjectSelect({ value, onChange, projects }: { value: string; onChange: (v: string) => void; projects: { id: number; name: string; note_count?: number }[] }) {
   return (
     <SelectInput value={value} onChange={e => onChange(e.target.value)} aria-label="Project">
       <option value="">— no project —</option>
-      {projects.map(p => <option key={p.id} value={p.id}>{p.name}</option>)}
+      {projects.map(p => <option key={p.id} value={p.id}>{p.name}{typeof p.note_count === 'number' ? ` (${p.note_count})` : ''}</option>)}
     </SelectInput>
   )
 }
@@ -370,7 +375,7 @@ export function FileNoteModal({ n, onClose }: { n: Note; onClose: () => void }) 
           <AreaSelect value={f.area_id} onChange={v => setF(x => ({ ...x, area_id: v }))} areas={tree.data?.areas ?? []} />
         </Field>
         <Field label="Project" hint="Project-linked notes show on that project's page.">
-          <ProjectSelect value={f.project_id} onChange={v => setF(x => ({ ...x, project_id: v }))} projects={projects.data?.projects ?? []} />
+          <ProjectSelect value={f.project_id} onChange={v => setF(x => ({ ...x, project_id: v }))} projects={withProjectCounts(projects.data?.projects ?? [], tree.data?.projects)} />
         </Field>
         <Field label="Type">
           <SelectInput value={f.type} onChange={e => setF(x => ({ ...x, type: e.target.value }))}>
@@ -831,7 +836,7 @@ export function EditProposalModal({ p, onClose }: { p: Proposal; onClose: () => 
       toast('Approved with your edits'); qc.invalidateQueries(); onClose()
     } catch (e) { toast(e instanceof Error ? e.message : String(e), 'err') } finally { setBusy(false) }
   }
-  const projectList = projects.data?.projects ?? []
+  const projectList = withProjectCounts(projects.data?.projects ?? [], tree.data?.projects)
   // A file proposal may only END UP active with a home (core/wm_store.py
   // update_note / _validate_proposal_payload) — archiving is the one
   // exception. A file payload never CLEARS the note's existing home, only

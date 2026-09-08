@@ -23,6 +23,8 @@ function TreeRow({ label, count, depth = 0, active, onClick, mono = false }: {
   )
 }
 
+const TAGS_FOLD = 12
+
 export function BrainLibrary() {
   usePageTitle('Library')
   const [sp, setSp] = useSearchParams()
@@ -33,6 +35,7 @@ export function BrainLibrary() {
   const { inbox, review } = useBrainCounts()
   const tree = useNotesTree()
   const areas = useAreas()
+  const [tagsOpen, setTagsOpen] = useState(false)
   // `arch` is the ONLY door into the museum — `view=archived` used to be a
   // second one, reading as a synonym of the Active/Archive refine below.
   // Old links (or anything still emitting view=archived) get normalised to
@@ -213,6 +216,18 @@ export function BrainLibrary() {
             {(tree.data?.projects ?? []).map(p => (
               <TreeRow key={p.id} label={p.name} count={p.note_count} depth={1} active={projSel === String(p.id)} onClick={() => pick('project', String(p.id))} />
             ))}
+            {/* Slice F: tags of the CURRENT view (facets minus the tag dimension), so
+                the tree offers only tags that would show something here — the
+                same rule as the refine select, which stays the mobile door. */}
+            {(facets.data?.tags ?? []).length > 0 && <p className="mt-2 px-2 font-mono text-[10px] uppercase tracking-widest text-muted">Tags</p>}
+            {(facets.data?.tags ?? []).slice(0, tagsOpen ? undefined : TAGS_FOLD).map(t => (
+              <TreeRow key={t.tag} label={t.tag} count={t.count} depth={1} active={tagSel === t.tag} onClick={() => refine('tag', tagSel === t.tag ? null : t.tag)} />
+            ))}
+            {(facets.data?.tags ?? []).length > TAGS_FOLD && (
+              <button onClick={() => setTagsOpen(o => !o)} className="px-6 py-1 font-mono text-[10px] uppercase tracking-wider text-muted hover:text-fg">
+                {tagsOpen ? 'fewer tags' : `${(facets.data?.tags ?? []).length - TAGS_FOLD} more tags`}
+              </button>
+            )}
             <p className="mt-2 px-2 font-mono text-[10px] uppercase tracking-widest text-muted">Collections</p>
             <TreeRow label="Playbooks" count={tree.data?.counts?.playbook ?? 0} depth={1} active={typeSel === 'playbook'} onClick={() => pick('type', 'playbook')} />
             <TreeRow label="Wiki" count={tree.data?.counts?.wiki ?? 0} depth={1} active={typeSel === 'wiki'} onClick={() => pick('type', 'wiki')} />
