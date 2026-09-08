@@ -9,7 +9,7 @@ import { useQueryClient } from '@tanstack/react-query'
 import clsx from 'clsx'
 import { ago, post, useAreas, useProjects, useProposals, useRoster, type Proposal, type ProposalPayload, type SplitPart } from '../api'
 import { GlassCard, PageHeader } from '../components/GlassCard'
-import { AreaSelect, BrainSubNav, KIND_LABEL, ProjectSelect, ProposalPayloadView, approveLabel, pillCls, tagsFrom, useBrainCounts } from '../components/brain'
+import { BrainSubNav, EDITABLE, EditProposalModal, KIND_LABEL, ProposalPayloadView, approveLabel, pillCls, useBrainCounts } from '../components/brain'
 import { Btn, ConfirmModal, Field, Modal, SelectInput, TextArea, TextInput } from '../components/Modal'
 import { Chip, Empty, Loading, Select } from '../components/ui'
 import { useToast } from '../components/Toast'
@@ -19,13 +19,6 @@ const KIND_TONE: Record<Proposal['kind'], string> = {
   split: 'text-accent-2', file: 'text-queued', contradiction: 'text-needsyou', new_task: 'text-working',
   append_entry: 'text-accent-2',
 }
-// Record-keyed (not an array) so a new kind can't compile without deciding
-// whether it is owner-editable before approval.
-// append_entry is NOT editable: EditProposalModal already carries three
-// per-kind state shapes (recorded debt — "split into sub-forms when a 5th kind
-// lands"), and an append that cannot be undone is the wrong place to add a
-// fourth. A wrong target is rejected with feedback and re-proposed.
-const EDITABLE: Record<Proposal['kind'], boolean> = { split: true, file: true, contradiction: false, new_task: true, append_entry: false }
 
 export function BrainReview() {
   usePageTitle('Review — Second Brain')
@@ -157,110 +150,5 @@ function RejectModal({ p, onClose }: { p: Proposal; onClose: () => void }) {
 /** Edit-before-approve: adjust the librarian's payload, then approve in one
  * step. The server re-validates and persists the edited payload on the row,
  * so the record shows what was actually approved. */
-function EditProposalModal({ p, onClose }: { p: Proposal; onClose: () => void }) {
-  const qc = useQueryClient(); const toast = useToast()
-  const areas = useAreas(); const projects = useProjects(); const roster = useRoster()
-  const pay = p.payload ?? {}
-  const [file, setFile] = useState({
-    area_id: pay.area_id ? String(pay.area_id) : '', project_id: pay.project_id ? String(pay.project_id) : '',
-    type: pay.type ?? '', tags: (pay.tags ?? []).join(', '), archive: !!pay.archive,
-  })
-  const [task, setTask] = useState({
-    title: pay.title ?? '', description: pay.description ?? '',
-    project_id: pay.project_id ? String(pay.project_id) : '', assignee: pay.assignee ?? 'owner',
-  })
-  const [parts, setParts] = useState<SplitPart[]>(() => (pay.parts ?? []).map(x => ({ ...x })))
-  const [keepOriginal, setKeepOriginal] = useState(pay.archive_original === false)
-  const [busy, setBusy] = useState(false)
-  const setPart = (i: number, patch: Partial<SplitPart>) => setParts(ps => ps.map((x, j) => j === i ? { ...x, ...patch } : x))
-  const buildPayload = (): ProposalPayload => {
-    if (p.kind === 'file') {
-      const out: ProposalPayload = {}
-      if (file.area_id) out.area_id = Number(file.area_id)
-      if (file.project_id) out.project_id = Number(file.project_id)
-      if (file.type) out.type = file.type as ProposalPayload['type']
-      if (file.tags.trim()) out.tags = tagsFrom(file.tags)
-      if (file.archive) out.archive = true
-      return out
-    }
-    if (p.kind === 'new_task') {
-      const out: ProposalPayload = { title: task.title.trim() }
-      if (task.description.trim()) out.description = task.description.trim()
-      if (task.project_id) out.project_id = Number(task.project_id)
-      if (task.assignee) out.assignee = task.assignee
-      return out
-    }
-    return { parts, archive_original: !keepOriginal }
-  }
-  const save = async () => {
-    setBusy(true)
-    try {
-      await post(`/api/proposal/${p.id}/approve`, { payload: buildPayload() })
-      toast('Approved with your edits'); qc.invalidateQueries(); onClose()
-    } catch (e) { toast(e instanceof Error ? e.message : String(e), 'err') } finally { setBusy(false) }
-  }
-  const projectList = projects.data?.projects ?? []
-  return (
-    <Modal title={`Edit ${KIND_LABEL[p.kind]} proposal #${p.id}`} onClose={onClose}>
-      <div className="flex flex-col gap-3">
-        {p.kind === 'file' && (
-          <>
-            <Field label="Area"><AreaSelect value={file.area_id} onChange={v => setFile(x => ({ ...x, area_id: v }))} areas={areas.data?.areas ?? []} /></Field>
-            <Field label="Project"><ProjectSelect value={file.project_id} onChange={v => setFile(x => ({ ...x, project_id: v }))} projects={projectList} /></Field>
-            <Field label="Tags" hint="Comma-separated."><TextInput value={file.tags} onChange={e => setFile(x => ({ ...x, tags: e.target.value }))} /></Field>
-            <label className="flex items-center gap-2 text-sm">
-              <input type="checkbox" checked={file.archive} onChange={e => setFile(x => ({ ...x, archive: e.target.checked }))} />
-              Send to Archive (junk/museum — stays searchable)
-            </label>
-          </>
-        )}
-        {p.kind === 'new_task' && (
-          <>
-            <Field label="Title"><TextInput value={task.title} onChange={e => setTask(x => ({ ...x, title: e.target.value }))} /></Field>
-            <Field label="Description"><TextArea rows={2} value={task.description} onChange={e => setTask(x => ({ ...x, description: e.target.value }))} /></Field>
-            <Field label="Project" hint="Defaults to the note's project when left empty."><ProjectSelect value={task.project_id} onChange={v => setTask(x => ({ ...x, project_id: v }))} projects={projectList} /></Field>
-            <Field label="Assignee" hint="owner = your own todo; agents get dispatched.">
-              <SelectInput value={task.assignee} onChange={e => setTask(x => ({ ...x, assignee: e.target.value }))}>
-                {(roster.data?.assignees ?? ['owner']).map(a => <option key={a}>{a}</option>)}
-              </SelectInput>
-            </Field>
-          </>
-        )}
-        {p.kind === 'split' && (
-          <>
-            <div className="flex max-h-[50vh] flex-col gap-2 overflow-y-auto pr-1">
-              {parts.map((part, i) => (
-                <div key={i} className="rounded-lg border border-line-subtle bg-inset p-2">
-                  <div className="flex items-center gap-2">
-                    <TextInput value={part.title} onChange={e => setPart(i, { title: e.target.value })} aria-label={`Part ${i + 1} title`} />
-                    {parts.length > 1 && (
-                      <button type="button" title="Drop this part" className="shrink-0 text-muted hover:text-needsyou"
-                        onClick={() => setParts(ps => ps.filter((_, j) => j !== i))}>✕</button>
-                    )}
-                  </div>
-                  {part.body && <p className="mt-1 line-clamp-1 text-[11px] text-muted">{part.body}</p>}
-                  <div className="mt-2 flex flex-col gap-2 sm:flex-row">
-                    <div className="min-w-0 flex-1"><AreaSelect value={part.area_id ? String(part.area_id) : ''} onChange={v => setPart(i, { area_id: v ? Number(v) : undefined })} areas={areas.data?.areas ?? []} /></div>
-                    <div className="min-w-0 flex-1"><ProjectSelect value={part.project_id ? String(part.project_id) : ''} onChange={v => setPart(i, { project_id: v ? Number(v) : undefined })} projects={projectList} /></div>
-                    <div className="min-w-0 flex-1"><TextInput value={(part.tags ?? []).join(', ')} onChange={e => setPart(i, { tags: tagsFrom(e.target.value) })} placeholder="tags, comma-separated" aria-label={`Part ${i + 1} tags`} /></div>
-                  </div>
-                </div>
-              ))}
-            </div>
-            <label className="flex items-center gap-2 text-sm">
-              <input type="checkbox" checked={keepOriginal} onChange={e => setKeepOriginal(e.target.checked)} />
-              Keep the source note (don't archive it)
-            </label>
-            <p className="text-[11px] text-muted">Bodies stay verbatim — you're editing titles and filing only.</p>
-          </>
-        )}
-        <div className="flex justify-end gap-2">
-          <Btn kind="ghost" onClick={onClose}>Cancel</Btn>
-          <Btn onClick={() => void save()} busy={busy} disabled={p.kind === 'new_task' && !task.title.trim()}>Approve with edits</Btn>
-        </div>
-      </div>
-    </Modal>
-  )
-}
 
 export default BrainReview

@@ -197,7 +197,7 @@ export type NotesTree = { areas: Area[]; projects: { id: number; slug: string; n
 // surface must refresh on the same 15s cadence the rest of the app uses. The
 // tree is in here too: it feeds the sub-nav badges, and leaving it slower than
 // the lists let the header read "Review · 3" over an empty queue.
-const NOTES_REFETCH = 15000
+export const NOTES_REFETCH = 15000
 
 export const useAreas = () => useQuery({ queryKey: ['areas'], queryFn: () => get<{ areas: Area[] }>('/api/areas') })
 export const useNotesTree = () => useQuery({ queryKey: ['notes-tree'], queryFn: () => get<NotesTree>('/api/notes/tree'), refetchInterval: NOTES_REFETCH })
