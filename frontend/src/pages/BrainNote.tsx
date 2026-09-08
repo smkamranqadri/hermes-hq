@@ -2,7 +2,7 @@
  * filing chips, and create-and-link graduation — New task / New reminder.
  * The note never converts; created items link back. */
 import { useState } from 'react'
-import { Link, useNavigate, useParams } from 'react-router-dom'
+import { Link, useLocation, useNavigate, useParams } from 'react-router-dom'
 import { useQueryClient } from '@tanstack/react-query'
 import { post, useNote, when } from '../api'
 import { GlassCard } from '../components/GlassCard'
@@ -21,6 +21,11 @@ export function BrainNote() {
   const n = q.data
   usePageTitle(n?.title ?? `Note #${id}`)
   const qc = useQueryClient(); const toast = useToast(); const nav = useNavigate()
+  const loc = useLocation()
+  // The Link that led here can pass state.from (pathname + search) so
+  // archiving returns the owner to the filtered list they came from,
+  // instead of always bouncing to the unfiltered Library.
+  const from = (loc.state as { from?: string } | null)?.from
   const [modal, setModal] = useState<'file' | 'task' | 'reminder' | 'archive' | null>(null)
   const [editing, setEditing] = useState(false)
   const [bodyDraft, setBodyDraft] = useState('')
@@ -46,7 +51,7 @@ export function BrainNote() {
         <ConfirmModal title="Archive note" confirmLabel="Archive"
           message={`Archive “${n.title}”? It leaves the library views but stays searchable — nothing is deleted.`}
           onClose={() => setModal(null)}
-          onConfirm={async () => { await act('archive', () => post(`/api/note/${n.id}/edit`, { status: 'archived' }), 'Archived'); setModal(null); nav('/brain/library') }} />
+          onConfirm={async () => { await act('archive', () => post(`/api/note/${n.id}/edit`, { status: 'archived' }), 'Archived'); setModal(null); nav(from ?? '/brain/library') }} />
       )}
 
       <div className="mb-4 flex flex-wrap items-start justify-between gap-3">

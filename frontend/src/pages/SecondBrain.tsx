@@ -11,6 +11,8 @@ import { Empty, Label, Loading } from '../components/ui'
 import { useToast } from '../components/Toast'
 import { usePageTitle } from '../usePageTitle'
 
+const NOTE_STATE = { from: '/brain' }
+
 export function SecondBrain() {
   usePageTitle('Second Brain')
   const { tree, inbox, review } = useBrainCounts()
@@ -47,7 +49,7 @@ export function SecondBrain() {
             {(inboxNotes.data?.notes ?? []).map(n => (
               <div key={n.id} className="glass rounded-xl px-4 py-3">
                 <div className="flex flex-wrap items-center gap-2">
-                  <Link to={`/brain/note/${n.id}`} className="min-w-0 flex-1 truncate text-sm font-medium hover:text-accent-2">{n.title}</Link>
+                  <Link to={`/brain/note/${n.id}`} state={NOTE_STATE} className="min-w-0 flex-1 truncate text-sm font-medium hover:text-accent-2">{n.title}</Link>
                   <span className="font-mono text-[10px] text-muted">{new Date((n.created_at) * 1000).toLocaleString([], { month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit' })}</span>
                 </div>
                 {n.body && <p className="mt-1 line-clamp-2 text-xs text-muted">{n.body}</p>}
@@ -55,7 +57,7 @@ export function SecondBrain() {
                   {n.pending_proposal_id
                     ? <PendingProposalChip />
                     : <button onClick={() => setFiling(n)} className="rounded-full border border-working/60 px-3 py-1 font-mono text-[10px] uppercase tracking-wider text-working hover:bg-working/10">File…</button>}
-                  <Link to={`/brain/note/${n.id}`} className="rounded-full border border-line px-3 py-1 font-mono text-[10px] uppercase tracking-wider text-muted hover:text-fg">Open</Link>
+                  <Link to={`/brain/note/${n.id}`} state={NOTE_STATE} className="rounded-full border border-line px-3 py-1 font-mono text-[10px] uppercase tracking-wider text-muted hover:text-fg">Open</Link>
                 </div>
               </div>
             ))}

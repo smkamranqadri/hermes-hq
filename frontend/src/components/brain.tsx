@@ -2,7 +2,7 @@
  * modals (intent/SecondBrainPlan.md P1). Notes never convert — "New task" /
  * "New reminder" create linked items and the note stays a note. */
 import { useEffect, useRef, useState } from 'react'
-import { Link, NavLink } from 'react-router-dom'
+import { Link, NavLink, useLocation } from 'react-router-dom'
 import { useQuery, useQueryClient } from '@tanstack/react-query'
 import clsx from 'clsx'
 import { NOTES_REFETCH, ago, attachmentUrl, del, get, post, postForm, useAreas, useNotesTree, useProjects, useRoster, type Area, type Note, type NoteAttachment, type NoteFull, type Proposal, type ProposalPayload, type SplitPart } from '../api'
@@ -174,8 +174,11 @@ export function areaLabel(areas: Area[] | undefined, id: number | null) {
 /** One note in a list — Library results, project tab, Home recents. */
 export function NoteRow({ n, areas, showBody = true }: { n: Note; areas?: Area[]; showBody?: boolean }) {
   const area = areaLabel(areas, n.area_id)
+  const location = useLocation()
+  // Carry where we came from so archiving (on the note page) can return here
+  // instead of always bouncing to the unfiltered Library.
   return (
-    <Link to={`/brain/note/${n.id}`} className="glass block rounded-xl px-4 py-3 hover:bg-raised">
+    <Link to={`/brain/note/${n.id}`} state={{ from: location.pathname + location.search }} className="glass block rounded-xl px-4 py-3 hover:bg-raised">
       <div className="flex flex-wrap items-center gap-2">
         {n.type !== 'note' && <span className={clsx('font-mono text-[10px] uppercase tracking-wider', TYPE_TONE[n.type])}>{n.type}</span>}
         {!!n.pinned && <span className="font-mono text-[10px] text-needsyou" title="Pinned">★</span>}
@@ -184,9 +187,9 @@ export function NoteRow({ n, areas, showBody = true }: { n: Note; areas?: Area[]
         <span className="font-mono text-[10px] text-muted">{ago(n.updated_at ?? n.created_at)}</span>
       </div>
       {showBody && n.body && <p className="mt-1 line-clamp-2 text-xs text-muted">{n.body}</p>}
-      <div className="mt-1.5 flex flex-wrap items-center gap-1.5">
+      <div className="mt-1.5 flex min-w-0 flex-wrap items-center gap-1.5">
         {area && <Chip tone="accent">{area}</Chip>}
-        {n.tags.slice(0, 4).map(t => <Chip key={t}>{t}</Chip>)}
+        {n.tags.map(t => <Chip key={t}>{t}</Chip>)}
         {n.status === 'archived' && <Chip>archived</Chip>}
         {!!n.attachment_counts?.photo && <Chip>🖼 {n.attachment_counts.photo}</Chip>}
         {!!n.attachment_counts?.voice && <Chip>🎤 {n.attachment_counts.voice}</Chip>}
@@ -209,12 +212,18 @@ export function AreaSelect({ value, onChange, areas }: { value: string; onChange
   return (
     <SelectInput value={value} onChange={e => onChange(e.target.value)} aria-label="Area">
       <option value="">— no area —</option>
-      {roots.map(r => (
-        <optgroup key={r.id} label={r.name}>
-          <option value={r.id}>{r.name}</option>
-          {areas.filter(a => a.parent_id === r.id).map(a => <option key={a.id} value={a.id}>{r.name} / {a.name}</option>)}
-        </optgroup>
-      ))}
+      {roots.map(r => {
+        const kids = areas.filter(a => a.parent_id === r.id)
+        // A parentless area with no children is just an area — an optgroup
+        // wrapping a single same-named option only doubled the name on screen.
+        if (kids.length === 0) return <option key={r.id} value={r.id}>{r.name}</option>
+        return (
+          <optgroup key={r.id} label={r.name}>
+            <option value={r.id}>{r.name}</option>
+            {kids.map(a => <option key={a.id} value={a.id}>{r.name} / {a.name}</option>)}
+          </optgroup>
+        )
+      })}
     </SelectInput>
   )
 }

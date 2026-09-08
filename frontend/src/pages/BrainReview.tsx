@@ -87,7 +87,7 @@ export function BrainReview() {
               <span className="font-mono text-[10px] text-muted">#{p.id} · {ago(p.created_at)}</span>
             </div>
             <p className="mt-2 text-sm">
-              <Link to={`/brain/note/${p.note_id}`} className="font-medium hover:text-accent-2">{p.note_title ?? `note #${p.note_id}`}</Link>
+              <Link to={`/brain/note/${p.note_id}`} state={{ from: '/brain/review' }} className="font-medium hover:text-accent-2">{p.note_title ?? `note #${p.note_id}`}</Link>
               {p.note_status === 'archived' && <span className="ml-2 text-[11px] text-muted">(archived)</span>}
             </p>
             {p.summary && <p className="mt-1 text-xs text-muted">{p.summary}</p>}

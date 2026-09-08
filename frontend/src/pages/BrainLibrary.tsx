@@ -51,15 +51,21 @@ export function BrainLibrary() {
   // listed archived notes beside live ones under an option labelled "Active".
   // Archive is a REFINE toggle beside tag/project, not a separate view: "All
   // notes" stays the default selection and simply hides the museum unless the
-  // owner asks for it.
+  // owner asks for it. The toggle means Active (hide the museum) vs Archive
+  // (ONLY the museum, still scoped to area/project/tag/type/q) — never a mix.
   const showArch = sp.get('arch') === '1'
+  const archFilter = showArch ? { status: 'archived' } : { exclude_archived: true }
   const scoped = { area_id: areaSel ? Number(areaSel) : undefined, project_id: projSel ? Number(projSel) : undefined, type: typeSel ?? undefined, tag: tagSel ?? undefined, limit: 100 }
   const filters = q
-    ? { ...scoped, q, exclude_archived: !showArch }
+    ? { ...scoped, q, ...archFilter }
     : view === 'archived' ? { ...scoped, status: 'archived' }
     : view === 'inbox' ? { ...scoped, status: 'inbox' }
     : view === 'filed' ? { ...scoped, status: 'active' }
-    : { ...scoped, exclude_archived: !showArch }
+    : { ...scoped, ...archFilter }
+  // The refine row only changes anything on "All notes" (no view) or while
+  // searching (search overrides view above) — on Inbox/Filed/Archive it would
+  // be a dead control reading as a synonym of the view select, so it hides.
+  const showArchRefine = view !== 'archived' && (!!q || !view)
   const notes = useNotes(filters)
   const roots = (tree.data?.areas ?? []).filter(a => !a.parent_id)
   const children = (id: number) => (tree.data?.areas ?? []).filter(a => a.parent_id === id)
@@ -146,11 +152,11 @@ export function BrainLibrary() {
             <Label>{selLabel}</Label>
             {notes.data && <span className="font-mono text-[10px] text-muted">{notes.data.notes.length} note{notes.data.notes.length === 1 ? '' : 's'}</span>}
           </div>
-          {view !== 'archived' && (
+          {showArchRefine && (
             <div className="mb-3 flex flex-wrap gap-2">
               <Select value={showArch ? '1' : ''} onChange={e => refine('arch', e.target.value || null)} aria-label="Archive filter">
-                <option value="">Archive hidden</option>
-                <option value="1">Archive included</option>
+                <option value="">Active</option>
+                <option value="1">Archive</option>
               </Select>
               <Select value={tagSel ?? ''} onChange={e => refine('tag', e.target.value || null)} aria-label="Tag filter">
                 <option value="">All tags</option>
