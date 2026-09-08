@@ -5,7 +5,7 @@ import { useEffect, useRef, useState } from 'react'
 import { Link, NavLink, useLocation } from 'react-router-dom'
 import { useQuery, useQueryClient } from '@tanstack/react-query'
 import clsx from 'clsx'
-import { NOTES_REFETCH, ago, attachmentUrl, del, get, post, postForm, useAreas, useNotesTree, useProjects, useRoster, type Area, type Note, type NoteAttachment, type NoteFull, type Proposal, type ProposalPayload, type SplitPart } from '../api'
+import { NOTES_REFETCH, ago, attachmentUrl, del, get, post, postForm, useAreas, useNoteTags, useNotesTree, useProjects, useRoster, type Area, type Note, type NoteAttachment, type NoteFull, type Proposal, type ProposalPayload, type SplitPart } from '../api'
 import { Btn, Field, Modal, SelectInput, TextArea, TextInput } from './Modal'
 import { Chip, Label } from './ui'
 import { useToast } from './Toast'
@@ -191,8 +191,16 @@ export function NoteRow({ n, areas, showBody = true }: { n: Note; areas?: Area[]
       {showBody && n.body && <p className="mt-1 line-clamp-2 text-xs text-muted">{n.body}</p>}
       <div className="mt-1.5 flex min-w-0 flex-wrap items-center gap-1.5">
         {area && <Chip tone="accent">{area}</Chip>}
+        {/* The note page shows area + project + tags + authored_by — a row
+            missing the project chip read as "not all tags shown" (owner
+            report). Same plain-Chip look as the note page, no Link inside
+            this row's own Link. */}
+        {n.project_name && <Chip tone="accent">{n.project_name}</Chip>}
         {n.tags.map(t => <Chip key={t}>{t}</Chip>)}
         {n.status === 'archived' && <Chip>archived</Chip>}
+        {/* owner authorship is the default and would be noise on every row —
+            only import/librarian authorship is worth a chip here. */}
+        {n.authored_by !== 'owner' && <Chip>{n.authored_by}</Chip>}
         {!!n.attachment_counts?.photo && <Chip>🖼 {n.attachment_counts.photo}</Chip>}
         {!!n.attachment_counts?.voice && <Chip>🎤 {n.attachment_counts.voice}</Chip>}
         {/* 2c: a memo with no text is waiting on the OWNER, not the librarian.
@@ -207,10 +215,90 @@ export function NoteRow({ n, areas, showBody = true }: { n: Note; areas?: Area[]
 
 export const tagsFrom = (s: string) => s.split(',').map(t => t.trim()).filter(Boolean)
 
+const TAG_SUGGEST_CAP = 24
+
+/** Tag input for the three filing surfaces (FileNoteModal, EditProposalModal
+ * file kind + split parts): free text stays first-class — comma/Enter mints
+ * a chip, so the owner can still coin a brand-new tag — with the registered
+ * taxonomy offered as tappable suggestion chips (counts included), filtered
+ * by what's typed. Tapping a suggestion toggles it in/out of the selection;
+ * the selection also renders as its own removable-chip row above the input,
+ * since that's the row the owner scans to see what's about to be saved.
+ * Value is string[] in and out — every save path this replaces already
+ * built/consumed a string[] via tagsFrom(), so callers just drop that split.
+ * NOT the system-wide tag combobox (explicitly deferred by the owner) — this
+ * stays local to these brain.tsx filing surfaces. */
+export function TagPicker({ value, onChange, placeholder = 'payments, 1:1' }: {
+  value: string[]; onChange: (v: string[]) => void; placeholder?: string
+}) {
+  const tags = useNoteTags()
+  const [draft, setDraft] = useState('')
+  const [showAll, setShowAll] = useState(false)
+  const add = (raw: string) => {
+    const t = raw.trim()
+    if (t && !value.includes(t)) onChange([...value, t])
+  }
+  const remove = (t: string) => onChange(value.filter(x => x !== t))
+  const toggle = (t: string) => value.includes(t) ? remove(t) : add(t)
+  const commitDraft = () => {
+    const parts = tagsFrom(draft)
+    if (!parts.length) return
+    const next = [...value]
+    for (const t of parts) if (!next.includes(t)) next.push(t)
+    onChange(next)
+    setDraft('')
+  }
+  const q = draft.trim().toLowerCase()
+  const all = tags.data?.tags ?? []
+  const matches = q ? all.filter(t => t.tag.toLowerCase().includes(q)) : all
+  const shown = showAll ? matches : matches.slice(0, TAG_SUGGEST_CAP)
+  return (
+    <div className="flex flex-col gap-2">
+      {value.length > 0 && (
+        <div className="flex flex-wrap gap-1.5" aria-label="Selected tags">
+          {value.map(t => (
+            <button key={t} type="button" onClick={() => remove(t)}
+              className="inline-flex items-center gap-1 rounded-full border border-accent/50 bg-accent/15 px-2.5 py-1 font-mono text-[11px] uppercase tracking-wider text-accent-2">
+              {t}<span aria-hidden="true">✕</span>
+            </button>
+          ))}
+        </div>
+      )}
+      <TextInput value={draft} placeholder={placeholder} aria-label="Add tags"
+        onChange={e => setDraft(e.target.value)}
+        onBlur={() => { if (draft.trim()) commitDraft() }}
+        onKeyDown={e => {
+          if (e.key === 'Enter' || e.key === ',') { e.preventDefault(); commitDraft() }
+          else if (e.key === 'Backspace' && !draft && value.length) remove(value[value.length - 1])
+        }} />
+      {matches.length > 0 && (
+        <div className="flex flex-wrap items-center gap-1.5">
+          {shown.map(t => (
+            <button key={t.tag} type="button" onClick={() => toggle(t.tag)}
+              aria-pressed={value.includes(t.tag)}
+              className={clsx('inline-flex items-center gap-1 rounded-full border px-2.5 py-1 font-mono text-[11px]',
+                value.includes(t.tag) ? 'border-accent/50 bg-accent/15 text-accent-2' : 'border-line text-muted hover:text-fg')}>
+              {t.tag} <span className="opacity-70">{t.count}</span>
+            </button>
+          ))}
+          {!showAll && matches.length > TAG_SUGGEST_CAP && (
+            <button type="button" onClick={() => setShowAll(true)} className="text-[11px] text-accent-2 hover:underline">
+              +{matches.length - TAG_SUGGEST_CAP} more…
+            </button>
+          )}
+        </div>
+      )}
+    </div>
+  )
+}
+
 /** Two-level area picker — the ONE place the area optgroup tree is rendered
- * (FileNoteModal and the proposal editor both consume it). */
+ * (FileNoteModal and the proposal editor both consume it). Callers pass
+ * `useNotesTree()`'s areas (not `useAreas()`'s) so `note_count` is populated
+ * and the option labels can say how full an area already is. */
 export function AreaSelect({ value, onChange, areas }: { value: string; onChange: (v: string) => void; areas: Area[] }) {
   const roots = areas.filter(a => !a.parent_id)
+  const cnt = (a: Area) => typeof a.note_count === 'number' ? ` (${a.note_count})` : ''
   return (
     <SelectInput value={value} onChange={e => onChange(e.target.value)} aria-label="Area">
       <option value="">— no area —</option>
@@ -218,11 +306,11 @@ export function AreaSelect({ value, onChange, areas }: { value: string; onChange
         const kids = areas.filter(a => a.parent_id === r.id)
         // A parentless area with no children is just an area — an optgroup
         // wrapping a single same-named option only doubled the name on screen.
-        if (kids.length === 0) return <option key={r.id} value={r.id}>{r.name}</option>
+        if (kids.length === 0) return <option key={r.id} value={r.id}>{r.name}{cnt(r)}</option>
         return (
-          <optgroup key={r.id} label={r.name}>
-            <option value={r.id}>{r.name}</option>
-            {kids.map(a => <option key={a.id} value={a.id}>{r.name} / {a.name}</option>)}
+          <optgroup key={r.id} label={`${r.name}${cnt(r)}`}>
+            <option value={r.id}>{r.name}{cnt(r)}</option>
+            {kids.map(a => <option key={a.id} value={a.id}>{r.name} / {a.name}{cnt(a)}</option>)}
           </optgroup>
         )
       })}
@@ -245,10 +333,10 @@ export function ProjectSelect({ value, onChange, projects }: { value: string; on
  * moves it to active. */
 export function FileNoteModal({ n, onClose }: { n: Note; onClose: () => void }) {
   const qc = useQueryClient(); const toast = useToast()
-  const areas = useAreas(); const projects = useProjects()
+  const tree = useNotesTree(); const projects = useProjects()
   const [f, setF] = useState({
     area_id: n.area_id ? String(n.area_id) : '', project_id: n.project_id ? String(n.project_id) : '',
-    type: n.type as string, tags: n.tags.join(', '),
+    type: n.type as string, tags: n.tags,
   })
   const [busy, setBusy] = useState(false)
   const home = !!f.area_id || !!f.project_id
@@ -264,7 +352,7 @@ export function FileNoteModal({ n, onClose }: { n: Note; onClose: () => void }) 
       await post(`/api/note/${n.id}/edit`, {
         area_id: f.area_id ? Number(f.area_id) : undefined, clear_area: !f.area_id,
         project_id: f.project_id ? Number(f.project_id) : undefined, clear_project: !f.project_id,
-        type: f.type, tags: tagsFrom(f.tags),
+        type: f.type, tags: f.tags,
         status: n.status === 'inbox' && home ? 'active' : undefined,
       })
       toast(n.status === 'inbox' && home ? 'Filed' : 'Saved'); qc.invalidateQueries(); onClose()
@@ -274,7 +362,7 @@ export function FileNoteModal({ n, onClose }: { n: Note; onClose: () => void }) 
     <Modal title={n.status === 'inbox' ? `File “${n.title}”` : 'Edit filing'} onClose={onClose}>
       <div className="flex flex-col gap-3">
         <Field label="Area">
-          <AreaSelect value={f.area_id} onChange={v => setF(x => ({ ...x, area_id: v }))} areas={areas.data?.areas ?? []} />
+          <AreaSelect value={f.area_id} onChange={v => setF(x => ({ ...x, area_id: v }))} areas={tree.data?.areas ?? []} />
         </Field>
         <Field label="Project" hint="Project-linked notes show on that project's page.">
           <ProjectSelect value={f.project_id} onChange={v => setF(x => ({ ...x, project_id: v }))} projects={projects.data?.projects ?? []} />
@@ -284,7 +372,7 @@ export function FileNoteModal({ n, onClose }: { n: Note; onClose: () => void }) 
             {['note', 'playbook', 'wiki'].map(t => <option key={t}>{t}</option>)}
           </SelectInput>
         </Field>
-        <Field label="Tags" hint="Comma-separated."><TextInput value={f.tags} onChange={e => setF(x => ({ ...x, tags: e.target.value }))} placeholder="payments, 1:1" /></Field>
+        <Field label="Tags"><TagPicker value={f.tags} onChange={v => setF(x => ({ ...x, tags: v }))} /></Field>
         {n.status === 'inbox'
           ? !home && <p className="text-xs text-muted">Pick an area or a project to file it; saving without one keeps it in the inbox.</p>
           : blocked && <p className="text-xs text-muted">A note needs an area or a project to be filed.</p>}
@@ -681,11 +769,11 @@ export const EDITABLE: Record<Proposal['kind'], boolean> = { split: true, file: 
 
 export function EditProposalModal({ p, onClose }: { p: Proposal; onClose: () => void }) {
   const qc = useQueryClient(); const toast = useToast()
-  const areas = useAreas(); const projects = useProjects(); const roster = useRoster()
+  const tree = useNotesTree(); const projects = useProjects(); const roster = useRoster()
   const pay = p.payload ?? {}
   const [file, setFile] = useState({
     area_id: pay.area_id ? String(pay.area_id) : '', project_id: pay.project_id ? String(pay.project_id) : '',
-    type: pay.type ?? '', tags: (pay.tags ?? []).join(', '), archive: !!pay.archive,
+    type: pay.type ?? '', tags: pay.tags ?? [] as string[], archive: !!pay.archive,
     // Area coinage the librarian declared. Editable here so the owner can
     // rename it or drop it for an existing area — without this field the
     // modal would silently discard the proposed area on every edit.
@@ -711,7 +799,7 @@ export function EditProposalModal({ p, onClose }: { p: Proposal; onClose: () => 
       }
       if (file.project_id) out.project_id = Number(file.project_id)
       if (file.type) out.type = file.type as ProposalPayload['type']
-      if (file.tags.trim()) out.tags = tagsFrom(file.tags)
+      if (file.tags.length) out.tags = file.tags
       if (file.archive) out.archive = true
       return out
     }
@@ -746,7 +834,7 @@ export function EditProposalModal({ p, onClose }: { p: Proposal; onClose: () => 
       <div className="flex flex-col gap-3">
         {p.kind === 'file' && (
           <>
-            <Field label="Area"><AreaSelect value={file.area_id} onChange={v => setFile(x => ({ ...x, area_id: v }))} areas={areas.data?.areas ?? []} /></Field>
+            <Field label="Area"><AreaSelect value={file.area_id} onChange={v => setFile(x => ({ ...x, area_id: v }))} areas={tree.data?.areas ?? []} /></Field>
             {(file.new_area || !file.area_id) && (
               <Field label="…or a new area"
                      hint={file.area_id ? 'Ignored — you picked an existing area above.'
@@ -756,7 +844,7 @@ export function EditProposalModal({ p, onClose }: { p: Proposal; onClose: () => 
               </Field>
             )}
             <Field label="Project"><ProjectSelect value={file.project_id} onChange={v => setFile(x => ({ ...x, project_id: v }))} projects={projectList} /></Field>
-            <Field label="Tags" hint="Comma-separated."><TextInput value={file.tags} onChange={e => setFile(x => ({ ...x, tags: e.target.value }))} /></Field>
+            <Field label="Tags"><TagPicker value={file.tags} onChange={v => setFile(x => ({ ...x, tags: v }))} /></Field>
             <label className="flex items-center gap-2 text-sm">
               <input type="checkbox" checked={file.archive} onChange={e => setFile(x => ({ ...x, archive: e.target.checked }))} />
               Send to Archive (junk/museum — stays searchable)
@@ -790,10 +878,10 @@ export function EditProposalModal({ p, onClose }: { p: Proposal; onClose: () => 
                   </div>
                   {part.body && <p className="mt-1 line-clamp-1 text-[11px] text-muted">{part.body}</p>}
                   <div className="mt-2 flex flex-col gap-2 sm:flex-row">
-                    <div className="min-w-0 flex-1"><AreaSelect value={part.area_id ? String(part.area_id) : ''} onChange={v => setPart(i, { area_id: v ? Number(v) : undefined })} areas={areas.data?.areas ?? []} /></div>
+                    <div className="min-w-0 flex-1"><AreaSelect value={part.area_id ? String(part.area_id) : ''} onChange={v => setPart(i, { area_id: v ? Number(v) : undefined })} areas={tree.data?.areas ?? []} /></div>
                     <div className="min-w-0 flex-1"><ProjectSelect value={part.project_id ? String(part.project_id) : ''} onChange={v => setPart(i, { project_id: v ? Number(v) : undefined })} projects={projectList} /></div>
-                    <div className="min-w-0 flex-1"><TextInput value={(part.tags ?? []).join(', ')} onChange={e => setPart(i, { tags: tagsFrom(e.target.value) })} placeholder="tags, comma-separated" aria-label={`Part ${i + 1} tags`} /></div>
                   </div>
+                  <div className="mt-2"><TagPicker value={part.tags ?? []} onChange={v => setPart(i, { tags: v })} placeholder="tags, comma-separated" /></div>
                 </div>
               ))}
             </div>
