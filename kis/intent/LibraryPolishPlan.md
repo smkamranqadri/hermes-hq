@@ -1,6 +1,6 @@
 # Library Polish — owner feedback backlog from the wave-1 review
 
-**Status:** PLANNED 2026-09-08 (Phase, slices A–G below), owner-interviewed the same day. Wave-1 review is FINISHED (owner-confirmed 2026-09-08). Execution: a Sonnet subagent builds each slice in its own worktree, an Opus subagent reviews (code, then live at 390×844), the orchestrator merges + deploys per slice; subagents never touch `kis/`. Decisions in this file are owner-answered — do not re-ask them.
+**Status:** SHIPPED 2026-09-08 — all seven slices live the same day (A `e46f992`, B `89fda2c`, C+D `b20d523`, E `bd11d90`, F `9345949`, G `b646fd9`; librarian task #212 → proposals #78–#82). Planned that morning (Phase, slices A–G below), owner-interviewed the same day. Wave-1 review is FINISHED (owner-confirmed 2026-09-08). Execution: a Sonnet subagent builds each slice in its own worktree, an Opus subagent reviews (code, then live at 390×844), the orchestrator merges + deploys per slice; subagents never touch `kis/`. Decisions in this file are owner-answered — do not re-ask them.
 **Context:** wave 1 (focus, 107 notes) is live; the owner is triaging librarian proposals. Waves 2–5 (~670 more notes) are HELD until this review + the area descriptions land.
 
 ## Bugs (diagnosed where marked ✓)
@@ -86,3 +86,9 @@ Common contract for every slice: builder works on branch `polish/<slice>` in a w
 
 ### Then
 Area-descriptions interview (four taxonomy questions above, now over 18 areas — four with zero active notes: Health, Home, Journal, Study) → wave 2 per `intent/ImportPlan.md`.
+
+## After shipping (2026-09-08)
+- Owner decisions during the run: Archive = archived-only in scope (A); **no origin tags on import** and `focus` stripped from the 97 live notes (the tag drowned the Related card); `authored_by` shown as provenance text, never a chip; no auto-reload after deploys (close/reopen the Home Screen app instead).
+- Card fix he reported as "not all tags": the card lacked the PROJECT chip — added in C.
+- Leftovers (minor, logged in State → Known debt): TagPicker shows zero-count taxonomy tags; sidebar not sticky; `BrightLane`/`brightlane` taxonomy near-duplicate; project select in the file modal counts only projects that hold notes.
+- Item 11 (system-wide combobox) remains deferred by the owner.
