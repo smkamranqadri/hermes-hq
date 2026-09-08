@@ -220,6 +220,7 @@ export type ProposalPayload = {
   parts?: SplitPart[]; archive_original?: boolean; area_id?: number; project_id?: number; tags?: string[]; type?: Note['type']
   archive?: boolean                                                     // file → Archive (junk/museum)
   new_tags?: string[]                                                   // declared tag coinage (registered at approval)
+  new_area?: { name: string; parent_id?: number }                       // declared AREA coinage (created at approval)
   other_note_id?: number; explanation?: string                          // contradiction
   title?: string; description?: string; assignee?: string              // new_task
   target_note_id?: number; body?: string; archive_source?: boolean     // append_entry
@@ -229,7 +230,7 @@ export type Proposal = {
   payload: ProposalPayload | null
   summary: string; classification: 'routine' | 'needs_attention'
   status: 'pending' | 'approved' | 'rejected' | 'superseded'
-  author: string; feedback: string | null; result: { note_ids?: number[]; filed?: boolean; archived?: boolean; disputed?: number[]; task_id?: number; entry_id?: number; target_note_id?: number; archived_source?: boolean } | null
+  author: string; feedback: string | null; result: { note_ids?: number[]; filed?: boolean; archived?: boolean; disputed?: number[]; task_id?: number; entry_id?: number; target_note_id?: number; archived_source?: boolean; new_area_id?: number; new_area_name?: string } | null
   created_at: number; decided_at: number | null; note_title: string | null; note_status: string | null
 }
 export type ProposalCounts = { pending: number; routine: number; needs_attention: number }

@@ -850,6 +850,10 @@ def cmd_note_propose_file(args):
         payload["archive"] = True
     if args.new_tags:
         payload["new_tags"] = [t.strip() for t in args.new_tags.split(",") if t.strip()]
+    if args.new_area:
+        payload["new_area"] = {"name": args.new_area.strip()}
+        if args.new_area_parent is not None:
+            payload["new_area"]["parent_id"] = args.new_area_parent
     pid = store.create_proposal(
         "file", args.id, payload, summary=args.summary,
         classification="routine" if args.routine else "needs_attention")
@@ -1405,6 +1409,13 @@ def build_parser():
                     help="comma-separated coinage declaration: tags used here "
                          "that are NOT yet in the taxonomy (owner approval "
                          "registers them)")
+    pf.add_argument("--new-area", dest="new_area", default=None,
+                    help="propose an area that does not exist yet, by NAME "
+                         "(created only when the owner approves). Use instead "
+                         "of --area-id, never with it. Say why in --summary.")
+    pf.add_argument("--new-area-parent", dest="new_area_parent", type=int, default=None,
+                    help="make the new area a sub-area of this existing area id "
+                         "(areas are two-level)")
     pf.set_defaults(fn=cmd_note_propose_file)
     pc = note_sub.add_parser("propose-contradiction",
                              help="two notes disagree: propose flagging BOTH "

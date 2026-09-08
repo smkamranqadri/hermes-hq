@@ -94,10 +94,18 @@ export function ProposalPayloadView({ p, compact = false }: { p: Proposal; compa
   const newTags = (p.payload?.new_tags ?? []).map(t => (
     <span key={t} className={pillCls('working')}>new tag: {t}</span>
   ))
+  // Area coinage is a bigger commitment than a tag — approving creates a new
+  // top-level place in the Library — so it renders as loudly as the tags do.
+  const na = p.payload?.new_area
+  const newArea = na ? (
+    <span className={pillCls('working')}>
+      new area: {areaLabel(areas.data?.areas, na.parent_id ?? null) ? `${areaLabel(areas.data?.areas, na.parent_id ?? null)} / ` : ''}{na.name}
+    </span>
+  ) : null
   // A filed note always leaves the inbox, so file gets NO inbox-fallback
   // chip; an unfiled split part genuinely lands back in the inbox, so split
   // parts DO — that chip is the owner's pre-approval warning.
-  if (p.kind === 'file' && p.payload) return <div className="mt-2 flex flex-wrap items-center gap-1.5">{chips(p.payload)}{newTags}</div>
+  if (p.kind === 'file' && p.payload) return <div className="mt-2 flex flex-wrap items-center gap-1.5">{chips(p.payload)}{newArea}{newTags}</div>
   if (p.kind === 'split') return (
     <ol className="mt-2 flex flex-col gap-1.5">
       {(p.payload?.parts ?? []).map((part: SplitPart, i: number) => (
@@ -657,6 +665,10 @@ export function EditProposalModal({ p, onClose }: { p: Proposal; onClose: () => 
   const [file, setFile] = useState({
     area_id: pay.area_id ? String(pay.area_id) : '', project_id: pay.project_id ? String(pay.project_id) : '',
     type: pay.type ?? '', tags: (pay.tags ?? []).join(', '), archive: !!pay.archive,
+    // Area coinage the librarian declared. Editable here so the owner can
+    // rename it or drop it for an existing area — without this field the
+    // modal would silently discard the proposed area on every edit.
+    new_area: pay.new_area?.name ?? '', new_area_parent: pay.new_area?.parent_id,
   })
   const [task, setTask] = useState({
     title: pay.title ?? '', description: pay.description ?? '',
@@ -670,6 +682,12 @@ export function EditProposalModal({ p, onClose }: { p: Proposal; onClose: () => 
     if (p.kind === 'file') {
       const out: ProposalPayload = {}
       if (file.area_id) out.area_id = Number(file.area_id)
+      // Exclusive by design (the store rejects both): picking a real area is
+      // the owner saying "no, put it here" — that wins over the coinage.
+      else if (file.new_area.trim()) {
+        out.new_area = { name: file.new_area.trim() }
+        if (file.new_area_parent != null) out.new_area.parent_id = file.new_area_parent
+      }
       if (file.project_id) out.project_id = Number(file.project_id)
       if (file.type) out.type = file.type as ProposalPayload['type']
       if (file.tags.trim()) out.tags = tagsFrom(file.tags)
@@ -699,6 +717,14 @@ export function EditProposalModal({ p, onClose }: { p: Proposal; onClose: () => 
         {p.kind === 'file' && (
           <>
             <Field label="Area"><AreaSelect value={file.area_id} onChange={v => setFile(x => ({ ...x, area_id: v }))} areas={areas.data?.areas ?? []} /></Field>
+            {(file.new_area || !file.area_id) && (
+              <Field label="…or a new area"
+                     hint={file.area_id ? 'Ignored — you picked an existing area above.'
+                                        : 'Approving CREATES this area. Leave empty to file with no area.'}>
+                <TextInput value={file.new_area} placeholder="e.g. DIY"
+                           onChange={e => setFile(x => ({ ...x, new_area: e.target.value }))} />
+              </Field>
+            )}
             <Field label="Project"><ProjectSelect value={file.project_id} onChange={v => setFile(x => ({ ...x, project_id: v }))} projects={projectList} /></Field>
             <Field label="Tags" hint="Comma-separated."><TextInput value={file.tags} onChange={e => setFile(x => ({ ...x, tags: e.target.value }))} /></Field>
             <label className="flex items-center gap-2 text-sm">

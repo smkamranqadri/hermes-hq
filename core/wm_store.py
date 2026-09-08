@@ -5373,6 +5373,57 @@ def _validate_new_tags(payload, used_tags):
     return frozenset(out)
 
 
+def _validate_new_area(conn, payload):
+    """Validate an agent's declared AREA coinage — the same shape as new_tags.
+
+    Rules.md: the owner is the taxonomy authority. An agent may say "this
+    belongs in an area that does not exist yet" and name it, but the area is
+    created only when the owner approves. Without this the librarian could only
+    file into the 11 seeded areas or explain in prose that it was stuck, which
+    is exactly what happened to note #43 after the owner asked for a DIY area.
+
+    Returns None or {"name": str, "parent_id": int|None}.
+    """
+    na = payload.get("new_area")
+    if na is None:
+        return None
+    if isinstance(na, str):
+        na = {"name": na}
+    if not isinstance(na, dict):
+        raise ValueError("new_area must be a name or {name, parent_id}")
+    unknown = set(na) - {"name", "parent_id"}
+    if unknown:
+        raise ValueError("new_area has unknown fields: %s" % ", ".join(sorted(unknown)))
+    name = na.get("name")
+    if not isinstance(name, str) or not name.strip():
+        raise ValueError("new_area needs a non-empty name")
+    name = name.strip()
+    if len(name) > 80:
+        raise ValueError("new area name too long (max 80): %r" % name[:90])
+    if payload.get("area_id") is not None:
+        raise ValueError("new_area and area_id are exclusive — coin a new area OR "
+                         "file into an existing one, not both")
+    parent_id = na.get("parent_id")
+    if parent_id is not None:
+        if not isinstance(parent_id, int):
+            raise ValueError("new_area parent_id must be an int")
+        parent = conn.execute("SELECT id, parent_id FROM areas WHERE id=?",
+                              (parent_id,)).fetchone()
+        if parent is None:
+            raise ValueError("new_area: no such parent area: %r" % parent_id)
+        if parent["parent_id"] is not None:
+            raise ValueError("areas are two-level: cannot nest under a sub-area")
+    # An area that already exists at the same level is not coinage — say so
+    # loudly rather than silently creating a second "Work".
+    dupe = conn.execute(
+        "SELECT id FROM areas WHERE LOWER(name)=LOWER(?) AND "
+        "COALESCE(parent_id,0)=COALESCE(?,0)", (name, parent_id)).fetchone()
+    if dupe is not None:
+        raise ValueError("area %r already exists (#%d) — file into it with "
+                         "area_id instead of coining it" % (name, dupe["id"]))
+    return {"name": name, "parent_id": parent_id}
+
+
 def _validate_proposal_payload(conn, kind, payload, note_id=None):
     if kind == "file":
         # `archive` (2b-i) marks a junk/museum capture: filing straight to
@@ -5380,8 +5431,9 @@ def _validate_proposal_payload(conn, kind, payload, note_id=None):
         archive = payload.get("archive")
         used = {t.strip() for t in (payload.get("tags") or []) if isinstance(t, str)}
         new_tags = _validate_new_tags(payload, used)
+        new_area = _validate_new_area(conn, payload)
         _validate_filing(conn, {k: v for k, v in payload.items()
-                                if k not in ("archive", "new_tags")},
+                                if k not in ("archive", "new_tags", "new_area")},
                          "file payload", new_tags=new_tags,
                          known_tags=_taxonomy_tags(conn))
         if archive is not None and not isinstance(archive, bool):
@@ -5389,10 +5441,14 @@ def _validate_proposal_payload(conn, kind, payload, note_id=None):
         if payload.get("title") is not None or payload.get("body") is not None:
             raise ValueError("a file proposal moves a note; it cannot rewrite "
                              "title/body (that is a split part's job)")
-        if not archive and not any(payload.get(k) is not None
-                                   for k in ("area_id", "project_id", "tags", "type")):
+        if archive and new_area is not None:
+            raise ValueError("archive and new_area are exclusive — Archive is "
+                             "disposal, not a place to file into")
+        if not archive and new_area is None and not any(
+                payload.get(k) is not None
+                for k in ("area_id", "project_id", "tags", "type")):
             raise ValueError("file payload needs at least one of area_id, "
-                             "project_id, tags, type (or archive: true)")
+                             "project_id, tags, type, new_area (or archive: true)")
     elif kind == "split":
         parts = payload.get("parts")
         if not isinstance(parts, list) or not parts:
@@ -5673,12 +5729,26 @@ def approve_proposal(pid, payload_override=None, db_path=None):
     if p["kind"] == "file":
         fields = {k: payload[k] for k in ("area_id", "project_id", "tags")
                   if payload.get(k) is not None}
+        # Declared area coinage becomes real HERE and nowhere else — the owner
+        # approving IS the act of creating it, exactly as it works for tags.
+        if payload.get("new_area") is not None:
+            # Already validated above against current state; create_area
+            # re-checks the parent and the unique name for itself.
+            na = payload["new_area"]
+            na = {"name": na} if isinstance(na, str) else na
+            fields["area_id"] = create_area(na["name"].strip(),
+                                            parent_id=na.get("parent_id"),
+                                            db_path=db_path)
+            made_area = {"new_area_id": fields["area_id"],
+                         "new_area_name": na["name"].strip()}
+        else:
+            made_area = {}
         archived = bool(payload.get("archive"))
         update_note(p["note_id"], edited_by=actor,
                     note_type=payload.get("type"),
                     status="archived" if archived else "active",
                     db_path=db_path, **fields)
-        result = {"filed": True, "archived": archived}
+        result = dict({"filed": True, "archived": archived}, **made_area)
     elif p["kind"] == "contradiction":
         other = payload["other_note_id"]
         for a, b in ((p["note_id"], other), (other, p["note_id"])):

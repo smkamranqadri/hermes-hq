@@ -231,3 +231,97 @@ def test_owner_first_survives_an_older_owner_capture(env):
         store.create_note("imported %d" % i, body="x", authored_by="import", db_path=db)
     rows = store.list_notes(status="inbox", owner_first=True, db_path=db)
     assert rows[0]["id"] == mine
+
+
+# ---- area coinage: the owner is the taxonomy authority for AREAS too ----
+
+def test_librarian_can_propose_an_area_that_does_not_exist(env):
+    """Note #43 in the real library: the owner rejected a filing with "This is
+    related to DIY area, shopping tag". The librarian could coin the TAG but
+    had no way to coin the AREA, so it filed with no area and explained the
+    problem in prose. rules.md said to apply the tag shape to areas; this is it.
+    """
+    c, store, db = env
+    nid = store.create_note("desk pet", body="ESP32 + OLED shopping list", db_path=db)
+    before = {a["name"] for a in store.list_areas(db_path=db)}
+    assert "DIY" not in before
+
+    pid = store.create_proposal("file", nid,
+                                {"new_area": {"name": "DIY"}, "tags": ["shopping"],
+                                 "new_tags": ["shopping"]},
+                                summary="needs a DIY area", db_path=db)
+    # proposing creates NOTHING — the area appears only at approval
+    assert {a["name"] for a in store.list_areas(db_path=db)} == before
+
+    h = login(c)
+    r = c.post("/api/proposal/%d/approve" % pid, headers=h)
+    assert r.status_code == 200, r.text
+    areas = {a["name"]: a for a in store.list_areas(db_path=db)}
+    assert "DIY" in areas
+    note = store.get_note(nid, db_path=db)
+    assert note["area_id"] == areas["DIY"]["id"]     # and the note landed in it
+    assert note["status"] == "active"
+    assert "shopping" in store.taxonomy_tags(db_path=db)
+    res = store.get_proposal(pid, db_path=db)["result"]
+    assert res["new_area_name"] == "DIY" and res["new_area_id"] == areas["DIY"]["id"]
+
+
+def test_area_coinage_can_nest_under_an_existing_parent(env):
+    c, store, db = env
+    nid = store.create_note("client X", body="notes", db_path=db)
+    work = next(a["id"] for a in store.list_areas(db_path=db) if a["name"] == "Work")
+    pid = store.create_proposal("file", nid,
+                                {"new_area": {"name": "Clients", "parent_id": work}},
+                                summary="sub-area of Work", db_path=db)
+    h = login(c)
+    assert c.post("/api/proposal/%d/approve" % pid, headers=h).status_code == 200
+    made = next(a for a in store.list_areas(db_path=db) if a["name"] == "Clients")
+    assert made["parent_id"] == work
+
+
+def test_area_coinage_validation(env):
+    c, store, db = env
+    nid = store.create_note("n", body="b", db_path=db)
+    work = next(a["id"] for a in store.list_areas(db_path=db) if a["name"] == "Work")
+    bad = [
+        ({"new_area": {"name": "  "}}, "non-empty name"),
+        ({"new_area": {"name": "X", "nope": 1}}, "unknown fields"),
+        ({"new_area": {"name": "X", "parent_id": 9999}}, "no such parent"),
+        # already exists: file into it instead of making a second "Work"
+        ({"new_area": {"name": "work"}}, "already exists"),
+        # exclusive with area_id — one or the other, never both
+        ({"new_area": {"name": "X"}, "area_id": work}, "exclusive"),
+        # Archive is disposal, not a place
+        ({"new_area": {"name": "X"}, "archive": True}, "exclusive"),
+    ]
+    for payload, msg in bad:
+        with pytest.raises(ValueError, match=msg):
+            store.create_proposal("file", nid, payload, db_path=db)
+
+
+def test_new_area_alone_satisfies_the_file_payload(env):
+    """A filing whose ONLY instruction is "put it in a new area" must be legal —
+    otherwise the librarian has to invent a tag to get the proposal accepted."""
+    c, store, db = env
+    nid = store.create_note("n", body="b", db_path=db)
+    pid = store.create_proposal("file", nid, {"new_area": "Hobby"}, db_path=db)
+    assert pid > 0                                    # bare string form accepted
+    h = login(c)
+    assert c.post("/api/proposal/%d/approve" % pid, headers=h).status_code == 200
+    assert "Hobby" in {a["name"] for a in store.list_areas(db_path=db)}
+
+
+def test_a_failed_area_approval_creates_no_area(env):
+    """The owner edits the coinage to a name that already exists: the approval
+    must fail cleanly, leaving no half-made area behind."""
+    c, store, db = env
+    nid = store.create_note("n", body="b", db_path=db)
+    pid = store.create_proposal("file", nid, {"new_area": {"name": "Gardening"}}, db_path=db)
+    before = len(store.list_areas(db_path=db))
+    h = login(c)
+    r = c.post("/api/proposal/%d/approve" % pid, headers=h,
+               json={"payload": {"new_area": {"name": "Work"}}})
+    assert r.status_code == 409
+    assert len(store.list_areas(db_path=db)) == before
+    assert store.get_proposal(pid, db_path=db)["status"] == "pending"
+    assert store.get_proposal(pid, db_path=db)["payload"]["new_area"]["name"] == "Gardening"
