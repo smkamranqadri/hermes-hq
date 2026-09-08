@@ -125,6 +125,20 @@ def notes_tree():
     return store.notes_tree(db_path=_db())
 
 
+@router.get("/notes/facets")
+def notes_facets(status: str | None = None, area_id: int | None = None,
+                 project_id: int | None = None, type: str | None = None,
+                 tag: str | None = None, q: str | None = None,
+                 exclude_archived: bool = False):
+    """Facet counts for the Library's filter selects — same filters as
+    GET /api/notes, each dimension counted with itself left out of scope so
+    switching within a dimension (a new tag, a new project) never narrows the
+    list the owner is choosing from."""
+    return _engine(store.note_facets, status=status, area_id=area_id,
+                  project_id=project_id, note_type=type, tag=tag, q=q,
+                  exclude_archived=exclude_archived)
+
+
 @router.get("/note/{note_id}")
 def note(note_id: int):
     n = store.get_note(note_id, db_path=_db())

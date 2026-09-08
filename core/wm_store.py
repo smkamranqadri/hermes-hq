@@ -5240,7 +5240,7 @@ def list_notes(status=None, area_id=None, project_id=None, note_type=None,
         # already in the librarian's hands so the owner isn't double-filing.
         # 2c: awaiting_transcript says a memo is waiting on the owner's words.
         _enrich_note_rows(conn, rows)
-        return rows
+        return _with_project_names(conn, rows)
     finally:
         conn.close()
 
@@ -5386,9 +5386,10 @@ def notes_for_task(task_id, db_path=None):
     """Notes linked to a task (the task-detail back-link)."""
     conn = _connect(db_path)
     try:
-        return [_decode_note(r) for r in conn.execute(
+        rows = [_decode_note(r) for r in conn.execute(
             "SELECT n.* FROM notes n JOIN note_links l ON l.note_id = n.id "
             "WHERE l.kind='task' AND l.target_id=? ORDER BY n.id", (task_id,)).fetchall()]
+        return _with_project_names(conn, rows)
     finally:
         conn.close()
 
@@ -5406,6 +5407,23 @@ def _with_entry_counts(conn, rows):
         "SELECT note_id, COUNT(*) AS n FROM note_entries GROUP BY note_id")}
     for r in rows:
         r["entry_count"] = counts.get(r["id"], 0)
+    return rows
+
+
+def _with_project_names(conn, rows):
+    """Attach `project_name` to list rows in ONE lookup — every list surface
+    (Library, Home recents, a project tab, search) then has the same chip a
+    note's own page shows (area + project + tags), instead of a project-
+    linked note reading as if a tag went missing. A batch dict lookup rather
+    than a JOIN on the main query: list_notes/search_notes build their SQL
+    from unqualified column names throughout (status, area_id, tags, id, …),
+    and `projects` shares several of those names (id, name) — joining would
+    mean re-qualifying every reference for one field."""
+    if not rows:
+        return rows
+    names = {r["id"]: r["name"] for r in conn.execute("SELECT id, name FROM projects")}
+    for r in rows:
+        r["project_name"] = names.get(r["project_id"]) if r["project_id"] else None
     return rows
 
 
@@ -5441,6 +5459,13 @@ def _scope_sql(status=None, area_id=None, project_id=None, note_type=None,
     return sql, params
 
 
+def _fts_match_query(q):
+    """Quote each term for an FTS5 MATCH query — user input must never hit
+    FTS query syntax. Shared by search_notes and note_facets's q-scoping so
+    the two can never build a different match string for the same q."""
+    return " ".join('"%s"' % t.replace('"', '""') for t in q.split() if t)
+
+
 def search_notes(q, limit=50, status=None, area_id=None, project_id=None,
                  note_type=None, tag=None, exclude_archived=False, db_path=None):
     """Note search: FTS5 (bm25-ranked) with a LIKE fallback.
@@ -5459,15 +5484,13 @@ def search_notes(q, limit=50, status=None, area_id=None, project_id=None,
     try:
         if NOTES_FTS:
             try:
-                # quote each term: user input must never hit FTS query syntax
-                match = " ".join('"%s"' % t.replace('"', '""')
-                                 for t in q.split() if t)
+                match = _fts_match_query(q)
                 rows = conn.execute(
                     "SELECT n.*, bm25(notes_fts) AS rank FROM notes_fts f "
                     "JOIN notes n ON n.id = f.rowid WHERE notes_fts MATCH ?"
                     + scope + " ORDER BY rank LIMIT ?",
                     [match] + scope_params + [int(limit)]).fetchall()
-                return _with_entry_counts(conn, [_decode_note(r) for r in rows])
+                return _with_project_names(conn, _with_entry_counts(conn, [_decode_note(r) for r in rows]))
             except sqlite3.OperationalError:
                 pass  # malformed query despite quoting — fall back to LIKE
         like = "%" + q + "%"
@@ -5476,7 +5499,7 @@ def search_notes(q, limit=50, status=None, area_id=None, project_id=None,
             "OR n.tags LIKE ?)" + scope +
             " ORDER BY COALESCE(n.updated_at, n.created_at) DESC LIMIT ?",
             [like, like, like] + scope_params + [int(limit)]).fetchall()
-        return _with_entry_counts(conn, [_decode_note(r) for r in rows])
+        return _with_project_names(conn, _with_entry_counts(conn, [_decode_note(r) for r in rows]))
     finally:
         conn.close()
 
@@ -5549,6 +5572,118 @@ def list_note_tags(db_path=None):
                 continue
         return sorted(({"tag": t, "count": n} for t, n in counts.items()),
                       key=lambda x: (-x["count"], x["tag"]))
+    finally:
+        conn.close()
+
+
+def _q_scope_sql(conn, q):
+    """The `q` narrowing fragment note_facets applies — built to agree with
+    search_notes about what q matches: FTS5 MATCH (via the same quoted match
+    string `_fts_match_query` builds for search_notes) when available, with
+    the identical LIKE fallback search_notes itself falls back to on a
+    malformed query or when FTS is off. A probe query decides which path to
+    take ONCE, so all of note_facets' several queries agree with each other
+    too. Returns (sql, params); sql is "" when q is blank."""
+    if not q:
+        return "", []
+    if NOTES_FTS:
+        try:
+            match = _fts_match_query(q)
+            conn.execute("SELECT 1 FROM notes_fts WHERE notes_fts MATCH ? LIMIT 1", (match,)).fetchone()
+            return (" AND n.id IN (SELECT rowid FROM notes_fts WHERE notes_fts MATCH ?)",
+                    [match])
+        except sqlite3.OperationalError:
+            pass  # malformed query despite quoting — fall back to LIKE, same as search_notes
+    like = "%" + q + "%"
+    return (" AND (n.title LIKE ? OR n.body LIKE ? OR n.tags LIKE ?)",
+            [like, like, like])
+
+
+def note_facets(status=None, area_id=None, project_id=None, note_type=None,
+                tag=None, q=None, exclude_archived=False, db_path=None):
+    """Facet counts for the Library's filter selects.
+
+    Same filters as list_notes/search_notes, but each facet is counted with
+    its OWN dimension left OUT of the scope (tags facet ignores `tag`,
+    projects facet ignores `project_id`, areas facet ignores `area_id`) — so
+    picking a new value within a dimension never narrows the very list the
+    owner is choosing from down to just what is already picked. Reuses
+    `_scope_sql` for every filter it shares with list_notes/search_notes
+    rather than forking its SQL. `q` narrows facets too, scored the SAME way
+    search_notes scores a hit (FTS5 MATCH via the shared `_fts_match_query`
+    builder, LIKE only as the fallback search_notes itself falls back to) —
+    facets used to score q with LIKE unconditionally while search_notes
+    scored with FTS, so mid-typing the refine row's counts and the note list
+    could disagree about how many notes q matched. Zero-count tags/projects/
+    areas are omitted (an INNER join against notes, so an area/project with
+    no note in scope just doesn't appear). The areas facet rolls a child
+    area's notes into its PARENT's count too, matching `_scope_sql`'s own
+    area_id rollup (picking a parent area already includes its children).
+
+    `active`/`archived` are the archive-dimension counts: area/project/tag/
+    type/q stay applied, but `status`/`exclude_archived` themselves are left
+    out (the whole point is telling the owner how many notes the OTHER side
+    of that toggle holds). Without this the refine row's "Archive (N)" label
+    had nowhere to get a scoped N from and fell back to the GLOBAL archived
+    count from notes_tree, which read wrong the moment an area was picked."""
+    q = (q or "").strip()
+
+    def scope_for(omit):
+        return _scope_sql(
+            status=status,
+            area_id=None if omit == "area" else area_id,
+            project_id=None if omit == "project" else project_id,
+            note_type=note_type,
+            tag=None if omit == "tag" else tag,
+            exclude_archived=exclude_archived,
+        )
+
+    conn = _connect(db_path)
+    try:
+        q_sql, q_params = _q_scope_sql(conn, q)
+
+        # tags: json_each over the scoped rows. json_valid is filtered BEFORE
+        # the json_each join (in the inner SELECT) — the same corrupt-JSON
+        # guard list_notes/search_notes apply, but here it has to happen
+        # before the table-valued join, or one bad row fails the whole facet.
+        scope, params = scope_for("tag")
+        rows = conn.execute(
+            "SELECT je.value AS tag, COUNT(*) AS n FROM "
+            "(SELECT n.tags FROM notes n WHERE json_valid(n.tags)" + scope + q_sql + ") AS n, "
+            "json_each(n.tags) je GROUP BY je.value ORDER BY n DESC, je.value",
+            params + q_params).fetchall()
+        tags = [{"tag": r["tag"], "count": r["n"]} for r in rows]
+
+        scope, params = scope_for("project")
+        rows = conn.execute(
+            "SELECT p.id, p.name, COUNT(n.id) AS n FROM projects p "
+            "JOIN notes n ON n.project_id = p.id WHERE p.archived=0" + scope + q_sql +
+            " GROUP BY p.id ORDER BY n DESC, p.name",
+            params + q_params).fetchall()
+        projects = [{"id": r["id"], "name": r["name"], "count": r["n"]} for r in rows]
+
+        scope, params = scope_for("area")
+        rows = conn.execute(
+            "SELECT a.id, a.name, COUNT(n.id) AS n FROM areas a "
+            "JOIN notes n ON (n.area_id = a.id OR n.area_id IN "
+            "(SELECT id FROM areas c WHERE c.parent_id = a.id)) "
+            "WHERE a.archived=0" + scope + q_sql +
+            " GROUP BY a.id ORDER BY n DESC, a.name",
+            params + q_params).fetchall()
+        areas = [{"id": r["id"], "name": r["name"], "count": r["n"]} for r in rows]
+
+        arch_scope, arch_params = _scope_sql(
+            status=None, area_id=area_id, project_id=project_id,
+            note_type=note_type, tag=tag, exclude_archived=False)
+        row = conn.execute(
+            "SELECT "
+            "SUM(CASE WHEN n.status <> 'archived' THEN 1 ELSE 0 END) AS active_n, "
+            "SUM(CASE WHEN n.status = 'archived' THEN 1 ELSE 0 END) AS archived_n "
+            "FROM notes n WHERE 1=1" + arch_scope + q_sql,
+            arch_params + q_params).fetchone()
+
+        return {"tags": tags, "projects": projects, "areas": areas,
+                "active": row["active_n"] or 0, "archived": row["archived_n"] or 0}
     finally:
         conn.close()
 

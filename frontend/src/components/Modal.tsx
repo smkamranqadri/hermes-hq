@@ -1,4 +1,5 @@
 import { forwardRef, useEffect, useId, useRef, type ReactNode } from 'react'
+import clsx from 'clsx'
 
 const modalStack: object[] = []
 
@@ -53,7 +54,10 @@ export function ConfirmModal({ title, message, onClose, onConfirm, confirmLabel 
 export function Field({ label, children, hint }: { label: string; children: ReactNode; hint?: string }) {
   return <label className="block"><span className="font-mono text-[10px] uppercase tracking-widest text-muted">{label}</span><div className="mt-1">{children}</div>{hint && <span className="text-[11px] text-muted">{hint}</span>}</label>
 }
-export const TextInput = (p: React.InputHTMLAttributes<HTMLInputElement>) => <input {...p} className="w-full rounded-lg border border-line bg-inset px-3 py-2 text-sm outline-none focus:border-accent" />
+// className merges (a caller override — e.g. TagPicker forcing text-base to
+// dodge the iOS zoom-on-focus threshold — used to be silently dropped: {...p}
+// spread its className first, then the hardcoded one clobbered it).
+export const TextInput = ({ className, ...p }: React.InputHTMLAttributes<HTMLInputElement>) => <input {...p} className={clsx('w-full rounded-lg border border-line bg-inset px-3 py-2 text-sm outline-none focus:border-accent', className)} />
 export const TextArea = (p: React.ComponentProps<'textarea'>) => <textarea {...p} className="w-full rounded-lg border border-line bg-inset px-3 py-2 text-sm outline-none focus:border-accent" rows={p.rows ?? 3} />
 export const SelectInput = (p: React.SelectHTMLAttributes<HTMLSelectElement>) => <select {...p} className="hq-select w-full appearance-none rounded-lg border border-line bg-inset py-2 pl-3 pr-8 text-sm outline-none focus:border-accent" />
 export const Btn = forwardRef<HTMLButtonElement, React.ButtonHTMLAttributes<HTMLButtonElement> & { kind?: 'primary' | 'ghost' | 'warn'; busy?: boolean }>(function Btn({ kind = 'primary', busy, children, ...p }, ref) {

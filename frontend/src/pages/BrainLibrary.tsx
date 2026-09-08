@@ -3,7 +3,7 @@
 import { useEffect, useState } from 'react'
 import { useSearchParams } from 'react-router-dom'
 import clsx from 'clsx'
-import { useAreas, useNoteTags, useNotes, useNotesTree } from '../api'
+import { useAreas, useNoteFacets, useNotes, useNotesTree } from '../api'
 import { PageHeader } from '../components/GlassCard'
 import { BrainSubNav, NoteRow, useBrainCounts } from '../components/brain'
 import { Empty, Input, Label, Loading, Select } from '../components/ui'
@@ -32,7 +32,6 @@ export function BrainLibrary() {
   const { inbox, review } = useBrainCounts()
   const tree = useNotesTree()
   const areas = useAreas()
-  const tags = useNoteTags()
   // `arch` is the ONLY door into the museum — `view=archived` used to be a
   // second one, reading as a synonym of the Active/Archive refine below.
   // Old links (or anything still emitting view=archived) get normalised to
@@ -93,6 +92,43 @@ export function BrainLibrary() {
   // the toggle would be a dead control there. Stays live while searching.
   const showArchRefine = view !== 'inbox'
   const notes = useNotes(filters)
+  // LibraryPolishPlan Slice C: the refine selects (tag/project/area) list
+  // only what's actually present in the CURRENT selection, with counts, so
+  // the owner never picks a tag that empties the list. `filters` is exactly
+  // the same scope the note list itself uses — the facets endpoint narrows
+  // each dimension by every filter EXCEPT its own, so switching a tag/
+  // project never narrows the very list it's choosing from. `limit` is
+  // list-only (facets has no notion of it) — stripped so it isn't sent and
+  // doesn't churn the query key.
+  const { limit: _facetsLimit, ...facetFilters } = filters
+  const facets = useNoteFacets(facetFilters)
+  // A facet selected via the URL might not appear in the current facet
+  // result (e.g. the owner narrowed further and its count dropped to 0) —
+  // keep it in the options list at count 0 so Clear stays reachable.
+  const tagOptions = (() => {
+    const base = facets.data?.tags ?? []
+    return tagSel && !base.some(t => t.tag === tagSel) ? [...base, { tag: tagSel, count: 0 }] : base
+  })()
+  const projOptions = (() => {
+    const base = facets.data?.projects ?? []
+    if (!projSel || base.some(p => String(p.id) === projSel)) return base
+    const name = tree.data?.projects.find(p => String(p.id) === projSel)?.name ?? 'project'
+    return [...base, { id: Number(projSel), name, count: 0 }]
+  })()
+  // Archive gets a scoped count once facets load; while loading it falls
+  // back to the library-WIDE archived count (the old behaviour) rather than
+  // showing nothing. Active has no such global fallback (the tree never
+  // tracked it), so it just omits the count until facets land.
+  const activeLabel = 'Active' + (facets.data ? ` (${facets.data.active})` : '')
+  const archiveLabel = 'Archive' + (facets.data ? ` (${facets.data.archived})`
+    : typeof tree.data?.counts?.archived === 'number' ? ` (${tree.data.counts.archived})` : '')
+  // A native <select> sizes its CLOSED box to its WIDEST option text, not
+  // just the selected one — a single long tag name or project name was
+  // enough to balloon one select past the 390px viewport on its own,
+  // wrapping the other two onto their own rows below it. w-auto/min-w-0
+  // alone don't cap that; max-w + truncation do (the full text is still
+  // there in the opened dropdown, only the closed box's LABEL truncates).
+  const REFINE_SELECT_CLS = 'w-auto min-w-0 max-w-[42vw] flex-none text-sm overflow-hidden text-ellipsis whitespace-nowrap'
   const roots = (tree.data?.areas ?? []).filter(a => !a.parent_id)
   const children = (id: number) => (tree.data?.areas ?? []).filter(a => a.parent_id === id)
   const projName = projSel ? tree.data?.projects.find(p => String(p.id) === projSel)?.name : undefined
@@ -132,16 +168,23 @@ export function BrainLibrary() {
         </div>} />
 
       {/* Mobile: selects instead of the tree */}
-      <div className="mb-4 flex flex-wrap gap-2 lg:hidden">
-        <Select value={areaSel ?? ''} onChange={e => pick('area', e.target.value || null)}>
+      <div className="mb-4 flex flex-wrap gap-1.5 lg:hidden">
+        <Select value={areaSel ?? ''} onChange={e => pick('area', e.target.value || null)} className={REFINE_SELECT_CLS}>
           <option value="">All areas</option>
-          {(areas.data?.areas ?? []).map(a => <option key={a.id} value={a.id}>{a.parent_id ? '· ' : ''}{a.name}</option>)}
+          {(areas.data?.areas ?? []).map(a => {
+            // Navigation, not a filter — every area stays listed even at 0.
+            // The count (from the SAME scoped facets the refine row uses)
+            // is appended where available so the owner sees what a jump
+            // would land on before tapping it.
+            const fc = facets.data?.areas.find(f => f.id === a.id)?.count
+            return <option key={a.id} value={a.id}>{a.parent_id ? '· ' : ''}{a.name}{typeof fc === 'number' ? ` (${fc})` : ''}</option>
+          })}
         </Select>
-        <Select value={typeSel ?? ''} onChange={e => pick('type', e.target.value || null)}>
+        <Select value={typeSel ?? ''} onChange={e => pick('type', e.target.value || null)} className={REFINE_SELECT_CLS}>
           <option value="">All types</option>
           {['note', 'playbook', 'wiki'].map(t => <option key={t}>{t}</option>)}
         </Select>
-        <Select value={view ?? ''} onChange={e => pick('view', e.target.value || null)}>
+        <Select value={view ?? ''} onChange={e => pick('view', e.target.value || null)} className={REFINE_SELECT_CLS}>
           <option value="">All notes</option>
           <option value="inbox">Inbox</option>
           <option value="filed">Filed</option>
@@ -179,20 +222,40 @@ export function BrainLibrary() {
             {notes.data && <span className="font-mono text-[10px] text-muted">{notes.data.notes.length} note{notes.data.notes.length === 1 ? '' : 's'}</span>}
           </div>
           {showArchRefine && (
-            <div className="mb-3 flex flex-wrap gap-2">
-              <Select value={showArch ? '1' : ''} onChange={e => refine('arch', e.target.value || null)} aria-label="Archive filter">
-                <option value="">Active</option>
-                <option value="1">Archive{typeof tree.data?.counts?.archived === 'number' ? ` (${tree.data.counts.archived})` : ''}</option>
+            // Compact on mobile: content-sized selects (w-auto/min-w-0) with
+            // a small gap so two fit per row at 390px instead of each one
+            // wrapping onto its own row and pushing the first note card off
+            // screen — three full-width selects used to cost ~950px of
+            // chrome before a single result was visible.
+            <div className="mb-3 flex flex-wrap items-center gap-1.5">
+              <Select value={showArch ? '1' : ''} onChange={e => refine('arch', e.target.value || null)}
+                      aria-label="Archive filter" className={REFINE_SELECT_CLS}>
+                <option value="">{activeLabel}</option>
+                <option value="1">{archiveLabel}</option>
               </Select>
-              <Select value={tagSel ?? ''} onChange={e => refine('tag', e.target.value || null)} aria-label="Tag filter">
-                <option value="">All tags</option>
-                {(tags.data?.tags ?? []).map(t => <option key={t.tag} value={t.tag}>{t.tag} ({t.count})</option>)}
-              </Select>
-              {areaSel && (
-                <Select value={projSel ?? ''} onChange={e => refine('project', e.target.value || null)} aria-label="Project filter">
-                  <option value="">All projects</option>
-                  {(tree.data?.projects ?? []).map(p => <option key={p.id} value={p.id}>{p.name}</option>)}
+              {!facets.data ? (
+                // Disabled placeholder only on the TRUE first load (no data
+                // at all yet) — placeholderData on useNoteFacets carries the
+                // previous result through every later filter change, so the
+                // select never flashes back to empty/disabled on a tap.
+                <Select disabled aria-label="Tag filter" className={REFINE_SELECT_CLS}><option>Loading tags…</option></Select>
+              ) : (
+                <Select value={tagSel ?? ''} onChange={e => refine('tag', e.target.value || null)}
+                        aria-label="Tag filter" className={REFINE_SELECT_CLS}>
+                  <option value="">All tags</option>
+                  {tagOptions.map(t => <option key={t.tag} value={t.tag}>{t.tag} ({t.count})</option>)}
                 </Select>
+              )}
+              {areaSel && (
+                !facets.data ? (
+                  <Select disabled aria-label="Project filter" className={REFINE_SELECT_CLS}><option>Loading projects…</option></Select>
+                ) : (
+                  <Select value={projSel ?? ''} onChange={e => refine('project', e.target.value || null)}
+                          aria-label="Project filter" className={REFINE_SELECT_CLS}>
+                    <option value="">All projects</option>
+                    {projOptions.map(p => <option key={p.id} value={p.id}>{p.name} ({p.count})</option>)}
+                  </Select>
+                )
               )}
             </div>
           )}

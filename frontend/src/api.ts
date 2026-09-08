@@ -170,6 +170,10 @@ export type Note = {
   status: 'inbox' | 'active' | 'archived'; area_id: number | null; project_id: number | null
   tags: string[]; authored_by: string; pinned: number; disputed: number; created_at: number; updated_at: number | null; entry_count?: number
   pending_proposal_id?: number | null
+  /** Resolved server-side (list_notes/search_notes) so every list surface can
+   *  show the project chip without its own lookup — null when unfiled or the
+   *  project has since been removed. */
+  project_name?: string | null
   /** 2c: how many photos / voice memos hang off this note. */
   attachment_counts?: { photo?: number; voice?: number }
   /** 2c: a voice memo with NO text — waiting on the owner to write what it
@@ -202,6 +206,27 @@ export const NOTES_REFETCH = 15000
 export const useAreas = () => useQuery({ queryKey: ['areas'], queryFn: () => get<{ areas: Area[] }>('/api/areas') })
 export const useNotesTree = () => useQuery({ queryKey: ['notes-tree'], queryFn: () => get<NotesTree>('/api/notes/tree'), refetchInterval: NOTES_REFETCH })
 export const useNoteTags = () => useQuery({ queryKey: ['note-tags'], queryFn: () => get<{ tags: { tag: string; count: number }[] }>('/api/notes/tags') })
+// LibraryPolishPlan Slice C: the Library's filter selects (tag/project) and
+// the Archive refine label all read counts scoped to the CURRENT selection
+// from here, instead of the library-wide counts notes/tags and notes/tree
+// give — each facet dimension is computed with itself left out of scope, so
+// switching within a dimension never narrows the list you're choosing from.
+export type NoteFacets = {
+  tags: { tag: string; count: number }[]
+  projects: { id: number; name: string; count: number }[]
+  areas: { id: number; name: string; count: number }[]
+  active: number; archived: number
+}
+export const useNoteFacets = (p: { status?: string; area_id?: number; project_id?: number; type?: string; tag?: string; q?: string; exclude_archived?: boolean }) => {
+  const qs = new URLSearchParams()
+  Object.entries(p).forEach(([k, v]) => { if (v !== undefined && v !== '' && v !== null) qs.set(k, String(v)) })
+  return useQuery({
+    queryKey: ['note-facets', p], queryFn: () => get<NoteFacets>(`/api/notes/facets?${qs}`), refetchInterval: NOTES_REFETCH,
+    // Every filter change is a NEW query key — without this the refine
+    // selects flashed "Loading…" and lost their counts on every tap.
+    placeholderData: (prev: NoteFacets | undefined) => prev,
+  })
+}
 export const useNotes = (p: { status?: string; area_id?: number; project_id?: number; type?: string; tag?: string; q?: string; limit?: number; exclude_archived?: boolean }) => {
   const qs = new URLSearchParams()
   Object.entries(p).forEach(([k, v]) => { if (v !== undefined && v !== '' && v !== null) qs.set(k, String(v)) })
