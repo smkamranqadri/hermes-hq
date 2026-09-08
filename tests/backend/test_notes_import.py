@@ -102,6 +102,36 @@ def test_repeated_titles_with_distinct_ids_stay_separate_units(tmp_path):
     assert len({u.meta["focus_id"] for u in units}) == 3
 
 
+def test_identical_records_with_distinct_source_ids_never_merge(tmp_path):
+    """The real `Multi-branch setup for online payments` trio: same title, same
+    body, byte for byte. They differ ONLY by focus_id, which lives in
+    frontmatter and is stripped from the body — so a title+body digest silently
+    merges three of the owner's todos into one."""
+    base = str(tmp_path / "focus" / "Tasks" / "Home")
+    for suffix, kid in (("", "4C08C2B2"), (" (2)", "0FD3951D"), (" (3)", "4E52A02D")):
+        write(os.path.join(base, "Multi-branch setup%s.md" % suffix),
+              "---\ntitle: Multi-branch setup\ntype: task\nstatus: open\n"
+              "domain: Home\nfocus_id: %s\n---\n\n"
+              "# Multi-branch setup\n\n- [ ] Multi-branch setup\n" % kid)
+    rep = ni.analyze(str(tmp_path))
+    assert rep["totals"][ni.DUPLICATE] == 0
+    assert rep["totals"][ni.LIBRARIAN] == 3
+    assert len({u.sha256 for u in rep["units"]}) == 3
+
+
+def test_source_id_absent_falls_back_to_title_and_body(tmp_path):
+    """Sources without a record id (apple, keep, obsidian) keep deduping on
+    content — the source_id term is simply empty for them."""
+    d = str(tmp_path / "obsidian" / "Notes")
+    write(os.path.join(d, "a.md"), "identical text")
+    write(os.path.join(d, "b.md"), "identical text")
+    units = ni.read_source(str(tmp_path), "obsidian")
+    assert all(u.source_id == "" for u in units)
+    assert units[0].sha256 != units[1].sha256          # titles differ (a vs b)
+    same = ni.Unit("obsidian", "x/a.md", "a", "identical text")
+    assert same.sha256 == units[0].sha256
+
+
 def test_apple_attachment_dirs_bind_to_their_sibling_note(tmp_path):
     d = str(tmp_path / "apple-notes" / "Circadia")
     write(os.path.join(d, "Optimizer.md"), "the optimizer note")

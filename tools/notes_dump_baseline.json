@@ -11,9 +11,9 @@
     },
     "focus": {
       "auto_archive": 0,
-      "duplicate": 2,
+      "duplicate": 0,
       "empty": 0,
-      "librarian": 105,
+      "librarian": 107,
       "quarantine": 0,
       "total": 107
     },
@@ -45,9 +45,9 @@
   "quarantined_count": 4,
   "totals": {
     "auto_archive": 110,
-    "duplicate": 78,
+    "duplicate": 76,
     "empty": 4,
-    "librarian": 773,
+    "librarian": 775,
     "quarantine": 4,
     "total": 969
   }

@@ -83,8 +83,25 @@ class Unit:
         self.ref = None
 
     @property
+    def source_id(self):
+        """A stable per-record id the SOURCE itself assigned, if it has one.
+
+        focus stamps every record with `focus_id`. Two records
+        carrying different source ids are different records by definition — even
+        when their title and body are byte-identical, which really happens: the
+        three `Multi-branch setup for online payments` files differ ONLY by this
+        id and their created date. Without it the digest merges three of the
+        owner's todos into one.
+        """
+        for key in ("focus_id", "uuid", "guid"):
+            v = (self.meta.get(key) or "").strip()
+            if v:
+                return v
+        return ""
+
+    @property
     def sha256(self):
-        """Digest over TITLE + body, not body alone.
+        """Digest over source id + TITLE + body, not body alone.
 
         Two notes can share body text and still be different notes — "Pay bill"
         and "Call bank" both reading "do the thing" are two todos, and hashing
@@ -98,8 +115,8 @@ class Unit:
         attached = ",".join(sorted(os.path.basename(p) for p in
                                    (self.meta.get("attachments") or [])))
         return hashlib.sha256(
-            (normalize(self.title) + "\n\x00\n" + self.norm
-             + "\n\x00\n" + attached).encode("utf-8")
+            (self.source_id + "\n\x00\n" + normalize(self.title) + "\n\x00\n"
+             + self.norm + "\n\x00\n" + attached).encode("utf-8")
         ).hexdigest()
 
     def __repr__(self):                                  # pragma: no cover

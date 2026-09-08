@@ -15,21 +15,21 @@ The DoD reconciles against the tool, not against prose. Re-runnable (`--check` e
 
 | source | total | secret | empty | dup | archived | → librarian |
 |---|---|---|---|---|---|---|
-| focus | 107 | 0 | 0 | 2 | 0 | 105 |
+| focus | 107 | 0 | 0 | 0 | 0 | 107 |
 | old-hermes | 1 | 0 | 0 | 0 | 0 | 1 |
 | obsidian | 208 | 3 | 4 | 65 | 15 | 121 |
 | apple-notes | 251 | 1 | 0 | 0 | 0 | 250 |
 | keep | 402 | 0 | 0 | 11 | 95 | 296 |
-| **TOTAL** | **969** | **4** | **4** | **78** | **110** | **773** |
+| **TOTAL** | **969** | **4** | **4** | **76** | **110** | **775** |
 
 **This supersedes the first table in this plan (51/82/82/95/659). Building the tool found four ways that hand-measured table silently destroyed data:**
 1. **The walk-order bug this plan warned about was present in the plan's own numbers.** `obsidian/Archive` sorts before `obsidian/Notes`, so the ad-hoc script kept the *Archive* copy and dropped the **live** one. `_keeper_rank` now ranks non-Archive first explicitly.
 2. **"Archive clone" was over-dropping.** After correct dedupe only **15** Archive files share a live filename, and those have *different* content — superseded drafts, not clones. They are archived searchable, not discarded. The `archive_clone` decision no longer exists: a byte-identical Archive copy is simply a `duplicate`.
-3. **The digest covered the body only, so notes sharing body text collapsed.** Real losses: obsidian's `Prompt 5A` / `Prompt 9` / `Prompt 9B` share a body, as do apple's `Tomorrow` / `Todo` (both just `- ☐`). Five distinct notes were being dropped. The digest is now title + body + attachment names.
+3. **The digest covered the body only, so notes sharing body text collapsed.** (Fixed twice: first by adding the title, then — after wave 1 exposed it — by leading with the source's own record id, since the three `Multi-branch` files share title AND body and differ only by `focus_id`.) Real losses: obsidian's `Prompt 5A` / `Prompt 9` / `Prompt 9B` share a body, as do apple's `Tomorrow` / `Todo` (both just `- ☐`). Five distinct notes were being dropped. The digest is now title + body + attachment names.
 4. **47 apple notes called "empty" were photo-only notes.** An Apple note holding just a picture has an empty markdown body plus an `(Attachments)` dir; judging emptiness on text alone discarded **46 notes and the photos with them**. Emptiness now means no text *and* no attachments — consistent with 2c, where only VOICE-only notes are skipped because nothing can read audio.
    - Same fix run: `os.path.splitext('.md')` returns `('.md','')` and `normpath` collapses `'.'`, so the attachment binding missed `.md` / `..md` and their ` (Attachments)` / `. (Attachments)` dirs. Keyed by `(dir, stem)` tuples now: **79 of 79 images bind**, up from 29.
 
-**Only `empty` (4) and `duplicate` (78) drop anything, and both are provably lossless** — an empty unit has no text and no attachments, a duplicate's content survives in its keeper (whose ident is recorded on the dropped row). Every unit with unique content is kept.
+**Only `empty` (4) and `duplicate` (76) drop anything, and both are provably lossless** — an empty unit has no text and no attachments, a duplicate's content survives in its keeper (whose ident is recorded on the dropped row). Every unit with unique content is kept.
 
 Corpus 1.46 M chars (~366 k tokens). Also measured: **4** units carry real key material (1 `AKIA…`, 3 `PRIVATE KEY` blocks) and **43** more merely mention password/token/api-key words — those import normally, flagged, never quarantined.
 
@@ -75,7 +75,7 @@ This also fixes a shipped self-contradiction: `agents/librarian/skills/librarian
 
 | # | source | units → librarian | why here |
 |---|---|---|---|
-| 1 | focus | 105 | the live system; filing is a deterministic `domain:` → area lookup, so it proves the pipeline with the least librarian judgment in the way |
+| 1 | focus | 107 | the live system; filing is a deterministic `domain:` → area lookup, so it proves the pipeline with the least librarian judgment in the way |
 | 2 | old-hermes | 1 | trivial volume, exercises the `split` kind on a structured doc |
 | 3 | obsidian | 121 | exercises keeper precedence and hash dedupe hardest (65 dup + 15 superseded drafts + 3 quarantined) |
 | 4 | apple-notes | 250 | exercises attachments (79 images, all binding) and hostile filenames; drops nothing |
@@ -89,7 +89,8 @@ This also fixes a shipped self-contradiction: `agents/librarian/skills/librarian
 
 **W0c — MET 2026-09-08.** All five sources dry-run and reconcile to the committed baseline with zero units unaccounted. Applied against scratch DBs: focus 105 notes (22 inbox / 47 filed by domain / 36 archived, zero HQ tasks), obsidian 136 with 3 held back, apple-notes 250 with **79 of 79 images bound**. Re-running is a no-op (`already there 105, created 0`). The 3 private-key blocks are absent from `hq.db` AND from a real `wm backup` (grepped both) yet recoverable from their 0600 files. Migration live on :9010, health 200, `wm check` Integrity OK, live library untouched.
 
-**W1** — 107 notes; 36 archived, 41 filed to the right area by domain lookup; the three same-title `Multi-branch` files survive as three distinct notes; **zero HQ tasks created**; re-running the import creates nothing (`content_hash`).
+**W1 — MET 2026-09-08.** 107 notes (1:1 with the dump's 107 files, 107 unique hashes): 22 inbox · 49 filed by domain · 36 archived. All three same-title `Multi-branch` records survive. **Zero HQ tasks created** (205 before and after). Every note tagged `focus` with a `content_hash`; the 31 owner notes untouched. Re-running reports `already there 107, created 0`. `wm check` Integrity OK, lint clean, health 200, 390×844 scrollWidth 390 with 0 page errors.
+  - **The first apply was wrong and was rolled back.** It created 105, merging the three byte-identical `Multi-branch` records into two: they differ ONLY by `focus_id`, which lives in frontmatter and is stripped before hashing, so a title+body digest merged three of the owner's todos. The digest now leads with a **source-assigned record id** (`focus_id`/`uuid`/`guid`) when the source provides one. Because that changes every focus hash, re-running on top would have created 105 duplicates rather than 2 missing notes — so the live DB was restored from the pre-wave backup (sqlite3 backup API, no service stop) and re-applied cleanly. **Notes are archive-only with no delete path, so the DB backup IS the rollback for an import wave** — take one before every wave.
 
 **W4** — a note with attachments renders its images; `wm backup` covers the bytes.
 
