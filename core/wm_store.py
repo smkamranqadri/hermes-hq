@@ -5695,6 +5695,130 @@ def taxonomy_tags(db_path=None):
         conn.close()
 
 
+def _rewrite_note_tags(conn, fn):
+    """Apply `fn(list[str]) -> list[str]` to every note's tag list.
+
+    Touches `notes.tags` and the FTS row (tags are indexed) but deliberately
+    NOT `updated_at` -- a vocabulary fix is not the owner editing his note, and
+    bumping the stamp would reorder every list in the Library. Returns the
+    number of notes actually changed.
+    """
+    changed = 0
+    for r in conn.execute("SELECT id, tags FROM notes").fetchall():
+        try:
+            cur = json.loads(r["tags"] or "[]")
+        except ValueError:
+            continue
+        new = fn([t for t in cur if isinstance(t, str)])
+        if new != cur:
+            conn.execute("UPDATE notes SET tags=? WHERE id=?",
+                         (_encode_tags(new), r["id"]))
+            _fts_sync(conn, r["id"])
+            changed += 1
+    return changed
+
+
+def add_note_tags(note_id, tags, added_by="owner", db_path=None):
+    """Merge tags into one note without touching its content or `updated_at`.
+
+    For vocabulary work -- backfilling the folder topics the first import waves
+    dropped -- where the note itself did not change. `update_note` is wrong for
+    this: it snapshots a revision and bumps `updated_at`, so a 186-note backfill
+    would reorder the whole Library by "recently updated" and read as though the
+    owner had just edited every note. Returns the resulting tag list.
+    """
+    add = [t.strip() for t in (tags or []) if isinstance(t, str) and t.strip()]
+    if not add:
+        raise ValueError("no tags given")
+    conn = _connect(db_path)
+    try:
+        with conn:
+            row = conn.execute("SELECT tags FROM notes WHERE id=?", (note_id,)).fetchone()
+            if row is None:
+                raise ValueError("no such note: %r" % note_id)
+            try:
+                cur = [t for t in json.loads(row["tags"] or "[]") if isinstance(t, str)]
+            except ValueError:
+                cur = []
+            out = list(cur)
+            for t in add:
+                if t not in out:
+                    out.append(t)
+            if out != cur:
+                conn.execute("UPDATE notes SET tags=? WHERE id=?",
+                             (_encode_tags(out), note_id))
+                _register_tags(conn, add, added_by)
+                _fts_sync(conn, note_id)
+    finally:
+        conn.close()
+    return out
+
+
+def rename_tag(old, new, db_path=None):
+    """Rename a tag across the whole library, taxonomy included.
+
+    MERGES when `new` already exists (`BrightLane` -> `brightlane` is exactly that),
+    which is why this cannot be a plain UPDATE: a note carrying both ends up
+    with one tag, not a duplicate. The taxonomy is closed, so the old row is
+    removed in the same transaction -- leaving it would keep offering agents a
+    tag no note uses.
+    """
+    old = (old or "").strip(); new = (new or "").strip()
+    if not old or not new:
+        raise ValueError("both the old and new tag are required")
+    if old == new:
+        raise ValueError("old and new tag are the same")
+    if len(new) > 60:
+        raise ValueError("tag too long (max 60): %r" % new[:70])
+    conn = _connect(db_path)
+    try:
+        with conn:
+            if conn.execute("SELECT 1 FROM note_tag_taxonomy WHERE tag=?",
+                            (old,)).fetchone() is None:
+                raise ValueError("no such tag in the taxonomy: %r" % old)
+
+            def swap(tags):
+                out = []
+                for t in tags:
+                    t = new if t == old else t
+                    if t not in out:
+                        out.append(t)
+                return out
+
+            changed = _rewrite_note_tags(conn, swap)
+            conn.execute("DELETE FROM note_tag_taxonomy WHERE tag=?", (old,))
+            _register_tags(conn, [new], "owner")
+    finally:
+        conn.close()
+    log_activity("note_tag_renamed", detail="%s -> %s (%d notes)" % (old, new, changed),
+                 db_path=db_path)
+    return changed
+
+
+def retire_tag(tag, db_path=None):
+    """Drop a tag from the taxonomy AND from every note that carries it.
+
+    For vocabulary that should never have been registered (test fixtures, a
+    typo). Notes are never deleted -- only the tag leaves them.
+    """
+    tag = (tag or "").strip()
+    if not tag:
+        raise ValueError("tag is required")
+    conn = _connect(db_path)
+    try:
+        with conn:
+            if conn.execute("SELECT 1 FROM note_tag_taxonomy WHERE tag=?",
+                            (tag,)).fetchone() is None:
+                raise ValueError("no such tag in the taxonomy: %r" % tag)
+            changed = _rewrite_note_tags(conn, lambda ts: [t for t in ts if t != tag])
+            conn.execute("DELETE FROM note_tag_taxonomy WHERE tag=?", (tag,))
+    finally:
+        conn.close()
+    log_activity("note_tag_retired", detail="%s (%d notes)" % (tag, changed),
+                 db_path=db_path)
+    return changed
+
+
 def list_note_tags(db_path=None):
     """The taxonomy with in-use counts — the librarian's orientation read.
     2b-ii: the taxonomy is CLOSED for agents (registered tags only; coinage

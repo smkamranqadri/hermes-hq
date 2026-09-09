@@ -116,7 +116,7 @@ export function ProposalPayloadView({ p, compact = false }: { p: Proposal; compa
             <span className={clsx('font-medium', compact ? '' : 'text-xs')}>{part.title}</span>
             {chips(part, true)}
           </div>
-          {!compact && part.body && <p className="mt-1 line-clamp-2 text-[11px] text-muted">{part.body}</p>}
+          {!compact && plainExcerpt(part.body) && <p className="mt-1 line-clamp-2 text-[11px] text-muted">{plainExcerpt(part.body)}</p>}
         </li>
       ))}
       {newTags.length > 0 && <li className="flex flex-wrap gap-1.5">{newTags}</li>}
@@ -142,7 +142,7 @@ export function ProposalPayloadView({ p, compact = false }: { p: Proposal; compa
         {p.payload?.project_id != null && chips({ project_id: p.payload.project_id })}
         <Chip>{p.payload?.assignee ?? 'owner'}</Chip>
       </div>
-      {p.payload?.description && <p className="mt-1 line-clamp-2 text-muted">{p.payload.description}</p>}
+      {plainExcerpt(p.payload?.description) && <p className="mt-1 line-clamp-2 text-muted">{plainExcerpt(p.payload?.description)}</p>}
       <p className="mt-1 text-[11px] text-muted">Creates a real linked task — the note stays a note.</p>
     </div>
   )
@@ -163,6 +163,42 @@ export function ProposalPayloadView({ p, compact = false }: { p: Proposal; compa
     </div>
   )
   return null
+}
+
+/** A readable one-line excerpt of a markdown body, for the clamped previews in
+ * list rows and proposal cards.
+ *
+ * The note PAGE renders markdown properly (see chat/Markdown.tsx) — this is for
+ * the places that show two clamped lines, where raw markdown is actively
+ * hostile: 247 of 295 notes carry markdown, and most of the tutorial notes open
+ * with a fenced code block, so every row read "```bash sudo apt update ```"
+ * instead of a sentence (owner report, 2026-09-09).
+ *
+ * Fenced code is DROPPED rather than unwrapped — a preview of shell commands
+ * tells you nothing about what the note is. Everything else is unwrapped to its
+ * text so the first real prose wins.
+ */
+export function plainExcerpt(body: string | null | undefined, max = 200) {
+  if (!body) return ''
+  let t = body
+    .replace(/```[\s\S]*?```/g, ' ')        // fenced code: drop entirely
+    .replace(/~~~[\s\S]*?~~~/g, ' ')
+    .replace(/^---[\s\S]*?^---/m, ' ')      // yaml frontmatter
+    .replace(/`([^`]*)`/g, '$1')             // inline code: keep the text
+    .replace(/!\[[^\]]*\]\([^)]*\)/g, ' ')  // images
+    .replace(/\[([^\]]+)\]\([^)]*\)/g, '$1') // links -> their text
+    .replace(/\[\[([^\]]+)\]\]/g, '$1')     // wikilinks
+    .replace(/^\s{0,3}#{1,6}\s+/gm, '')      // heading markers
+    .replace(/^\s*>+\s?/gm, '')             // blockquote markers
+    .replace(/^\s*[-*+]\s+\[[ xX]\]\s*/gm, '') // task-list markers
+    .replace(/^\s*[-*+]\s+/gm, '')          // bullet markers
+    .replace(/^\s*\d+[.)]\s+/gm, '')        // numbered markers
+    .replace(/^\s*([-*_]\s*){3,}$/gm, ' ')   // horizontal rules
+    .replace(/\*\*([^*]+)\*\*/g, '$1')      // bold
+    .replace(/(^|\W)[*_]([^*_]+)[*_](\W|$)/g, '$1$2$3') // emphasis
+    .replace(/\s+/g, ' ')
+    .trim()
+  return t.length > max ? t.slice(0, max).trimEnd() + '…' : t
 }
 
 export function areaLabel(areas: Area[] | undefined, id: number | null) {
@@ -206,7 +242,7 @@ export function NoteRow({ n, areas, showBody = true }: { n: Note; areas?: Area[]
         {(n.entry_count ?? 0) > 0 && <span className="font-mono text-[10px] text-muted">{n.entry_count} thought{n.entry_count === 1 ? '' : 's'}</span>}
         <span className="font-mono text-[10px] text-muted">{ago(n.updated_at ?? n.created_at)}</span>
       </div>
-      {showBody && n.body && <p className="mt-1 line-clamp-2 text-xs text-muted">{n.body}</p>}
+      {showBody && plainExcerpt(n.body) && <p className="mt-1 line-clamp-2 text-xs text-muted">{plainExcerpt(n.body)}</p>}
       <div className="mt-1.5 flex min-w-0 flex-wrap items-center gap-1.5">
         <AreaChip areas={areas} id={n.area_id} />
         {/* The note page shows area + project + tags + authored_by — a row

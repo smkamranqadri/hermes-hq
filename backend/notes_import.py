@@ -500,25 +500,70 @@ class Plan:
         self.target = target
 
 
-def _import_tags(unit):
-    """Tags an imported note is BORN with — today, none.
+# Folder segments that group without describing. `Tasks/`, `Notes/`, `Unfiled/`
+# are containers every file in a source sits in; `Other/` and `Archive/` are
+# filing mechanics. None of them says what a note is ABOUT, so none becomes a
+# tag. `Tutorials` is handled separately -- it is a KIND, worth exactly one tag.
+_CONTAINER_SEGMENTS = frozenset({
+    "archive", "archive 2", "other", "tasks", "notes", "unfiled", "tutorials",
+})
 
-    Owner decision (2026-09-08, final): NO origin tag. Stamping every imported
-    note `focus` / `obsidian` / `keep` / ... put hundreds of unrelated
-    notes into one shared-tags group and drowned the Related card; the owner
-    has stripped it from all 97 live notes, and future waves must not re-add it.
 
-    Provenance does not depend on it. `authored_by='import'` says a note was
-    imported at all, and `notes.content_hash` IS the dump's own digest
-    (`Unit.sha256`), so re-running the analysis over the dumps names the exact
-    source file behind any imported note — see `source_of_content_hash`.
+def _kebab(s):
+    s = re.sub(r"[^A-Za-z0-9]+", "-", s or "").strip("-").lower()
+    return re.sub(r"-{2,}", "-", s)
 
-    It stays a list rather than a bare `[]` because a future reader that really
-    parses a source's own tags has somewhere to put them; `split_frontmatter`
-    is flat `key: value` and the dumps write `tags:` as YAML lists, so nothing
-    is extracted today.
+
+def folder_tags(unit, area_names=()):
+    """Topic tags derived from where the note sat in its source tree.
+
+    The dump's folders WERE the organization -- `Tutorials/NestJs/` is a course,
+    `BrightLane/Feedback/` is one note per person -- and the first waves imported
+    that structure as nothing at all, leaving 58% of notes untagged and the
+    Library unnavigable (owner, 2026-09-09).
+
+    Rules, in order:
+      * the source root is dropped FIRST, so `obsidian` / `keep` / `focus`
+        can never become a tag. **Provenance is not a topic** and the no-origin-tag
+        decision of 2026-09-08 still holds -- `source_of_content_hash` remains the
+        provenance story.
+      * the filename is dropped (it is the title).
+      * container segments are dropped (see `_CONTAINER_SEGMENTS`).
+      * a segment naming an AREA is dropped: focus foldered by `domain:`,
+        which already becomes the note's area, so tagging it too says it twice.
+      * whatever survives is kebab-cased, and a path through `Tutorials/` adds
+        the single tag `tutorial`.
     """
-    return []
+    ident = getattr(unit, "ident", "") or ""
+    segs = ident.split("/")[1:-1]                 # drop source root AND filename
+    areas = {_kebab(a) for a in (area_names or ())}
+    out = []
+    for raw in segs:
+        k = _kebab(raw)
+        if not k or k in _CONTAINER_SEGMENTS or k in areas:
+            continue
+        if k not in out:
+            out.append(k)
+    if any(_kebab(p) == "tutorials" for p in ident.split("/")) and "tutorial" not in out:
+        out.append("tutorial")
+    return out
+
+
+def _import_tags(unit, area_names=()):
+    """Tags an imported note is BORN with: its FOLDER topics, never its origin.
+
+    Owner decision (2026-09-08, still in force): NO origin tag. Stamping every
+    imported note `focus` / `obsidian` / `keep` put hundreds of unrelated
+    notes into one shared-tags group and drowned the Related card; it was
+    stripped from all 97 live notes and must not come back. `folder_tags` drops
+    the source root before anything else, so that cannot happen here.
+
+    What DOES come through is topic: the folder tree the dumps were organized
+    by. Provenance still does not depend on tags — `authored_by='import'` says a
+    note was imported and `notes.content_hash` IS `Unit.sha256`, so
+    `source_of_content_hash` names the exact source file.
+    """
+    return folder_tags(unit, area_names)
 
 
 def _clean_title(unit):
@@ -604,11 +649,12 @@ def plan_unit(unit, areas_by_name=None, target=None):
         return Plan(unit, SKIP, reason=unit.reason)
 
     if target is not None:
-        return Plan(unit, APPEND, target=target, tags=_import_tags(unit),
+        return Plan(unit, APPEND, target=target,
+                    tags=_import_tags(unit, areas_by_name.keys()),
                     reason="mirrors the note %s — appended there as a Thought"
                            % target.ident)
 
-    tags = _import_tags(unit)
+    tags = _import_tags(unit, areas_by_name.keys())
     if unit.decision == AUTO_ARCHIVE:
         return Plan(unit, CREATE, status="archived", tags=tags, reason=unit.reason)
 
