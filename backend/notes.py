@@ -37,12 +37,17 @@ class AreaIn(BaseModel):
     description: str | None = None
 
 
+class AreaLinkIn(BaseModel):
+    related_id: int
+
+
 class AreaPatch(BaseModel):
     """Every field optional: a PATCH that names none of them is refused by the
     store ("nothing to update") rather than silently no-op'ing."""
     name: str | None = Field(default=None, min_length=1, max_length=80)
     description: str | None = None
     archived: bool | None = None
+    parent_id: int | None = None
 
 
 @router.get("/areas")
@@ -70,12 +75,35 @@ def update_area(area_id: int, body: AreaPatch):
     `{"description": null}` still clear the field on purpose.
     """
     sent = body.model_fields_set
-    patch = {k: getattr(body, k) for k in ("name", "description", "archived")
+    patch = {k: getattr(body, k)
+             for k in ("name", "description", "archived", "parent_id")
              if k in sent}
     if not patch:
         raise HTTPException(409, "nothing to update")
     area = _engine(store.update_area, area_id, **patch)
     return {"area": area, "areas": store.list_areas(db_path=_db())}
+
+
+@router.get("/area/{area_id}/relations")
+def area_relations(area_id: int):
+    """Parent, children and sideways relations — everything this area connects
+    to. 404s rather than returning an empty shape for an area that is not there."""
+    rel = store.area_relations(area_id, db_path=_db())
+    if rel is None:
+        raise HTTPException(404, "no such area")
+    return rel
+
+
+@router.post("/area/{area_id}/relations")
+def add_area_relation(area_id: int, body: AreaLinkIn):
+    _engine(store.link_areas, area_id, body.related_id)
+    return store.area_relations(area_id, db_path=_db())
+
+
+@router.delete("/area/{area_id}/relations/{related_id}")
+def remove_area_relation(area_id: int, related_id: int):
+    _engine(store.unlink_areas, area_id, related_id)
+    return store.area_relations(area_id, db_path=_db())
 
 
 # ---- notes -------------------------------------------------------------

@@ -264,3 +264,84 @@ def test_patch_with_no_fields_is_refused(env):
     h = login(c)
     aid = _area(store, db, "Reading")
     assert c.patch(f"/api/areas/{aid}", json={}, headers=h).status_code == 409
+
+
+# ---- LibraryReconcilePlan item 7: areas relate two ways ---------------------
+
+def test_parent_id_is_settable_and_stays_two_level(env):
+    _, store, db = env
+    work = _area(store, db, "Work")
+    dev = _area(store, db, "Development")
+    store.update_area(dev, parent_id=work, db_path=db)
+    assert store.get_area(dev, db_path=db)["parent_id"] == work
+    # a sub-area cannot itself become a parent
+    ops = _area(store, db, "DevOps")
+    with pytest.raises(ValueError, match="two-level"):
+        store.update_area(ops, parent_id=dev, db_path=db)
+    # and an area with children cannot be nested under someone else
+    other = _area(store, db, "Career")
+    with pytest.raises(ValueError, match="three levels"):
+        store.update_area(work, parent_id=other, db_path=db)
+    # clearing works
+    store.update_area(dev, parent_id=None, db_path=db)
+    assert store.get_area(dev, db_path=db)["parent_id"] is None
+
+
+def test_an_area_cannot_parent_itself(env):
+    _, store, db = env
+    a = _area(store, db, "Work")
+    with pytest.raises(ValueError, match="its own parent"):
+        store.update_area(a, parent_id=a, db_path=db)
+
+
+def test_sideways_relations_are_symmetric_and_stored_once(env):
+    """"Work relates to Career" and "Career relates to Work" must be the SAME
+    row, or the two sides can drift apart."""
+    _, store, db = env
+    work = _area(store, db, "Work"); career = _area(store, db, "Career")
+    store.link_areas(career, work, db_path=db)          # deliberately reversed
+    assert [a["id"] for a in store.area_relations(work, db_path=db)["related"]] == [career]
+    assert [a["id"] for a in store.area_relations(career, db_path=db)["related"]] == [work]
+    import sqlite3
+    conn = sqlite3.connect(db)
+    assert conn.execute("SELECT COUNT(*) FROM area_links").fetchone()[0] == 1
+    conn.close()
+    # idempotent
+    store.link_areas(work, career, db_path=db)
+    conn = sqlite3.connect(db)
+    assert conn.execute("SELECT COUNT(*) FROM area_links").fetchone()[0] == 1
+    conn.close()
+    store.unlink_areas(work, career, db_path=db)
+    assert store.area_relations(work, db_path=db)["related"] == []
+
+
+def test_an_area_cannot_relate_to_itself(env):
+    _, store, db = env
+    a = _area(store, db, "Work")
+    with pytest.raises(ValueError, match="relate to itself"):
+        store.link_areas(a, a, db_path=db)
+
+
+def test_relations_hide_retired_areas(env):
+    """A relation pointing at somewhere nothing can be filed is noise."""
+    _, store, db = env
+    work = _area(store, db, "Work"); journal = _area(store, db, "Journal")
+    store.link_areas(work, journal, db_path=db)
+    assert len(store.area_relations(work, db_path=db)["related"]) == 1
+    store.update_area(journal, archived=True, db_path=db)
+    assert store.area_relations(work, db_path=db)["related"] == []
+
+
+def test_area_relations_api(env):
+    c, store, db = env
+    h = login(c)
+    work = _area(store, db, "Work"); career = _area(store, db, "Career")
+    assert c.get(f"/api/area/{work}/relations").json()["related"] == []
+    r = c.post(f"/api/area/{work}/relations", json={"related_id": career}, headers=h)
+    assert r.status_code == 200 and len(r.json()["related"]) == 1
+    assert c.delete(f"/api/area/{work}/relations/{career}",
+                    headers=h).json()["related"] == []
+    assert c.get("/api/area/999999/relations").status_code == 404
+    # self-relation is a 409 the UI can show
+    assert c.post(f"/api/area/{work}/relations", json={"related_id": work},
+                  headers=h).status_code == 409

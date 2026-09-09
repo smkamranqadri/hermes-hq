@@ -203,6 +203,14 @@ export type NotesTree = { areas: Area[]; projects: { id: number; slug: string; n
 // the lists let the header read "Review · 3" over an empty queue.
 export const NOTES_REFETCH = 15000
 
+export type AreaRef = { id: number; name: string; description?: string | null }
+export type AreaRelations = { parent: AreaRef | null; children: AreaRef[]; related: AreaRef[] }
+export const useAreaRelations = (id: number | null) => useQuery({
+  queryKey: ['area-relations', id],
+  queryFn: () => get<AreaRelations>(`/api/area/${id}/relations`),
+  enabled: !!id,
+})
+
 // Label resolution, so it asks for RETIRED areas too: a note filed before its
 // area was retired must still render its home instead of a blank chip.
 // Filing surfaces do NOT use this — they read useNotesTree()'s areas, which
@@ -263,7 +271,13 @@ export const useNote = (id: number) =>
 export type RelatedNoteItem = Note & { kind: 'note'; shared_tags?: string[] }
 export type RelatedLinkItem = { kind: 'task' | 'schedule'; target_id: number; target: NoteLink['target']; created_at: number }
 export type RelatedGroup<T> = { items: T[]; more: number }
+export type SeriesItem = { id: number; title: string; status: string; part: number }
+export type NoteSeries = {
+  tag: string; position: number; total: number
+  prev: SeriesItem | null; next: SeriesItem | null; items: SeriesItem[]
+}
 export type RelatedNotes = {
+  series: NoteSeries | null
   linked: RelatedGroup<RelatedNoteItem | RelatedLinkItem>
   shared_tags: RelatedGroup<RelatedNoteItem>
   same_area: RelatedGroup<RelatedNoteItem>

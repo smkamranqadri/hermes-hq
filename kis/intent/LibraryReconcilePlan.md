@@ -1,6 +1,6 @@
 # Library Reconcile — make the system before importing the rest
 
-**Status:** PLANNED 2026-09-09. Owner-interviewed in session after a full audit of all 295 notes. Items 1–4 are the first slice.
+**Status:** slice 1 SHIPPED 2026-09-09 (`d9fbc71`); **slice 2 (items 5–8) SHIPPED 2026-09-09**. Item 9 remains. Owner-interviewed in session after a full audit of all 295 notes. Items 1–4 are the first slice.
 **Parent:** `intent/ImportPlan.md` (waves 4–5 are HELD until this lands — owner: *"before adding more notes, I want to reconcile these first and make proper system, then new migration can go better instead of dumping"*).
 **Work mode:** Standard for items 1–4 (no schema change), then re-plan 5–8.
 
@@ -46,12 +46,15 @@ Measured output: **186 notes tagged**, vocabulary `brightlane` 67, `tutorial` 45
 - Applied: `BrightLane`→`brightlane` (43 notes; closes the standing lint finding), `NestJs`→`nestjs`, `Nodejs`→`nodejs`, `Prompts`→`prompts`, `Family`→`family`, `Server Setup`→`server-setup`, `Things to do`→`things-to-do`; retire the `ser` typo and the `zzz-test` / `test` / `zzz-deep` fixtures.
 - `hermes-agent` (7) and `hermes-agent-os` (36) are two folder spellings — **ask the owner before merging**, do not guess.
 
-## Later slices (re-plan after 1–4 are live)
+## Slice 2 — items 5–8 (SHIPPED 2026-09-09)
 
-5. **`type` put to work** — tutorial parts become `wiki`, runbooks `playbook`; the Library's Collections section already filters by type.
-6. **Series prev/next** — notes sharing a topic tag whose titles carry a numeric prefix (`1 - Initialize` … `9 - Authentication`) get ordered navigation.
-7. **Areas: hierarchy + sideways relations** (owner chose both).
-8. **Superseded twins marked** — link each archived shadow to its live note so search says which is current. No merging; nothing is destroyed.
+5. **`type` put to work.** All 295 notes were `type: note`; `playbook`/`wiki` existed unused while the Library tree already had a Collections section filtering by type. Two evidence-backed rules, deliberately narrow — everything else stays `note` rather than being guessed at: a note tagged `tutorial` **that actually has steps** becomes a **playbook** (`tutorial`-tagged notes measure 68–100% shell-command lines), and a `BrightLane/Internal` reference doc becomes a **wiki**. Two exclusions the first dry run earned: `Tech` is a 38-char bookmark (`https://nats.io/`) tagged `tutorial` only by folder — a bookmark is a note, so a playbook must have a code fence, ≥2 command lines, or ≥300 chars; and per-person logs (`Manager A`, 10k chars of dated notes and salary figures) sit in `Internal` too — they are logs, not reference. Result: **34 playbooks, 13 wiki**.
+6. **Series prev/next** — `_series_for` in `wm_store`, a **computed view with no new schema**: the dumps kept courses as numbered FILES in one folder, the folder is now a tag, and the number survived into the title. A note is in a series when its title carries a leading number AND it shares a tag with other numbered notes; **the SMALLEST shared tag wins**, because every NestJs part is also tagged `tutorial` (35 notes) and picking the commonest tag would splice unrelated runbooks into the course. Surfaced above the Related card as "Part 3 of 9" with prev/next.
+7. **Areas relate two ways** (owner chose both). `areas.parent_id` had existed unused since the schema was written — `update_area` now sets it, refusing self-parenting, nesting under a sub-area, and any move that would make three levels. New `area_links` table for **affinity**, stored once per pair with the lower id first (a CHECK enforces it) so "Work relates to Career" and "Career relates to Work" cannot drift apart. `GET/POST/DELETE /api/area/{id}/relations`, and an `AreaRelationsBar` on the area view that both shows and EDITS them — without the editor the feature would have shipped dead, since there were 0 relations.
+8. **Superseded twins marked, not merged.** One `note_links` row per pair from the archived copy to the live one; `related_notes` resolves links in both directions, so each note now names the other. **No content was merged and nothing was destroyed** — the audit had already shown none of the 16 pairs needs rescuing.
+
+## Later (re-plan)
+
 9. **Todo notes** — 8 notes of numbered lists; decide with the owner whether to normalize to checkboxes or leave as prose.
 
 ## Acceptance (slice 1)

@@ -39,6 +39,9 @@ def test_note_with_no_relations_has_empty_groups(env):
         "linked": {"items": [], "more": 0},
         "shared_tags": {"items": [], "more": 0},
         "same_area": {"items": [], "more": 0},
+        # LibraryReconcilePlan item 6: a note outside a numbered series reports
+        # None rather than an empty group — there is no "series of one".
+        "series": None,
     }
 
 
@@ -239,3 +242,54 @@ def test_shared_tags_cap_and_more(env):
     r = c.get("/api/note/%d/related" % base).json()
     assert len(r["shared_tags"]["items"]) == 6
     assert r["shared_tags"]["more"] == 3
+
+
+# ---- LibraryReconcilePlan item 6: multi-part series ------------------------
+
+def test_series_is_recovered_from_numbered_titles_and_a_shared_tag(env):
+    """The dumps kept courses as numbered FILES in one folder. The folder is
+    now a tag and the number survived into the title, so the series needs no
+    schema — see wm_store._series_for."""
+    c, store, db = env
+    login(c)
+    ids = [_note(store, db, "%d - Step %d" % (i, i), tags=["nestjs", "tutorial"])
+           for i in range(1, 5)]
+    r = c.get("/api/note/%d/related" % ids[1]).json()["series"]
+    assert r["position"] == 2 and r["total"] == 4
+    assert r["prev"]["title"] == "1 - Step 1"
+    assert r["next"]["title"] == "3 - Step 3"
+    # ends of the series are honest about being ends
+    first = c.get("/api/note/%d/related" % ids[0]).json()["series"]
+    last = c.get("/api/note/%d/related" % ids[-1]).json()["series"]
+    assert first["prev"] is None and last["next"] is None
+
+
+def test_series_picks_the_MOST_SPECIFIC_shared_tag(env):
+    """Every course part is also tagged `tutorial` alongside dozens of unrelated
+    runbooks. Picking the commonest tag would splice them into one fake series."""
+    c, store, db = env
+    login(c)
+    course = [_note(store, db, "%d - Part %d" % (i, i), tags=["nestjs", "tutorial"])
+              for i in range(1, 4)]
+    # unrelated numbered notes that share ONLY the broad tag
+    for i in range(1, 3):
+        _note(store, db, "%d - Server thing %d" % (i, i), tags=["server-setup", "tutorial"])
+    r = c.get("/api/note/%d/related" % course[0]).json()["series"]
+    assert r["tag"] == "nestjs"
+    assert r["total"] == 3, "the broad `tutorial` tag must not merge two courses"
+
+
+def test_a_lone_numbered_note_is_not_a_series(env):
+    c, store, db = env
+    login(c)
+    nid = _note(store, db, "1 - Only one", tags=["nestjs"])
+    assert c.get("/api/note/%d/related" % nid).json()["series"] is None
+
+
+def test_an_unnumbered_note_is_never_in_a_series(env):
+    c, store, db = env
+    login(c)
+    _note(store, db, "1 - Step 1", tags=["nestjs"])
+    _note(store, db, "2 - Step 2", tags=["nestjs"])
+    plain = _note(store, db, "Some thoughts", tags=["nestjs"])
+    assert c.get("/api/note/%d/related" % plain).json()["series"] is None

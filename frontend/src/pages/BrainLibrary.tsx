@@ -1,9 +1,10 @@
 /** Library: folder tree (areas → sub-areas, projects, types, archive) +
  * global search over every note (FTS). Selection lives in the URL. */
 import { useEffect, useState } from 'react'
-import { useSearchParams } from 'react-router-dom'
+import { useQueryClient } from '@tanstack/react-query'
+import { Link, useSearchParams } from 'react-router-dom'
 import clsx from 'clsx'
-import { useAreas, useNoteFacets, useNotesPaged, useNotesTree } from '../api'
+import { del, post, useAreaRelations, useAreas, useNoteFacets, useNotesPaged, useNotesTree, type Area } from '../api'
 import { PageHeader } from '../components/GlassCard'
 import { BrainSubNav, NoteRow, useBrainCounts } from '../components/brain'
 import { Empty, Input, Label, Loading, Select } from '../components/ui'
@@ -258,6 +259,7 @@ export function BrainLibrary() {
               what does not. It reads at the top of the area it describes, and
               only there: no area selected means no rule to state. */}
           {areaSel && areaDesc && <p className="mb-3 max-w-2xl text-xs text-muted">{areaDesc}</p>}
+          {areaSel && <AreaRelationsBar areaId={Number(areaSel)} areas={tree.data?.areas ?? []} />}
           {showArchRefine && (
             // Compact on mobile: content-sized selects (w-auto/min-w-0) with
             // a small gap so two fit per row at 390px instead of each one
@@ -312,5 +314,60 @@ export function BrainLibrary() {
         </div>
       </div>
     </section>
+  )
+}
+
+
+/** Areas relate two ways and the owner asked for both (2026-09-09): the
+ * hierarchy says what CONTAINS what, the sideways list says what merely
+ * informs what. `parent_id` had existed unused since the schema was written,
+ * so this is the first surface that shows either. Editing lives here rather
+ * than in a settings screen because the area view is where you notice a
+ * missing connection. */
+function AreaRelationsBar({ areaId, areas }: { areaId: number; areas: Area[] }) {
+  const qc = useQueryClient()
+  const rel = useAreaRelations(areaId)
+  const [adding, setAdding] = useState('')
+  const [busy, setBusy] = useState(false)
+  const r = rel.data
+  const linkedIds = new Set([...(r?.related ?? []).map(x => x.id), areaId])
+  const options = areas.filter(a => !linkedIds.has(a.id))
+
+  const refresh = () => { void qc.invalidateQueries({ queryKey: ['area-relations'] }) }
+  const add = async (id: string) => {
+    if (!id) return
+    setBusy(true)
+    try { await post(`/api/area/${areaId}/relations`, { related_id: Number(id) }); setAdding(''); refresh() }
+    finally { setBusy(false) }
+  }
+  const drop = async (id: number) => {
+    setBusy(true)
+    try { await del(`/api/area/${areaId}/relations/${id}`); refresh() } finally { setBusy(false) }
+  }
+  if (!r) return null
+  const chip = (a: { id: number; name: string }, onX?: () => void) => (
+    <span key={a.id} className="inline-flex items-center gap-1 rounded-full border border-line bg-inset px-2 py-0.5 font-mono text-[10px] uppercase tracking-wider">
+      {/* Link + button as SIBLINGS, never nested — a button inside a Link is
+          the interaction bug NoteRow already had to avoid. */}
+      <Link to={`/brain/library?area=${a.id}`} className="text-accent-2 hover:underline">{a.name}</Link>
+      {onX && <button onClick={onX} disabled={busy} title="Remove relation" className="text-muted hover:text-fg">✕</button>}
+    </span>
+  )
+  return (
+    <div className="mb-3 flex flex-wrap items-center gap-1.5">
+      {r.parent && <><span className="font-mono text-[10px] uppercase tracking-wider text-muted">part of</span>{chip(r.parent)}</>}
+      {r.children.length > 0 && <><span className="font-mono text-[10px] uppercase tracking-wider text-muted">contains</span>{r.children.map(a => chip(a))}</>}
+      <span className="font-mono text-[10px] uppercase tracking-wider text-muted">related</span>
+      {r.related.length === 0 && <span className="text-[11px] text-muted">none yet</span>}
+      {r.related.map(a => chip(a, () => void drop(a.id)))}
+      {options.length > 0 && (
+        <select value={adding} onChange={e => { setAdding(e.target.value); void add(e.target.value) }}
+                disabled={busy} aria-label="Relate another area"
+                className="rounded-full border border-line bg-inset px-2 py-0.5 font-mono text-[10px] uppercase tracking-wider text-muted">
+          <option value="">+ relate</option>
+          {options.map(a => <option key={a.id} value={a.id}>{a.name}</option>)}
+        </select>
+      )}
+    </div>
   )
 }

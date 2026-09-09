@@ -188,6 +188,41 @@ export function BrainNote() {
         </div>
       </GlassCard>
 
+      {/* A multi-part series reads as a document, so its navigation sits ABOVE
+          the Related card and looks nothing like it: where you are, and the two
+          steps either side. Recovered from the numbered titles the dumps kept
+          (`1 - Initialize` … `9 - Authentication`) plus the folder tag — no new
+          schema, see wm_store._series_for. */}
+      {related?.series && (
+        <GlassCard>
+          <div className="flex flex-wrap items-center justify-between gap-2">
+            <Label>Part {related.series.position} of {related.series.total}</Label>
+            <Link to={`/brain/library?tag=${encodeURIComponent(related.series.tag)}`}
+                  className="font-mono text-[10px] uppercase tracking-wider text-accent-2 hover:underline">
+              {related.series.tag}
+            </Link>
+          </div>
+          <div className="mt-2 flex flex-wrap items-stretch gap-2">
+            {related.series.prev
+              ? <Link to={`/brain/note/${related.series.prev.id}`} className="glass min-w-0 flex-1 rounded-xl px-3 py-2 hover:bg-raised">
+                  <span className="font-mono text-[10px] uppercase tracking-wider text-muted">← previous</span>
+                  <p className="truncate text-sm">{related.series.prev.title}</p>
+                </Link>
+              : <div className="min-w-0 flex-1 rounded-xl border border-dashed border-line-subtle px-3 py-2">
+                  <span className="font-mono text-[10px] uppercase tracking-wider text-muted">start of series</span>
+                </div>}
+            {related.series.next
+              ? <Link to={`/brain/note/${related.series.next.id}`} className="glass min-w-0 flex-1 rounded-xl px-3 py-2 text-right hover:bg-raised">
+                  <span className="font-mono text-[10px] uppercase tracking-wider text-muted">next →</span>
+                  <p className="truncate text-sm">{related.series.next.title}</p>
+                </Link>
+              : <div className="min-w-0 flex-1 rounded-xl border border-dashed border-line-subtle px-3 py-2 text-right">
+                  <span className="font-mono text-[10px] uppercase tracking-wider text-muted">end of series</span>
+                </div>}
+          </div>
+        </GlassCard>
+      )}
+
       {related && (related.linked.items.length > 0 || related.shared_tags.items.length > 0 || related.same_area.items.length > 0) && (
         <GlassCard>
           <Label>Related</Label>

@@ -497,6 +497,19 @@ CREATE TABLE IF NOT EXISTS areas (
 CREATE UNIQUE INDEX IF NOT EXISTS idx_areas_name
     ON areas(name, COALESCE(parent_id, 0));
 
+-- Areas relate two ways. `areas.parent_id` is CONTAINMENT (two-level, a
+-- sub-area lives inside its parent). This table is AFFINITY: Work and Career
+-- inform each other without either containing the other. Stored once per pair
+-- with the lower id first, so the relation cannot disagree with itself
+-- depending on which side you read it from.
+CREATE TABLE IF NOT EXISTS area_links (
+    area_id    INTEGER NOT NULL REFERENCES areas(id),
+    related_id INTEGER NOT NULL REFERENCES areas(id),
+    created_at REAL,
+    PRIMARY KEY (area_id, related_id),
+    CHECK (area_id < related_id)
+);
+
 CREATE TABLE IF NOT EXISTS notes (
     id           INTEGER PRIMARY KEY,
     title        TEXT NOT NULL,
@@ -697,6 +710,15 @@ def _migrate(conn):
             except ValueError:
                 continue
         _register_tags(conn, sorted(seen), "owner")
+    # Library reconcile item 7: sideways area relations (see SCHEMA_SQL).
+    conn.execute("""
+        CREATE TABLE IF NOT EXISTS area_links (
+            area_id    INTEGER NOT NULL REFERENCES areas(id),
+            related_id INTEGER NOT NULL REFERENCES areas(id),
+            created_at REAL,
+            PRIMARY KEY (area_id, related_id),
+            CHECK (area_id < related_id)
+        )""")
     # Area descriptions pass: an area carries the rule for what belongs in it.
     if "description" not in _table_columns(conn, "areas"):
         conn.execute("ALTER TABLE areas ADD COLUMN description TEXT")
@@ -4662,7 +4684,8 @@ def _clean_area_description(description):
     return description.strip() or None
 
 
-def update_area(area_id, name=None, description=_UNSET, archived=None, db_path=None):
+def update_area(area_id, name=None, description=_UNSET, archived=None,
+                parent_id=_UNSET, db_path=None):
     """Edit an area: rename, (re)write its description, retire or restore it.
 
     Retiring is how an area is REMOVED -- there is no delete path, matching the
@@ -4675,7 +4698,8 @@ def update_area(area_id, name=None, description=_UNSET, archived=None, db_path=N
     and an `inbox` note would point at an area no surface can show. Both are
     refused with the count, so the caller refiles first.
     """
-    if name is None and description is _UNSET and archived is None:
+    if name is None and description is _UNSET and archived is None \
+            and parent_id is _UNSET:
         raise ValueError("nothing to update")
     if name is not None and (not isinstance(name, str) or not name.strip()):
         raise ValueError("area name is required")
@@ -4706,7 +4730,25 @@ def update_area(area_id, name=None, description=_UNSET, archived=None, db_path=N
                     raise ValueError(
                         "cannot retire area %r: %d live sub-area%s under it"
                         % (old["name"], kids, "" if kids == 1 else "s"))
+            if parent_id is not _UNSET and parent_id is not None:
+                # Two-level taxonomy: a sub-area cannot itself become a parent,
+                # and an area cannot parent itself into a cycle.
+                if parent_id == area_id:
+                    raise ValueError("an area cannot be its own parent")
+                parent = conn.execute("SELECT id, parent_id FROM areas WHERE id=?",
+                                      (parent_id,)).fetchone()
+                if parent is None:
+                    raise ValueError("no such parent area: %r" % parent_id)
+                if parent["parent_id"] is not None:
+                    raise ValueError("areas are two-level: cannot nest under a sub-area")
+                if conn.execute("SELECT 1 FROM areas WHERE parent_id=? LIMIT 1",
+                                (area_id,)).fetchone() is not None:
+                    raise ValueError(
+                        "area %r has sub-areas of its own: moving it under a "
+                        "parent would make three levels" % old["name"])
             sets, params = [], []
+            if parent_id is not _UNSET:
+                sets.append("parent_id=?"); params.append(parent_id)
             if name is not None:
                 sets.append("name=?"); params.append(name.strip())
             if description is not _UNSET:
@@ -4722,14 +4764,82 @@ def update_area(area_id, name=None, description=_UNSET, archived=None, db_path=N
     finally:
         conn.close()
     changed = [k for k, v in (("name", name), ("description", description),
-                              ("archived", archived))
+                              ("archived", archived), ("parent_id", parent_id))
                if v is not None and v is not _UNSET]
+    if parent_id is None:
+        changed.append("parent cleared")
     if description is None:
         changed.append("description cleared")
     log_activity("area_updated",
                  detail="area #%d (%s)" % (area_id, ", ".join(changed)),
                  db_path=db_path)
     return get_area(area_id, db_path=db_path)
+
+
+def _area_pair(a, b):
+    a, b = int(a), int(b)
+    if a == b:
+        raise ValueError("an area cannot relate to itself")
+    return (a, b) if a < b else (b, a)
+
+
+def link_areas(area_id, related_id, db_path=None):
+    """Relate two areas sideways (affinity, not containment).
+
+    Stored once per pair with the lower id first (see the CHECK in SCHEMA_SQL),
+    so "Work relates to Career" and "Career relates to Work" are the SAME row
+    and cannot drift apart.
+    """
+    lo, hi = _area_pair(area_id, related_id)
+    conn = _connect(db_path)
+    try:
+        with conn:
+            for i in (lo, hi):
+                if conn.execute("SELECT 1 FROM areas WHERE id=?", (i,)).fetchone() is None:
+                    raise ValueError("no such area: %r" % i)
+            conn.execute("INSERT OR IGNORE INTO area_links(area_id, related_id, created_at) "
+                         "VALUES(?,?,?)", (lo, hi, time.time()))
+    finally:
+        conn.close()
+    log_activity("area_linked", detail="#%d <-> #%d" % (lo, hi), db_path=db_path)
+
+
+def unlink_areas(area_id, related_id, db_path=None):
+    lo, hi = _area_pair(area_id, related_id)
+    conn = _connect(db_path)
+    try:
+        with conn:
+            conn.execute("DELETE FROM area_links WHERE area_id=? AND related_id=?", (lo, hi))
+    finally:
+        conn.close()
+    log_activity("area_unlinked", detail="#%d <-> #%d" % (lo, hi), db_path=db_path)
+
+
+def area_relations(area_id, db_path=None):
+    """Everything this area is connected to: its parent, its children, and the
+    areas it relates to sideways. Retired areas are excluded -- a relation to
+    somewhere nothing can be filed is noise."""
+    conn = _connect(db_path)
+    try:
+        row = conn.execute("SELECT * FROM areas WHERE id=?", (area_id,)).fetchone()
+        if row is None:
+            return None
+        parent = None
+        if row["parent_id"] is not None:
+            p = conn.execute("SELECT id,name,description FROM areas WHERE id=? AND archived=0",
+                             (row["parent_id"],)).fetchone()
+            parent = dict(p) if p else None
+        children = [dict(r) for r in conn.execute(
+            "SELECT id,name,description FROM areas WHERE parent_id=? AND archived=0 "
+            "ORDER BY position, id", (area_id,))]
+        related = [dict(r) for r in conn.execute(
+            "SELECT a.id, a.name, a.description FROM area_links l "
+            "JOIN areas a ON a.id = CASE WHEN l.area_id=? THEN l.related_id ELSE l.area_id END "
+            "WHERE (l.area_id=? OR l.related_id=?) AND a.archived=0 "
+            "ORDER BY a.name", (area_id, area_id, area_id))]
+        return {"parent": parent, "children": children, "related": related}
+    finally:
+        conn.close()
 
 
 def get_area(area_id, db_path=None):
@@ -5160,6 +5270,69 @@ def _bulk_note_rows(conn, ids):
     return {r["id"]: r for r in rows}
 
 
+_SERIES_PREFIX = re.compile(r"^\s*(\d{1,3})\s*[-.)]\s+")
+
+
+def _series_for(conn, base):
+    """Ordered position within a multi-part series, or None.
+
+    The obsidian dumps kept courses and runbooks as numbered FILES
+    (`1 - Initialize.md` ... `9 - Authentication.md`) inside one folder. The
+    folder is now a tag, and the number survived into the title, so the series
+    is fully recoverable with no new schema -- which is why this is a computed
+    view and not a table.
+
+    A note is part of a series when its title carries a leading number AND it
+    shares a tag with other numbered notes. The tag chosen is the SMALLEST
+    shared one: every NestJs part is also tagged `tutorial` (35 notes), so
+    picking the most common tag would splice unrelated runbooks into the course.
+    """
+    m = _SERIES_PREFIX.match(base["title"] or "")
+    if not m:
+        return None
+    tags = [t for t in (base["tags"] or []) if isinstance(t, str)]
+    if not tags:
+        return None
+
+    best = None
+    for tag in tags:
+        members = []
+        for r in conn.execute(
+                "SELECT n.id, n.title, n.status FROM notes n, json_each(n.tags) je "
+                "WHERE je.value = ? AND json_valid(n.tags)", (tag,)):
+            mm = _SERIES_PREFIX.match(r["title"] or "")
+            if mm:
+                members.append((int(mm.group(1)), r["id"], r["title"], r["status"]))
+        if len(members) < 2:
+            continue
+        # smallest qualifying tag wins -- the most specific grouping
+        if best is None or len(members) < len(best[1]):
+            best = (tag, members)
+    if best is None:
+        return None
+
+    tag, members = best
+    members.sort(key=lambda x: (x[0], x[1]))
+    ids = [m[1] for m in members]
+    try:
+        pos = ids.index(base["id"])
+    except ValueError:
+        return None
+
+    def item(i):
+        n, nid, title, status = members[i]
+        return {"id": nid, "title": title, "status": status, "part": n}
+
+    return {
+        "tag": tag,
+        "position": pos + 1,
+        "total": len(members),
+        "prev": item(pos - 1) if pos > 0 else None,
+        "next": item(pos + 1) if pos < len(members) - 1 else None,
+        "items": [item(i) for i in range(len(members))],
+    }
+
+
 def related_notes(note_id, cap=6, db_path=None):
     """Three labelled groups for the note page's Related card, or None when
     `note_id` does not exist:
@@ -5296,6 +5469,7 @@ def related_notes(note_id, cap=6, db_path=None):
             "linked": {"items": linked_items, "more": linked_more},
             "shared_tags": {"items": shared_items, "more": shared_more},
             "same_area": {"items": same_area_items, "more": same_area_more},
+            "series": _series_for(conn, base),
         }
     finally:
         conn.close()
@@ -5752,6 +5926,30 @@ def add_note_tags(note_id, tags, added_by="owner", db_path=None):
     finally:
         conn.close()
     return out
+
+
+def set_note_type(note_id, note_type, db_path=None):
+    """Reclassify a note (note | playbook | wiki) without bumping `updated_at`.
+
+    Same reasoning as `add_note_tags`: putting the long-unused `type` to work
+    across dozens of imported notes is structural, not the owner rewriting them,
+    and bumping the stamp would reorder every list in the Library.
+    """
+    if note_type not in NOTE_TYPES:
+        raise ValueError("invalid note type %r (one of %s)"
+                         % (note_type, ", ".join(NOTE_TYPES)))
+    conn = _connect(db_path)
+    try:
+        with conn:
+            row = conn.execute("SELECT type FROM notes WHERE id=?", (note_id,)).fetchone()
+            if row is None:
+                raise ValueError("no such note: %r" % note_id)
+            if row["type"] == note_type:
+                return note_type
+            conn.execute("UPDATE notes SET type=? WHERE id=?", (note_type, note_id))
+    finally:
+        conn.close()
+    return note_type
 
 
 def rename_tag(old, new, db_path=None):
