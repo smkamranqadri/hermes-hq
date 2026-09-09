@@ -1,6 +1,6 @@
 # Library Reconcile — make the system before importing the rest
 
-**Status:** slice 1 SHIPPED 2026-09-09 (`d9fbc71`); **slice 2 (items 5–8) SHIPPED 2026-09-09**. Item 9 remains. Owner-interviewed in session after a full audit of all 295 notes. Items 1–4 are the first slice.
+**Status:** slice 1 SHIPPED 2026-09-09 (`d9fbc71`); **slice 2 (items 5–8) SHIPPED 2026-09-09**; **item 9 SHIPPED 2026-09-09**. The plan is COMPLETE. Owner-interviewed in session after a full audit of all 295 notes. Items 1–4 are the first slice.
 **Parent:** `intent/ImportPlan.md` (waves 4–5 are HELD until this lands — owner: *"before adding more notes, I want to reconcile these first and make proper system, then new migration can go better instead of dumping"*).
 **Work mode:** Standard for items 1–4 (no schema change), then re-plan 5–8.
 
@@ -53,9 +53,21 @@ Measured output: **186 notes tagged**, vocabulary `brightlane` 67, `tutorial` 45
 7. **Areas relate two ways** (owner chose both). `areas.parent_id` had existed unused since the schema was written — `update_area` now sets it, refusing self-parenting, nesting under a sub-area, and any move that would make three levels. New `area_links` table for **affinity**, stored once per pair with the lower id first (a CHECK enforces it) so "Work relates to Career" and "Career relates to Work" cannot drift apart. `GET/POST/DELETE /api/area/{id}/relations`, and an `AreaRelationsBar` on the area view that both shows and EDITS them — without the editor the feature would have shipped dead, since there were 0 relations.
 8. **Superseded twins marked, not merged.** One `note_links` row per pair from the archived copy to the live one; `related_notes` resolves links in both directions, so each note now names the other. **No content was merged and nothing was destroyed** — the audit had already shown none of the 16 pairs needs rescuing.
 
-## Later (re-plan)
+## Item 9 — todo notes normalized (SHIPPED 2026-09-09)
 
-9. **Todo notes** — 8 notes of numbered lists; decide with the owner whether to normalize to checkboxes or leave as prose.
+The 4 ACTIVE todo notes now carry real checkboxes: **#238 Old Todo 51, #240 Personal Todo 58, #247 Todo 80, #249 Work Todo 29 — 218 in total.** The archived twins were left alone: they are historical snapshots already linked to their live copy by item 8, so rewriting them buys nothing.
+
+Rules, because this edits the owner's own words:
+- **Item text is preserved character for character** — only the marker changes. Verified per note by token diff: the only tokens lost are the list ORDINALS themselves, **zero non-digit tokens**, and every code fence count is identical before and after.
+- **Nothing is ever marked done.** Completion is not inferrable from prose, so every item lands unchecked even where the text reads "done …". The words still say it; the owner ticks what is finished.
+- A top-level number whose children are indented is a **grouping**, not a todo — `Todo` is organized by person (`the owner`, `Support Task`, `Person A`, `personal`, `person-b`, `person-c`), and those became bold headings.
+- Blank-line-separated prose notes treat a **paragraph** as one item, so a wrapped line does not become two half-checkboxes.
+
+**Two defects the verification caught, both from actually looking rather than trusting the head of the output:**
+1. The lookahead that detects a grouping required the child to have TEXT, but the owner's list ends with headings whose sub-item is a bare `1. ` placeholder — so `Support Task`, `Person A`, `personal`, `person-b` and `person-c` were turned into checkboxes instead of headings.
+2. **Preserving tab indentation broke rendering entirely.** A tab-indented line is an indented CODE BLOCK in markdown, so #247 first rendered **0 checkboxes and showed raw `- [ ]`** while the flat #249 rendered 29. Indentation is now dropped and the grouping is carried by the heading, with a blank line after it so a fresh list starts. Restored from the `note_revisions` snapshot and re-applied.
+
+Live at 390×844: #238 50, #240 58, #247 79, #249 29 rendered checkboxes, no raw `- [ ]` visible on any of them, person headings intact, `scrollWidth` 390, 0 page errors. (Rendered counts trail the written ones by the handful of EMPTY placeholder items that came from the source's own bare `1. ` slots.) `note_revisions` holds the pre-edit body of every note touched — that is the undo path.
 
 ## Acceptance (slice 1)
 
