@@ -8,6 +8,7 @@ Stdlib only. Reads project data from the DB (single source of truth).
 import argparse
 import os
 import sys
+import time
 
 try:
     from core import wm_store as store
@@ -624,16 +625,33 @@ def _note_line(n, pending_ids):
 
 
 def cmd_note_import(args):
-    """OWNER-ONLY. Import one dump. Defaults to a dry run: --apply writes."""
+    """OWNER-ONLY. Import one dump. Defaults to a dry run: --apply writes.
+
+    `export` is the restore path (Phase 4 slice A): --root is the unzipped
+    export itself, not a parent holding a folder of that name.
+    """
     from backend import notes_import as ni
+    if args.source == ni.EXPORT:
+        if not os.path.isdir(args.root):
+            _p("error: no directory at %s" % args.root)
+            return 1
+        res = ni.import_export(args.root, store, dry_run=not args.apply,
+                               with_attachments=not args.no_attachments,
+                               limit=args.limit)
+        return _print_import_result(res, args)
     if args.source not in ni.SOURCES:
-        _p("error: unknown source %r (one of %s)" % (args.source, ", ".join(ni.SOURCES)))
+        _p("error: unknown source %r (one of %s)"
+           % (args.source, ", ".join(ni.SOURCES + (ni.EXPORT,))))
         return 1
     if not os.path.isdir(os.path.join(args.root, args.source)):
         _p("error: no dump at %s" % os.path.join(args.root, args.source))
         return 1
     res = ni.import_source(args.root, args.source, store, dry_run=not args.apply,
                            with_attachments=not args.no_attachments, limit=args.limit)
+    return _print_import_result(res, args)
+
+
+def _print_import_result(res, args):
     p = res["planned"]
     # Count what ACTUALLY happened, not what the plan said before the
     # idempotency check — on a re-run those differ, and printing the plan would
@@ -682,6 +700,31 @@ def cmd_note_import(args):
     if not args.apply:
         _p("Re-run with --apply to write. The raw dump is never modified.")
     return 1 if res["errors"] else 0
+
+
+def cmd_brain_export(args):
+    """OWNER-ONLY. Write the whole library to a markdown zip."""
+    from backend import notes_export as nx
+    out = args.out or os.path.join(
+        store.hq_home(), "exports",
+        "brain-%s.zip" % time.strftime("%Y%m%d-%H%M%S"))
+    st = nx.export_zip(store, out, with_attachments=not args.no_attachments)
+    _p("wrote %s" % out)
+    _p("  %-14s %5d   (%s)" % ("notes", st["notes"],
+                               " · ".join("%s %d" % (k, v) for k, v in
+                                          sorted(st["by_status"].items()))))
+    _p("  %-14s %5d" % ("thoughts", st["entries"]))
+    _p("  %-14s %5d   (%.1f MB)" % ("attachments", st["attachments"],
+                                    st["attachment_bytes"] / 1e6))
+    _p("  %-14s %5d" % ("links", st["links"]))
+    _p("  %-14s %5d areas · %d tags" % ("vocabulary", st["areas"], st["tags"]))
+    _p("  %-14s %5.1f MB in %.2fs" % ("zip", st["zip_bytes"] / 1e6, st["seconds"]))
+    for m in st["missing_attachments"]:
+        _p("  WARN  note #%s: bytes missing on disk for %s"
+           % (m["note_id"], m["stored_name"]))
+    for w in st.get("warnings") or []:
+        _p("  WARN  %s" % w)
+    return 0
 
 
 def cmd_note_quarantine(args):
@@ -1348,9 +1391,10 @@ def build_parser():
     bim_sub = bim.add_subparsers(dest="sub", required=True)
     bir = bim_sub.add_parser("run", help="import one dump")
     bir.add_argument("source", help="focus | old-hermes | obsidian | "
-                                    "apple-notes | keep")
+                                    "apple-notes | keep | export (restore)")
     bir.add_argument("--root", default="/opt/data/notes-dump",
-                     help="dump root (default /opt/data/notes-dump)")
+                     help="dump root (default /opt/data/notes-dump); for "
+                          "`export` this IS the unzipped export directory")
     bir.add_argument("--apply", action="store_true",
                      help="actually write; without it nothing is created")
     bir.add_argument("--limit", type=int, default=None,
@@ -1361,6 +1405,18 @@ def build_parser():
     biq = bim_sub.add_parser("quarantine", help="units held back for carrying key "
                                                 "material (never their bytes)")
     biq.set_defaults(fn=cmd_note_quarantine)
+
+    # Phase 4 slice A. Same reasoning as brain-import: NOT under `wm note`,
+    # which is the librarian's read-only surface. An export is the whole
+    # library in one file and agents have no business producing one.
+    bex = sub.add_parser("brain-export",
+                         help="OWNER-ONLY: write the whole Second Brain to a "
+                              "markdown zip (Obsidian-readable, re-importable)")
+    bex.add_argument("--out", default=None,
+                     help="zip path (default <hq_home>/exports/brain-<stamp>.zip)")
+    bex.add_argument("--no-attachments", dest="no_attachments", action="store_true",
+                     help="notes only — skip the attachment bytes")
+    bex.set_defaults(fn=cmd_brain_export)
 
     sub.add_parser("status", help="Grouped text readout").set_defaults(
         fn=cmd_status)

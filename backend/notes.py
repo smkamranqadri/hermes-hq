@@ -7,6 +7,7 @@ agents must never gain a direct note write path. ValueError from the store
 becomes 409 with the store's own message (same contract as writes.py).
 """
 import os
+import time
 
 from fastapi import APIRouter, File, Form, HTTPException, Query, UploadFile
 from fastapi.responses import FileResponse
@@ -421,6 +422,48 @@ def read_attachment(attachment_id: int):
     return FileResponse(path, media_type=a["mime"] or "application/octet-stream",
                         headers={"Content-Disposition":
                                  'inline; filename="%s"' % name.replace('"', "")})
+
+
+# ---- export (Phase 4 slice A) -------------------------------------------
+
+@router.get("/brain/export.zip")
+def export_brain(attachments: bool = True):
+    """The whole library as a markdown zip: Obsidian-readable and, by the
+    owner's 2026-09-10 decision, re-importable through `wm brain-import run
+    export`. Owner-only like every route in this file — an agent has no
+    session, and this one hands over the entire second brain in one file.
+
+    Written to a temp file and deleted after the response: the live library is
+    ~31 MB of attachments, so building it in memory to hand back a byte string
+    would spike the whole service, and keeping every export would fill the disk
+    a copy at a time.
+    """
+    import tempfile
+
+    from starlette.background import BackgroundTask
+
+    from backend import notes_export as nx
+
+    fd, path = tempfile.mkstemp(prefix="brain-export-", suffix=".zip",
+                                dir=os.path.join(store.hq_home(), "tmp")
+                                if os.path.isdir(os.path.join(store.hq_home(), "tmp"))
+                                else None)
+    os.close(fd)
+    try:
+        nx.export_zip(store, path, db_path=_db(), with_attachments=attachments)
+    except Exception:
+        _unlink(path)
+        raise
+    name = "hermes-brain-%s.zip" % time.strftime("%Y%m%d-%H%M%S")
+    return FileResponse(path, media_type="application/zip", filename=name,
+                        background=BackgroundTask(_unlink, path))
+
+
+def _unlink(path):
+    try:
+        os.remove(path)
+    except OSError:
+        pass
 
 
 @router.delete("/attachment/{attachment_id}")

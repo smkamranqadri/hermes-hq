@@ -21,6 +21,7 @@ The raw dumps are treated as immutable — nothing here ever writes to them.
 """
 import hashlib
 import html
+import json
 import os
 import re
 
@@ -944,4 +945,406 @@ def _attach(store, note_id, unit, res, db_path=None):
         except (OSError, ValueError) as e:
             res["errors"].append("%s attachment %s: %s"
                                  % (unit.ident, os.path.basename(path), e))
+    return n
+
+
+# =========================================================================
+# Phase 4 slice A — restoring an export (intent/Phase4Plan.md)
+#
+# The owner chose "readable AND provably re-importable", which means the round
+# trip runs through THIS module rather than a test-only reader: the zip is the
+# library's real backup, so the thing that reads it has to be the thing that
+# ships.
+#
+# Kept apart from the five dump readers on purpose. A dump is other people's
+# data being interpreted — classified, deduped, auto-archived, quarantined. An
+# export is OUR data coming home, where every one of those judgements has
+# already been made and re-applying them would silently drop notes: the library
+# legitimately holds byte-identical archived twins that `DUPLICATE` would eat.
+# =========================================================================
+
+EXPORT = "export"                  # deliberately NOT in SOURCES: that tuple is
+                                   # the dump baseline the analyzer reconciles.
+
+
+def _yaml_lite(text):
+    """Parse the frontmatter `backend/notes_export.py` writes, and only that.
+
+    Scalars, double-quoted strings with `\\"` and `\\\\` escapes, and flow
+    sequences of the same. `split_frontmatter` cannot be reused here — it hands
+    back raw strings with the quotes stripped and no unescaping, which turns a
+    title containing a quote into a different title.
+    """
+    out = {}
+    for line in (text or "").splitlines():
+        line = line.rstrip()
+        if not line or line.lstrip().startswith("#") or ":" not in line:
+            continue
+        k, _, v = line.partition(":")
+        out[k.strip()] = _yaml_value(v.strip())
+    return out
+
+
+def _yaml_value(v):
+    if v.startswith("[") and v.endswith("]"):
+        return [_yaml_value(p.strip()) for p in _split_flow(v[1:-1]) if p.strip()]
+    if len(v) >= 2 and v[0] == v[-1] == '"':
+        return _unescape(v[1:-1])
+    if len(v) >= 2 and v[0] == v[-1] == "'":
+        return v[1:-1]
+    if v in ("null", "~", ""):
+        return None
+    if v == "true":
+        return True
+    if v == "false":
+        return False
+    if re.fullmatch(r"-?\d+", v):
+        return int(v)
+    return v
+
+
+def _split_flow(s):
+    """Split a flow sequence on commas that are NOT inside a quoted string."""
+    parts, buf, in_q, esc = [], [], False, False
+    for ch in s:
+        if esc:
+            buf.append(ch)
+            esc = False
+            continue
+        if ch == "\\" and in_q:
+            buf.append(ch)
+            esc = True
+            continue
+        if ch == '"':
+            in_q = not in_q
+            buf.append(ch)
+            continue
+        if ch == "," and not in_q:
+            parts.append("".join(buf))
+            buf = []
+            continue
+        buf.append(ch)
+    parts.append("".join(buf))
+    return parts
+
+
+def _unescape(s):
+    out, esc = [], False
+    for ch in s:
+        if esc:
+            out.append(ch)
+            esc = False
+        elif ch == "\\":
+            esc = True
+        else:
+            out.append(ch)
+    return "".join(out)
+
+
+def _split_document(text):
+    """(body, thought list) from everything below the frontmatter.
+
+    The body is returned byte-for-byte: the export writes its Thoughts and
+    attachment blocks BELOW a delimiter comment precisely so a restore can hand
+    back exactly what the owner typed.
+    """
+    from backend import notes_export as nx
+    cut = len(text)
+    for mark in (nx.THOUGHTS_MARK, nx.ATTACH_MARK):
+        i = text.find("\n" + mark)
+        if i != -1:
+            cut = min(cut, i)
+    body = text[:cut]
+    thoughts = []
+    ti = text.find("\n" + nx.THOUGHTS_MARK)
+    if ti != -1:
+        rest = text[ti + len(nx.THOUGHTS_MARK) + 1:]
+        ai = rest.find("\n" + nx.ATTACH_MARK)
+        if ai != -1:
+            rest = rest[:ai]
+        cur_ts, cur = None, []
+        for line in rest.splitlines():
+            m = nx.THOUGHT_HEAD.match(line)
+            if m:
+                if cur_ts is not None or cur:
+                    thoughts.append((cur_ts, "\n".join(cur).strip("\n")))
+                cur_ts, cur = m.group(1), []
+                continue
+            cur.append(line)
+        if cur_ts is not None or cur:
+            thoughts.append((cur_ts, "\n".join(cur).strip("\n")))
+    return body, [(ts, b) for ts, b in thoughts if b.strip()]
+
+
+def read_export(root, source=EXPORT):
+    """Every note file in an unzipped export, as Units carrying their own
+    frontmatter. `_hermes/` and the README are structure, not notes."""
+    from backend import notes_export as nx
+    manifest = read_export_manifest(root)
+    attach_meta = manifest.get("attachments") or {}
+    units = []
+    for dirpath, dirnames, filenames in sorted(os.walk(root)):
+        dirnames.sort()
+        dirnames[:] = [d for d in dirnames if d not in ("_hermes", "attachments")]
+        for name in sorted(filenames):
+            if not name.endswith(".md") or name == "README.md":
+                continue
+            path = os.path.join(dirpath, name)
+            try:
+                raw = open(path, encoding="utf-8").read()
+            except OSError:
+                continue
+            m = _FM.match(raw)
+            if not m:
+                continue                      # not one of ours; never guessed at
+            meta = _yaml_lite(m.group(1))
+            body, thoughts = _split_document(raw[m.end():])
+            rel = os.path.relpath(path, root)
+            nid = meta.get("id")
+            title = meta.get("title") or os.path.basename(name)[:-3]
+            # Identity for the idempotency check: the note's ORIGINAL
+            # content_hash when it had one, else a stable per-note id. Either
+            # way a second restore of the same zip creates nothing.
+            meta["uuid"] = str(meta.get("content_hash") or "%s-note-%s" % (source, nid))
+            files = []
+            for a in attach_meta.get(str(nid), []):
+                p = os.path.join(os.path.dirname(path), "attachments", a["file"])
+                if os.path.exists(p):
+                    files.append(p)
+                    a["path"] = p
+            meta["attachments"] = files
+            meta["attachment_meta"] = attach_meta.get(str(nid), [])
+            meta["thoughts"] = thoughts
+            u = Unit(source, rel, title, body, meta=meta)
+            u.decision, u.reason = LIBRARIAN, "restore"
+            units.append(u)
+    return units
+
+
+def read_export_manifest(root):
+    from backend import notes_export as nx
+    path = os.path.join(root, nx.MANIFEST_PATH)
+    try:
+        with open(path, encoding="utf-8") as fh:
+            return json.load(fh)
+    except (OSError, ValueError):
+        return {}
+
+
+def _restore_areas_and_tags(root, store, db_path=None):
+    """Create every area the export knew about and re-register the whole tag
+    vocabulary BEFORE any note lands, so filings resolve and the closed
+    taxonomy comes back at full size rather than shrinking to tags in use."""
+    manifest = read_export_manifest(root)
+    made = []
+    by_name = {a["name"].strip().lower(): a["id"]
+               for a in store.list_areas(db_path=db_path, archived=True)}
+    for a in manifest.get("areas") or []:
+        key = (a.get("name") or "").strip().lower()
+        if not key or key in by_name:
+            continue
+        parent = by_name.get((a.get("parent") or "").strip().lower())
+        aid = store.create_area(a["name"], parent_id=parent,
+                                description=a.get("description"), db_path=db_path)
+        by_name[key] = aid
+        made.append(a["name"])
+        if a.get("archived"):
+            store.update_area(aid, archived=True, db_path=db_path)
+    tags = [t.get("tag") for t in (manifest.get("tags") or []) if t.get("tag")]
+    if tags:
+        store.register_tags(tags, added_by="import", db_path=db_path)
+    return made, len(tags)
+
+
+def plan_export_unit(unit, areas_by_name, projects_by_slug):
+    """A restore honours the frontmatter and derives NOTHING.
+
+    `folder_tags` must not run here: it would mint `areas`, `archive` and
+    `inbox` tags out of the export's own PARA folders — the exact origin-tag
+    mistake the owner had stripped from the library on 2026-09-08.
+    """
+    meta = unit.meta
+    status = (meta.get("status") or "inbox").strip().lower()
+    area_id = areas_by_name.get((meta.get("area") or "").strip().lower())
+    project_id = projects_by_slug.get((meta.get("project") or "").strip().lower())
+    tags = [t for t in (meta.get("tags") or []) if isinstance(t, str) and t.strip()]
+    p = Plan(unit, CREATE, status=status, area_id=area_id, tags=tags,
+             reason="restore")
+    p.target = None
+    return p, project_id
+
+
+def import_export(root, store, db_path=None, dry_run=True, with_attachments=True,
+                  limit=None):
+    """Restore an unzipped export. Returns the same result shape as
+    `import_source` so one CLI printer serves both.
+
+    REFUSES a library that already holds notes the manifest does not account
+    for. Restoring a backup on top of a live library is not a half-safe
+    operation: without this a stray `--apply` would clone all 945 notes.
+    """
+    from backend import notes_export as nx
+    units = read_export(root, EXPORT)
+    res = {"source": EXPORT, "dry_run": bool(dry_run),
+           "planned": {}, "created": [], "quarantined": [], "already_imported": 0,
+           "attachments": 0, "errors": [], "appended": [], "appended_already": 0,
+           "append_fallback": [], "merge_needed": [], "warnings": [],
+           "entries": 0, "links": 0, "areas_created": []}
+    if not units:
+        res["warnings"].append("no note files under %s — is this an export?" % root)
+        res["planned"] = plan_summary([])
+        return res
+
+    known = {u.sha256 for u in units}
+    existing = store.list_notes(limit=100000, db_path=db_path)
+    stranger = [n for n in existing if (n.get("content_hash") or "") not in known]
+    if stranger:
+        res["errors"].append(
+            "refusing: this library holds %d note(s) the export does not account "
+            "for (e.g. #%s %r). Restore into an EMPTY library."
+            % (len(stranger), stranger[0]["id"], stranger[0]["title"][:60]))
+        res["planned"] = plan_summary([])
+        return res
+
+    if not dry_run:
+        made, _n = _restore_areas_and_tags(root, store, db_path=db_path)
+        res["areas_created"] = made
+    areas = _areas_by_name(store, db_path=db_path)
+    projects = {p["slug"].strip().lower(): p["id"]
+                for p in store.list_projects(db_path=db_path)}
+    plans = []
+    for u in units:
+        p, project_id = plan_export_unit(u, areas, projects)
+        if p.status == "active" and p.area_id is None and project_id is None:
+            # The home rule refuses a homeless active note, and an export
+            # restored onto a box that does not have the linked PROJECT would
+            # otherwise fail the whole note. Land it in the inbox and say so —
+            # a note in the wrong tray is recoverable, a note that errored out
+            # of the restore is not.
+            res["warnings"].append(
+                "note #%s (%r) was filed to %s, which does not exist here — "
+                "restored to the inbox"
+                % (u.meta.get("id"), (u.title or "")[:50],
+                   u.meta.get("project") and "project %s" % u.meta["project"]
+                   or "area %s" % u.meta.get("area")))
+            p.status = "inbox"
+        plans.append((p, project_id))
+    if limit is not None:
+        plans = plans[:int(limit)]
+    res["planned"] = plan_summary([p for p, _ in plans])
+
+    id_map = {}                     # old note id -> new note id
+    for p, project_id in plans:
+        u = p.unit
+        found = store.note_by_content_hash(u.sha256, db_path=db_path)
+        if found is not None:
+            res["already_imported"] += 1
+            id_map[u.meta.get("id")] = found
+            continue
+        if dry_run:
+            res["created"].append((u.ident, p.status))
+            continue
+        nid = _restore_note(p, project_id, store, res, db_path=db_path)
+        if nid is not None:
+            id_map[u.meta.get("id")] = nid
+            if with_attachments:
+                res["attachments"] += _restore_attachments(u, nid, store, res,
+                                                           db_path=db_path)
+            _restore_provenance(u, nid, store, db_path=db_path)
+    if not dry_run:
+        res["links"] = _restore_links(plans, id_map, store, res, db_path=db_path)
+    return res
+
+
+def _restore_note(plan, project_id, store, res, db_path=None):
+    u = plan.unit
+    meta = u.meta
+    try:
+        nid = store.create_note(
+            _clean_title(u), body=u.body,
+            note_type=(meta.get("type") or "note"),
+            status=plan.status, area_id=plan.area_id, project_id=project_id,
+            tags=plan.tags, authored_by=(meta.get("authored_by") or "import"),
+            content_hash=u.sha256, db_path=db_path)
+    except ValueError as e:
+        res["errors"].append("%s: %s" % (u.ident, e))
+        return None
+    res["created"].append((u.ident, plan.status))
+    for ts, body in meta.get("thoughts") or []:
+        try:
+            from backend import notes_export as nx
+            store.add_note_entry(nid, body, created_at=nx.parse_iso(ts),
+                                 db_path=db_path)
+            res["entries"] += 1
+        except ValueError as e:
+            res["errors"].append("%s thought: %s" % (u.ident, e))
+    return nid
+
+
+def _restore_attachments(unit, note_id, store, res, db_path=None):
+    n = 0
+    for a in unit.meta.get("attachment_meta") or []:
+        path = a.get("path")
+        if not path:
+            res["errors"].append("%s: attachment %s missing from the zip"
+                                 % (unit.ident, a.get("file")))
+            continue
+        try:
+            with open(path, "rb") as fh:
+                data = fh.read()
+            store.add_attachment(note_id, data, kind=(a.get("kind") or "photo"),
+                                 mime=a.get("mime"), orig_name=a.get("orig_name"),
+                                 duration_ms=a.get("duration_ms"), db_path=db_path)
+            n += 1
+        except (OSError, ValueError) as e:
+            res["errors"].append("%s attachment %s: %s"
+                                 % (unit.ident, a.get("file"), e))
+    return n
+
+
+def _restore_provenance(unit, note_id, store, db_path=None):
+    """Timestamps LAST: adding a Thought or an attachment stamps `updated_at`,
+    so restoring the dates before them would leave every note reading as
+    edited at restore time."""
+    from backend import notes_export as nx
+    meta = unit.meta
+    try:
+        store.set_note_provenance(
+            note_id,
+            created_at=nx.parse_iso(meta.get("created")),
+            updated_at=nx.parse_iso(meta.get("updated")),
+            pinned=bool(meta.get("pinned")), disputed=bool(meta.get("disputed")),
+            db_path=db_path)
+    except ValueError:
+        pass
+
+
+def _restore_links(plans, id_map, store, res, db_path=None):
+    """Note links are remapped through the new ids; task and schedule links are
+    restored only when that row exists — an export of the library carries no
+    tasks, so a restore into a fresh box legitimately has nowhere to point."""
+    n = 0
+    for p, _project_id in plans:
+        src = id_map.get(p.unit.meta.get("id"))
+        if src is None:
+            continue
+        for spec in p.unit.meta.get("links") or []:
+            kind, _, target = str(spec).partition(":")
+            if not target.isdigit():
+                continue
+            tid = int(target)
+            if kind == "note":
+                tid = id_map.get(tid)
+                if tid is None:
+                    res["warnings"].append(
+                        "note #%s links to note %s, which is not in this export"
+                        % (p.unit.meta.get("id"), target))
+                    continue
+            try:
+                store.link_note(src, kind, tid, db_path=db_path)
+                n += 1
+            except ValueError:
+                res["warnings"].append(
+                    "note #%s: %s %s no longer exists — link dropped"
+                    % (p.unit.meta.get("id"), kind, target))
     return n

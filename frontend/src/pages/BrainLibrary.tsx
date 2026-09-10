@@ -170,6 +170,12 @@ export function BrainLibrary() {
       <PageHeader crumb="second-brain // library" title="Library" right={
         <div className="flex flex-wrap items-center gap-2">
           <BrainSubNav inbox={inbox} review={review} />
+          {/* A plain anchor, not a fetch-to-blob: the export is ~31 MB of
+            * attachments and the browser streams that straight to disk, where
+            * a blob would hold the whole library in the phone's memory first. */}
+          <a href="/api/brain/export.zip" download
+             title="Download the whole library as a markdown zip (opens in Obsidian). Large libraries take a few seconds."
+             className="rounded-lg border border-line px-3 py-1.5 text-[13px] text-muted hover:text-fg">Export</a>
           <form className="relative" onSubmit={e => { e.preventDefault(); const n = new URLSearchParams(sp); draft ? n.set('q', draft) : n.delete('q'); setSp(n, { replace: true }) }}>
             {/* Search NARROWS the current selection, so the placeholder says
               * where it is looking. Escape and the × both clear it and leave

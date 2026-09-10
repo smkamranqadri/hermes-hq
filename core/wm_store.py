@@ -5653,8 +5653,13 @@ def update_note(note_id, edited_by="owner", note_type=None, status=None,
     return get_note(note_id, db_path=db_path)
 
 
-def add_note_entry(note_id, body, db_path=None):
-    """Append a dated entry to a note (the 1:1 append-log pattern)."""
+def add_note_entry(note_id, body, created_at=None, db_path=None):
+    """Append a dated entry to a note (the 1:1 append-log pattern).
+
+    `created_at` exists for ONE caller: Phase 4's export restore, which has to
+    put a Thought back on the date it was written. Every other caller leaves it
+    None and gets `now`, which is what an append log means.
+    """
     if not isinstance(body, str) or not body.strip():
         raise ValueError("entry body is required")
     conn = _connect(db_path)
@@ -5665,7 +5670,8 @@ def add_note_entry(note_id, body, db_path=None):
             now = time.time()
             cur = conn.execute(
                 "INSERT INTO note_entries(note_id, body, created_at) VALUES(?,?,?)",
-                (note_id, body.strip(), now))
+                (note_id, body.strip(),
+                 now if created_at is None else float(created_at)))
             conn.execute("UPDATE notes SET updated_at=? WHERE id=?", (now, note_id))
             _fts_sync(conn, note_id)
             return cur.lastrowid
@@ -5705,6 +5711,72 @@ def notes_for_task(task_id, db_path=None):
             "SELECT n.* FROM notes n JOIN note_links l ON l.note_id = n.id "
             "WHERE l.kind='task' AND l.target_id=? ORDER BY n.id", (task_id,)).fetchall()]
         return _with_project_names(conn, rows)
+    finally:
+        conn.close()
+
+
+def set_note_provenance(note_id, created_at=None, updated_at=None,
+                        pinned=None, disputed=None, db_path=None):
+    """Restore the columns `create_note` stamps for itself.
+
+    Phase 4's export restore is the only caller and the name says so: these are
+    not fields a UI edits. Content is untouched, so the FTS row cannot go stale
+    and is deliberately not resynced. Named fields only — a None means "leave
+    it alone", so a restore that knows nothing about `pinned` cannot clear it.
+    """
+    sets, vals = [], []
+    for col, val in (("created_at", created_at), ("updated_at", updated_at)):
+        if val is not None:
+            sets.append("%s=?" % col)
+            vals.append(float(val))
+    for col, val in (("pinned", pinned), ("disputed", disputed)):
+        if val is not None:
+            sets.append("%s=?" % col)
+            vals.append(1 if val else 0)
+    if not sets:
+        raise ValueError("nothing to restore")
+    conn = _connect(db_path)
+    try:
+        with conn:
+            if conn.execute("SELECT 1 FROM notes WHERE id=?",
+                            (note_id,)).fetchone() is None:
+                raise ValueError("no such note: %r" % note_id)
+            conn.execute("UPDATE notes SET %s WHERE id=?" % ", ".join(sets),
+                         vals + [note_id])
+    finally:
+        conn.close()
+
+
+def export_snapshot(db_path=None):
+    """Everything Phase 4's export needs, in a handful of queries.
+
+    The export walks 945 notes; calling `get_note` per row would open 945
+    connections and issue five queries each. This reads each table once and
+    groups in Python, so the whole snapshot costs one connection.
+
+    Deliberately raw: rows come out as they sit in the DB (tags decoded, and
+    nothing filtered) because an export that hid archived notes, retired areas
+    or a note in a retired area would not be a backup.
+    """
+    conn = _connect(db_path)
+    try:
+        notes = [_decode_note(r) for r in conn.execute(
+            "SELECT * FROM notes ORDER BY id")]
+        entries, links, attachments = {}, {}, {}
+        for r in conn.execute("SELECT * FROM note_entries ORDER BY note_id, id"):
+            entries.setdefault(r["note_id"], []).append(dict(r))
+        for r in conn.execute("SELECT * FROM note_links ORDER BY note_id, created_at"):
+            links.setdefault(r["note_id"], []).append(dict(r))
+        for r in conn.execute("SELECT * FROM note_attachments ORDER BY note_id, id"):
+            attachments.setdefault(r["note_id"], []).append(_decode_attachment(r))
+        areas = [dict(r) for r in conn.execute("SELECT * FROM areas ORDER BY id")]
+        projects = [dict(r) for r in conn.execute(
+            "SELECT id, slug, name FROM projects ORDER BY id")]
+        tags = [dict(r) for r in conn.execute(
+            "SELECT tag, added_by FROM note_tag_taxonomy ORDER BY tag")]
+        return {"notes": notes, "entries": entries, "links": links,
+                "attachments": attachments, "areas": areas,
+                "projects": projects, "tags": tags}
     finally:
         conn.close()
 
@@ -5880,6 +5952,21 @@ def _register_tags(conn, tags, added_by):
         if s:
             conn.execute("INSERT OR IGNORE INTO note_tag_taxonomy(tag, added_by, created_at) "
                          "VALUES(?,?,?)", (s, added_by, now))
+
+
+def register_tags(tags, added_by="owner", db_path=None):
+    """Add tags to the closed taxonomy without touching any note.
+
+    The taxonomy legitimately holds tags no note carries right now (59 of them
+    live, against fewer in use), so a restore that only registered tags via
+    `create_note` would quietly shrink the vocabulary.
+    """
+    conn = _connect(db_path)
+    try:
+        with conn:
+            _register_tags(conn, tags, added_by)
+    finally:
+        conn.close()
 
 
 def _taxonomy_tags(conn):
