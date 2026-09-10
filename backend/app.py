@@ -12,6 +12,7 @@ from backend.api import router as api_router
 from backend.writes import router as write_router, make_auth_routes
 from backend.files import router as files_router, artifacts_router
 from backend import cron, gateways, jobs, mcp, memory, notes, schedules, skills, terminal
+from backend.vault_api import router as vault_router
 from backend.dispatcher import DispatcherLoop
 from core import wm_store
 
@@ -57,6 +58,7 @@ def create_app(dispatcher_enabled: bool = True, interval: float = 30.0, password
     app.include_router(schedules.router)
     app.include_router(cron.router)
     app.include_router(jobs.router)
+    app.include_router(vault_router)
     app.state.sessions = sessions
 
     @app.get("/api/health")

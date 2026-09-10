@@ -52,7 +52,14 @@ def make_auth_routes(sessions: A.Sessions, password: str):
 
     @r.post("/logout")
     def logout(request: Request, response: Response):
-        sessions.drop(request.cookies.get(A.COOKIE))
+        tok = request.cookies.get(A.COOKIE)
+        sessions.drop(tok)
+        # The vault re-seals with the session. The unlocked data key lives in
+        # process memory only (backend/vault.KEYS, never the session dict that
+        # Sessions._save() writes to disk), so this is the one place that has
+        # to forget it explicitly.
+        from backend import vault as V
+        V.KEYS.drop(tok)
         response.delete_cookie(A.COOKIE)
         return {"ok": True}
 

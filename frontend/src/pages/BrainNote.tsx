@@ -4,7 +4,7 @@
 import { useState } from 'react'
 import { Link, useLocation, useNavigate, useParams } from 'react-router-dom'
 import { useQueryClient } from '@tanstack/react-query'
-import { post, useNote, useRelatedNotes, when, type RelatedLinkItem, type RelatedNoteItem } from '../api'
+import { post, useNote, useRelatedNotes, useVaultMoveImpact, useVaultStatus, vaultMove, when, type RelatedLinkItem, type RelatedNoteItem } from '../api'
 import { GlassCard } from '../components/GlassCard'
 import { Markdown } from '../components/chat/Markdown'
 import { AttachToNote, DisputedChip, FileNoteModal, NewReminderFromNoteModal, NewTaskFromNoteModal, NoteAttachments, NoteRow, ProposalBanner, TYPE_TONE, PROVENANCE, PROVENANCE_HINT } from '../components/brain'
@@ -13,6 +13,8 @@ import { Chip, Crumbs, Empty, Label, Loading, Skeleton } from '../components/ui'
 import { useToast } from '../components/Toast'
 import { usePageTitle } from '../usePageTitle'
 import clsx from 'clsx'
+
+const LOCK = '\u{1F512}'
 
 function LinkedTargetRow({ item }: { item: RelatedLinkItem }) {
   return (
@@ -66,7 +68,13 @@ export function BrainNote() {
   // archiving returns the owner to the filtered list they came from,
   // instead of always bouncing to the unfiltered Library.
   const from = (loc.state as { from?: string } | null)?.from
-  const [modal, setModal] = useState<'file' | 'task' | 'reminder' | 'archive' | null>(null)
+  const [modal, setModal] = useState<'file' | 'task' | 'reminder' | 'archive' | 'vault' | null>(null)
+  const vault = useVaultStatus()
+  const [vaultErr, setVaultErr] = useState<string | null>(null)
+  // Computed server-side and shown BEFORE the owner commits: this is the only
+  // irreversible delete in hermes-hq, and "12 activity rows will be redacted"
+  // is exactly the number someone needs in order to say no.
+  const impact = useVaultMoveImpact(nid, modal === 'vault' && vault.data?.unlocked === true)
   const [editing, setEditing] = useState(false)
   const [bodyDraft, setBodyDraft] = useState('')
   const [entry, setEntry] = useState('')
@@ -90,6 +98,67 @@ export function BrainNote() {
       {modal === 'file' && <FileNoteModal n={n} onClose={() => setModal(null)} />}
       {modal === 'task' && <NewTaskFromNoteModal n={n} onClose={() => setModal(null)} />}
       {modal === 'reminder' && <NewReminderFromNoteModal n={n} onClose={() => setModal(null)} />}
+      {/* Move to vault: the ONE carve-out from archive-only. The copy has to
+          say plainly that this is not archiving — it is the only button in
+          the app that destroys the owner's own text. */}
+      {modal === 'vault' && (
+        vault.data?.unlocked ? (
+          <ConfirmModal title="Move to the vault"
+            confirmLabel={impact.data?.blocked ? 'Cannot be sealed yet' : 'Destroy the plaintext and seal it'}
+            busy={busy === 'vault'} disabled={impact.data?.blocked === true}
+            message={<>
+              <p>“{n.title}” is sealed into the vault with a passphrase the librarian does not have.</p>
+              <p className="mt-2 text-needsyou">This is not archiving. The note, its search index entry and every
+                revision snapshot are <strong>destroyed</strong> — this is the one place in hermes-hq where text is
+                really deleted, and it cannot be undone.</p>
+              <p className="mt-2 text-muted">Its area, tags and project do not come with it; the vault files nothing.</p>
+              {impact.isLoading && <p className="mt-2 text-xs text-muted">Working out what would be destroyed…</p>}
+              {impact.data && (
+                <div className="mt-3 rounded-lg border border-line bg-inset p-2 text-xs" data-vault-impact>
+                  <p className="font-mono text-[10px] uppercase tracking-wider text-muted">What this destroys</p>
+                  <ul className="mt-1 space-y-0.5 text-muted">
+                    <li>the note, its search-index entry and {impact.data.counts.revisions} revision{impact.data.counts.revisions === 1 ? '' : 's'}</li>
+                    {impact.data.counts.entries > 0 && <li>{impact.data.counts.entries} thought{impact.data.counts.entries === 1 ? '' : 's'}</li>}
+                    {impact.data.counts.attachments > 0 && <li>{impact.data.counts.attachments} attachment{impact.data.counts.attachments === 1 ? '' : 's'} (resealed in the vault, plaintext file removed)</li>}
+                    {impact.data.counts.proposals > 0 && <li>{impact.data.counts.proposals} librarian proposal{impact.data.counts.proposals === 1 ? '' : 's'}</li>}
+                    {impact.data.counts.activity > 0 && <li><strong className="text-needsyou">{impact.data.counts.activity}</strong> activity row{impact.data.counts.activity === 1 ? '' : 's'} redacted (the row stays, its text goes)</li>}
+                    {impact.data.counts.notifications > 0 && <li>{impact.data.counts.notifications} notification{impact.data.counts.notifications === 1 ? '' : 's'} redacted</li>}
+                  </ul>
+                  {impact.data.title_reach_note && <p className="mt-2 text-muted">{impact.data.title_reach_note}</p>}
+                </div>
+              )}
+              {impact.data?.blocked && <p className="mt-3 rounded-lg border border-needsyou/40 bg-needsyou/10 p-2 text-needsyou" data-vault-error>{impact.data.reason}</p>}
+              {vaultErr && vaultErr !== impact.data?.reason && (
+                <p className="mt-3 rounded-lg border border-error/40 bg-error/10 p-2 text-error" data-vault-error>{vaultErr}</p>
+              )}
+            </>}
+            onClose={() => { setModal(null); setVaultErr(null) }}
+            onConfirm={async () => {
+              // NOT via `act`: it swallows the error, so a REFUSED move
+              // (a linked task or reminder still carrying the title) would
+              // toast an error and then navigate to the vault as though it
+              // had worked. On a refusal the modal stays put and shows the
+              // engine's own sentence, which names the ids to deal with.
+              setBusy('vault'); setVaultErr(null)
+              try {
+                await vaultMove(n.id)
+                toast('Sealed into the vault — the plaintext is gone')
+                qc.invalidateQueries()
+                setModal(null); nav('/brain/vault', { replace: true })
+              } catch (e) {
+                setVaultErr(e instanceof Error ? e.message : String(e))
+              } finally { setBusy(null) }
+            }} />
+        ) : (
+          <ConfirmModal title="Unlock the vault first" confirmLabel="Go to the vault"
+            message={<>
+              <p>The vault is locked, so there is no key to seal this note with.</p>
+              <p className="mt-2 text-muted">Unlock it, then come back and move the note.</p>
+            </>}
+            onClose={() => setModal(null)}
+            onConfirm={() => { setModal(null); nav('/brain/vault') }} />
+        )
+      )}
       {modal === 'archive' && (
         <ConfirmModal title="Archive note" confirmLabel="Archive"
           message={`Archive “${n.title}”? It leaves the library views but stays searchable — nothing is deleted.`}
@@ -156,6 +225,12 @@ export function BrainNote() {
                     const status = homeless ? 'inbox' : 'active'
                     return <Btn kind="ghost" busy={busy === 'restore'} onClick={() => void act('restore', () => post(`/api/note/${n.id}/edit`, { status }), 'Restored')}>{homeless ? 'Restore to inbox' : 'Restore'}</Btn>
                   })()}
+              {/* Last in the row and never the primary action: it is the only
+                  destructive button in the app. */}
+              <Btn kind="ghost" data-move-to-vault onClick={() => setModal('vault')}
+                title="Seal this note in the private vault. The plaintext here is destroyed — this cannot be undone.">
+                {LOCK} Move to vault
+              </Btn>
             </div>
           </>
         )}

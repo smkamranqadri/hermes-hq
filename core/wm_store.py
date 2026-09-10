@@ -622,6 +622,85 @@ CREATE TABLE IF NOT EXISTS import_quarantine (
 CREATE UNIQUE INDEX IF NOT EXISTS idx_quarantine_unit
     ON import_quarantine(source, ident);
 
+-- Phase 4 slice B: the PRIVATE VAULT. A SEPARATE table, deliberately not a
+-- flag on `notes` — that is the whole design. Agent denial becomes
+-- STRUCTURAL: list_notes / search_notes / lint_library / related_notes / the
+-- proposal path / the `wm note` CLI group / the export all read `notes`, and
+-- a row that is not in `notes` is a row none of them can reach, whatever the
+-- prompt says. Nothing in this module reads or writes these tables; every
+-- read and write lives in backend/vault.py behind the passphrase.
+--
+-- Every user-visible field is a sealed BLOB (AES-GCM, nonce||ciphertext).
+-- What stays plaintext is only what a lock icon needs: an id and two dates.
+CREATE TABLE IF NOT EXISTS vault_notes (
+    id         INTEGER PRIMARY KEY,
+    title_enc  BLOB NOT NULL,
+    body_enc   BLOB NOT NULL,
+    kind       TEXT DEFAULT 'note',
+    created_at REAL,
+    updated_at REAL
+);
+
+-- Thoughts. Sealed the same way; no area, no tags, no project anywhere in
+-- this schema (owner decision: a row you cannot read is a row you cannot file).
+CREATE TABLE IF NOT EXISTS vault_entries (
+    id         INTEGER PRIMARY KEY,
+    note_id    INTEGER NOT NULL REFERENCES vault_notes(id) ON DELETE CASCADE,
+    body_enc   BLOB NOT NULL,
+    created_at REAL
+);
+
+-- Attachment BYTES live sealed IN the row, not on disk beside the library.
+-- A vault attachment written to <hq_home>/attachments would be a plaintext
+-- file the vault claims to have sealed; keeping the ciphertext in the DB
+-- means there is no second lifecycle to get wrong.
+CREATE TABLE IF NOT EXISTS vault_attachments (
+    id         INTEGER PRIMARY KEY,
+    note_id    INTEGER NOT NULL REFERENCES vault_notes(id) ON DELETE CASCADE,
+    kind       TEXT NOT NULL DEFAULT 'photo',
+    name_enc   BLOB,
+    mime_enc   BLOB,
+    blob_enc   BLOB NOT NULL,
+    bytes      INTEGER,                     -- ciphertext length, metadata only
+    created_at REAL
+);
+
+-- The wrapped data key. TWO scrypt wraps of the SAME random key, both stored
+-- here; there is no key file anywhere on disk. One is under the passphrase —
+-- the only wrap the API/web read path ever touches — and one is under a
+-- high-entropy RECOVERY CODE that is printed once at setup and stored nowhere.
+-- No HTTP route accepts the code; `wm vault recover` is its only consumer.
+-- (A server-held key FILE was the original design and was dropped: /opt/data
+-- is a virtiofs mount whose ownership is remapped per viewer, so an agent run
+-- reads a root-owned 0600 file there without obstacle. See backend/vault.py.)
+CREATE TABLE IF NOT EXISTS vault_meta (
+    key   TEXT PRIMARY KEY,
+    value TEXT
+);
+
+-- Move-to-vault is the ONE carve-out from archive-only (2026-09-07 rule holds
+-- everywhere else). It destroys the plaintext in `notes`, `notes_fts` and
+-- every `note_revisions` snapshot in one transaction. This row is what proves
+-- the deletion happened WITHOUT preserving the secret: the title is recorded
+-- as a sha256, never as text.
+CREATE TABLE IF NOT EXISTS vault_audit (
+    id            INTEGER PRIMARY KEY,
+    action        TEXT NOT NULL,        -- created | moved_in | drained | recovered | rewrapped
+    old_note_id   INTEGER,              -- the `notes` id that was destroyed
+    vault_note_id INTEGER,
+    title_sha256  TEXT,
+    revisions     INTEGER DEFAULT 0,    -- note_revisions rows destroyed
+    entries       INTEGER DEFAULT 0,
+    attachments   INTEGER DEFAULT 0,
+    links         INTEGER DEFAULT 0,
+    proposals     INTEGER DEFAULT 0,
+    detail        TEXT,
+    created_at    REAL
+);
+
+CREATE INDEX IF NOT EXISTS idx_vault_entries_note ON vault_entries(note_id);
+CREATE INDEX IF NOT EXISTS idx_vault_att_note     ON vault_attachments(note_id);
+
 CREATE INDEX IF NOT EXISTS idx_notes_status   ON notes(status);
 CREATE INDEX IF NOT EXISTS idx_notes_area     ON notes(area_id);
 CREATE INDEX IF NOT EXISTS idx_notes_project  ON notes(project_id);
@@ -751,6 +830,11 @@ def _migrate(conn):
         )""")
     conn.execute("CREATE UNIQUE INDEX IF NOT EXISTS idx_quarantine_unit "
                  "ON import_quarantine(source, ident)")
+    # Phase 4 slice B: `wm vault drain-quarantine` moves a held-back secret into
+    # the vault and stamps the row instead of deleting it — the quarantine
+    # ledger stays a permanent record of what the import refused to store.
+    if "drained_at" not in _table_columns(conn, "import_quarantine"):
+        conn.execute("ALTER TABLE import_quarantine ADD COLUMN drained_at REAL")
 
 
 def init_db(db_path=None):
@@ -4648,6 +4732,211 @@ def _fts_sync(conn, note_id):
     conn.execute(
         "INSERT INTO notes_fts(rowid, title, body, tags) VALUES(?,?,?,?)",
         (note_id, row["title"] or "", body, tags))
+
+
+# ---------------------------------------------------------------------------
+# Phase 4 slice B: the ONE carve-out from archive-only.
+# ---------------------------------------------------------------------------# A title is only chased through OTHER tables when it is distinctive enough
+# that finding it there means something. Round-2 review measured the cost of
+# not gating this: a note titled 'e' redacted EVERY row in the activity log
+# and a note titled 'Notes' deleted an unrelated "Notes from the analyst"
+# notification. The log is the owner's readable history of their own system,
+# and one button silently rewriting it is worse than the leak it prevents —
+# a title that generic is not a secret in the first place.
+#
+# (For the record: `check_integrity` filters `activity` on ACTION, never on
+# detail, so a redaction here does not break `wm check`. The damage measured
+# above was purely to what the owner can still read.)
+MIN_DISTINCTIVE_TITLE = 12
+
+# Single words long enough to pass the length test but far too ordinary to
+# chase. Not a spell-checker — just the shapes a real note title takes.
+COMMON_TITLE_WORDS = frozenset("""
+    presentation documentation introduction announcement conversation
+    considerations miscellaneous observations instructions requirements
+    reminders groceries shopping meetings thoughts questions references
+    scratchpad appointments assignments experiments
+""".split())
+
+
+def is_distinctive_title(title):
+    """Is this title specific enough to hunt for in tables that merely mention it?"""
+    t = (title or "").strip()
+    if len(t) < MIN_DISTINCTIVE_TITLE:
+        return False
+    return t.lower() not in COMMON_TITLE_WORDS
+
+
+def note_title_history(conn, note_id):
+    """Every title this note has EVER had: the current one plus each revision.
+
+    A note renamed after a task was graduated from it leaves the OLD title in
+    `tasks` and in that task's `task_create` activity row. `note_revisions` is
+    destroyed by this path, which settles the intent — old titles are meant to
+    die too, so they have to be hunted with the same reach as the current one.
+    """
+    out = []
+    row = conn.execute("SELECT title FROM notes WHERE id=?", (note_id,)).fetchone()
+    if row and row["title"]:
+        out.append(row["title"])
+    for r in conn.execute("SELECT DISTINCT title FROM note_revisions WHERE note_id=?",
+                          (note_id,)):
+        if r["title"] and r["title"] not in out:
+            out.append(r["title"])
+    return out
+
+
+def titleholders(conn, note_id, titles=None):
+    """Tasks and schedules whose own text carries ANY of this note's titles.
+
+    Three round-2 findings shaped this, all of which let the title survive in
+    plain sight while the move reported success:
+      (B) the object has NO `note_links` row — agent-created, imported, or the
+          link was pruned — so checking only linked objects missed it;
+      (C) the task title is a SHORTENED form of the note title ("AWS root
+          creds" from "AWS root creds for prod"), which a one-directional
+          `note_title in task_title` never sees;
+      (D) the note was RENAMED after the task was created, so the surviving
+          copy is an older title.
+    So: all tasks and all schedules, substring in BOTH directions, over every
+    title in the note's history. The reverse direction requires the OTHER
+    side to be distinctive too, or a task called "x" would match everything.
+    """
+    titles = [t for t in (titles or note_title_history(conn, note_id))
+              if is_distinctive_title(t)]
+    tasks, scheds = set(), set()
+    if not titles:
+        return [], []
+    for t in titles:
+        like = "%" + t.replace("%", r"\%").replace("_", r"\_") + "%"
+        for r in conn.execute(
+                "SELECT id FROM tasks WHERE title LIKE ? ESCAPE '\\' "
+                "OR description LIKE ? ESCAPE '\\' "
+                "OR (LENGTH(TRIM(title)) >= ? AND ? LIKE '%' || title || '%')",
+                (like, like, MIN_DISTINCTIVE_TITLE, t)):
+            tasks.add(r["id"])
+        for r in conn.execute(
+                "SELECT id FROM schedules WHERE name LIKE ? ESCAPE '\\' "
+                "OR title LIKE ? ESCAPE '\\' "
+                "OR (LENGTH(TRIM(name)) >= ? AND ? LIKE '%' || name || '%') "
+                "OR (LENGTH(TRIM(title)) >= ? AND ? LIKE '%' || title || '%')",
+                (like, like, MIN_DISTINCTIVE_TITLE, t, MIN_DISTINCTIVE_TITLE, t)):
+            scheds.add(r["id"])
+    return sorted(tasks), sorted(scheds)
+
+
+def _destroy_note_plaintext(conn, note_id, title=None, dry_run=False):
+    """Erase every plaintext trace of one note, inside the CALLER's transaction.
+
+    Deliberately private and connection-taking: this is not a command anyone
+    can run. Its only caller is backend/vault.py's move-to-vault, which opens
+    one transaction, writes the ciphertext, READS IT BACK, and only then calls
+    this — so a failure anywhere leaves the note untouched.
+
+    `dry_run=True` computes the same counts and writes nothing, which is what
+    the confirm modal shows the owner BEFORE they commit to an irreversible
+    delete. The two paths share every query so the preview cannot drift from
+    the act.
+
+    The FTS delete is written to match `_fts_sync` exactly (same
+    `DELETE FROM notes_fts WHERE rowid=?`, same NOTES_FTS guard). If the index
+    were maintained one way and cleared another, the "destroyed" note's text
+    would survive in notes_fts, which is the single highest-consequence line
+    in this phase.
+
+    Returns the counts of what was (or would be) destroyed, for the
+    vault_audit row and for the preview.
+
+    NOT touched: a task or schedule carrying the title. `titleholders()` finds
+    those and `vault.move_note_to_vault` REFUSES rather than deleting the
+    owner's todo behind their back. By the time this runs, that check passed.
+    `note_tag_taxonomy` is untouched too — a tag is library vocabulary, not
+    this note's text.
+    """
+    counts = {}
+
+    def _n(sql, *params):
+        return conn.execute(sql, params).fetchone()[0]
+
+    counts["revisions"] = _n("SELECT COUNT(*) FROM note_revisions WHERE note_id=?", note_id)
+    counts["entries"] = _n("SELECT COUNT(*) FROM note_entries WHERE note_id=?", note_id)
+    counts["attachments"] = _n("SELECT COUNT(*) FROM note_attachments WHERE note_id=?", note_id)
+    # Links point BOTH ways: a disputed pair records the partner as a target,
+    # and leaving that half behind would keep a dangling id pointing at a note
+    # that no longer exists.
+    counts["links"] = _n("SELECT COUNT(*) FROM note_links WHERE note_id=? "
+                         "OR (kind='note' AND target_id=?)", note_id, note_id)
+
+    # Reach by CONTENT, not only by note_id. A `contradiction` proposal filed
+    # on the PARTNER note names this one in `payload.other_note_id`, and an
+    # `append_entry` proposal names it in `target_note_id` — both carry this
+    # note's text in their summary and payload while their own `note_id`
+    # points elsewhere, so a `WHERE note_id=?` delete walks straight past them.
+    prop_ids = {r[0] for r in conn.execute(
+        "SELECT id FROM proposals WHERE note_id=?", (note_id,))}
+    for pid, payload in conn.execute("SELECT id, payload FROM proposals"):
+        try:
+            p = json.loads(payload or "{}")
+        except ValueError:
+            continue
+        if any(p.get(k) == note_id for k in ("other_note_id", "target_note_id")):
+            prop_ids.add(pid)
+    prop_ids = sorted(prop_ids)
+    counts["proposals"] = len(prop_ids)
+
+    # ---- activity: id-shaped patterns always, the title only when distinctive
+    like = ["note #%d: %%" % note_id, "note #%d by %%" % note_id,
+            "%%on note #%d: %%" % note_id, "%%on note #%d" % note_id]
+    like += ["proposal #%d %%" % p for p in prop_ids]
+    titles = [t for t in note_title_history(conn, note_id) if is_distinctive_title(t)]
+    if title and is_distinctive_title(title) and title not in titles:
+        titles.append(title)
+    counts["titles_chased"] = len(titles)
+    counts["title_reach_skipped"] = bool(
+        (title or note_title_history(conn, note_id)) and not titles)
+    for t in titles:
+        like.append("%%%s%%" % t.replace("%", r"\%").replace("_", r"\_"))
+    where = " OR ".join(["detail LIKE ? ESCAPE '\\'"] * len(like))
+    counts["activity"] = _n("SELECT COUNT(*) FROM activity WHERE " + where, *like)
+
+    # ---- notifications: REDACTED, never deleted.
+    # Round-2 review: deleting them destroyed unrelated owner notifications
+    # outright. A redacted row keeps the fact that something was notified, its
+    # kind and its timestamp; only the text that quoted this note goes.
+    nwhere = ["href = ?"]
+    nparams = ["/brain/note/%d" % note_id]
+    if prop_ids:
+        nwhere.append("source_key IN (%s)" % ",".join("?" * len(prop_ids)))
+        nparams += ["proposal:%d" % p for p in prop_ids]
+    for t in titles:
+        esc = "%%%s%%" % t.replace("%", r"\%").replace("_", r"\_")
+        nwhere.append("title LIKE ? ESCAPE '\\'"); nparams.append(esc)
+        nwhere.append("body LIKE ? ESCAPE '\\'"); nparams.append(esc)
+    nsql = " OR ".join(nwhere)
+    counts["notifications"] = _n("SELECT COUNT(*) FROM notifications WHERE " + nsql, *nparams)
+
+    if dry_run:
+        return counts
+
+    # Redacted, not deleted: the activity log is the owner's readable history
+    # of their own system. The row stays, its text goes.
+    conn.execute("UPDATE activity SET detail=? WHERE " + where,
+                 ["note #%d: (moved to the vault)" % note_id] + like)
+    conn.execute("UPDATE notifications SET title=?, body=? WHERE " + nsql,
+                 ["(moved to the vault)", None] + nparams)
+
+    conn.execute("DELETE FROM note_revisions WHERE note_id=?", (note_id,))
+    conn.execute("DELETE FROM note_entries WHERE note_id=?", (note_id,))
+    conn.execute("DELETE FROM note_attachments WHERE note_id=?", (note_id,))
+    conn.execute("DELETE FROM note_links WHERE note_id=? OR (kind='note' AND target_id=?)",
+                 (note_id, note_id))
+    if prop_ids:
+        conn.execute("DELETE FROM proposals WHERE id IN (%s)"
+                     % ",".join("?" * len(prop_ids)), prop_ids)
+    if NOTES_FTS:
+        conn.execute("DELETE FROM notes_fts WHERE rowid=?", (note_id,))
+    conn.execute("DELETE FROM notes WHERE id=?", (note_id,))
+    return counts
 
 
 def create_area(name, parent_id=None, description=None, db_path=None):
