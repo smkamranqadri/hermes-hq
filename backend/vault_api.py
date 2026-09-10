@@ -6,12 +6,13 @@ passphrase is what turns a row into words, and it is held only in
 `vault.KEYS`, a process-memory map — never in `request.state.session`, which
 `auth.Sessions._save()` writes to `sessions.json` on disk.
 
-Deliberately absent from this file: the RECOVERY CODE, in every direction.
-No route accepts one, none returns one, and setup here mints no recovery wrap
-at all — a code returned in a response body would exist in a browser and in
-any proxy log, and possession of the code opens the vault outright. Recovery
-is `wm vault recover`, at a shell. A test enumerates every route to keep this
-true.
+The RECOVERY CODE: no route here ACCEPTS one, ever — possession of a code
+opens the vault outright, so nothing behind a session cookie may take one, and
+recovery is `wm vault recover` at a shell. Exactly one route RETURNS one:
+`POST /api/vault/init`, at creation, once (owner's reversal 2026-09-10 — the
+code appears in the same authenticated browser where the passphrase was just
+typed, and withholding it left a phone-created vault unrecoverable). A test
+enumerates every route to hold exactly that line.
 """
 import os
 
@@ -89,23 +90,21 @@ def vault_status(request: Request):
 
 @router.post("/init")
 def vault_init(request: Request, body: Passphrase):
-    """Set the vault up from the web. NO recovery code is minted here.
+    """Set the vault up from the web, and return the recovery code ONCE.
 
-    `with_recovery=False` is the point: this route cannot show the owner a
-    code, and a wrap whose code nobody ever saw is dead weight pretending to
-    be a safety net. The response says so, and the UI repeats it — the owner
-    runs `wm vault recovery-code --regenerate` on the box to gain one.
+    The ONE route that ever returns a code, and only here, only at creation.
+    The UI must make the owner confirm they have saved it before continuing:
+    it is shown once and stored nowhere, so a dismissed box is a lost code.
     """
-    res = _guard(V.init_vault, body.passphrase, db_path=_db(), with_recovery=False)
-    assert res["recovery_code"] is None      # belt and braces: never in a response
+    res = _guard(V.init_vault, body.passphrase, db_path=_db(), with_recovery=True)
     # Setting it up unlocks it — otherwise the owner types the passphrase
     # twice in a row to reach an empty vault.
     V.KEYS.put(_token(request), _guard(V.unlock, body.passphrase, db_path=_db()))
     return {"ok": True,
-            "recovery_hint": "No recovery code exists for this vault. Run "
-                             "`wm vault recovery-code --regenerate` on the server "
-                             "to mint one — without it, forgetting the passphrase "
-                             "is permanent.",
+            "recovery_code": res["recovery_code"],
+            "recovery_note": "Save this now — it is shown once and stored nowhere. "
+                             "It opens the vault on its own, so keep it wherever you "
+                             "keep the passphrase.",
             **V.status(token=_token(request), db_path=_db())}
 
 
@@ -218,6 +217,17 @@ def vault_attachment(request: Request, attachment_id: int):
 
 class MoveIn(BaseModel):
     note_id: int
+
+
+@router.get("/move-impact/{note_id}")
+def vault_move_impact(request: Request, note_id: int):
+    """What sealing this note would destroy — computed, not estimated.
+
+    Unlocked-only: it reports on the owner's own library, and there is no
+    reason for a locked session to enumerate it.
+    """
+    _key(request)
+    return _guard(V.move_impact, note_id, db_path=_db())
 
 
 @router.post("/move")

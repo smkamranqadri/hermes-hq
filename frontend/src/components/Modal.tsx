@@ -3,7 +3,7 @@ import clsx from 'clsx'
 
 const modalStack: object[] = []
 
-export function Modal({ title, onClose, children, dismissible = true }: { title: string; onClose: () => void; children: ReactNode; dismissible?: boolean }) {
+export function Modal({ title, onClose, children, dismissible = true, elevated = false }: { title: string; onClose: () => void; children: ReactNode; dismissible?: boolean; elevated?: boolean }) {
   const titleId = useId()
   const onCloseRef = useRef(onClose)
   const dismissibleRef = useRef(dismissible)
@@ -26,7 +26,10 @@ export function Modal({ title, onClose, children, dismissible = true }: { title:
     }
   }, [])
   return (
-    <div className="fixed inset-0 z-40 flex items-end justify-center bg-black/50 p-0 sm:items-center sm:p-6" onMouseDown={e => { if (dismissible && e.target === e.currentTarget) onClose() }}>
+    // Toasts are z-50 and normally SHOULD float over a modal. `elevated` is the
+    // exception for content that is shown exactly once and cannot be recalled
+    // (the vault recovery code): a stray toast covering it loses it for good.
+    <div className={`fixed inset-0 ${elevated ? 'z-[60]' : 'z-40'} flex items-end justify-center bg-black/50 p-0 sm:items-center sm:p-6`} onMouseDown={e => { if (dismissible && e.target === e.currentTarget) onClose() }}>
       <div role="dialog" aria-modal="true" aria-labelledby={titleId} className="glass-strong max-h-[92vh] w-full max-w-lg overflow-y-auto rounded-t-2xl p-5 shadow-2xl sm:rounded-2xl">
         <div className="mb-4 flex items-center justify-between"><h2 id={titleId} className="text-base font-semibold">{title}</h2><button type="button" onClick={onClose} disabled={!dismissible} aria-label="Close dialog" className="text-muted hover:text-fg disabled:opacity-60">✕</button></div>
         {children}
@@ -35,7 +38,7 @@ export function Modal({ title, onClose, children, dismissible = true }: { title:
   )
 }
 
-export function ConfirmModal({ title, message, onClose, onConfirm, confirmLabel = 'Confirm', busy = false }: { title: string; message: ReactNode; onClose: () => void; onConfirm: () => void | Promise<void>; confirmLabel?: string; busy?: boolean }) {
+export function ConfirmModal({ title, message, onClose, onConfirm, confirmLabel = 'Confirm', busy = false, disabled = false }: { title: string; message: ReactNode; onClose: () => void; onConfirm: () => void | Promise<void>; confirmLabel?: string; busy?: boolean; disabled?: boolean }) {
   const cancelRef = useRef<HTMLButtonElement>(null)
   useEffect(() => { cancelRef.current?.focus() }, [])
   return (
@@ -44,7 +47,10 @@ export function ConfirmModal({ title, message, onClose, onConfirm, confirmLabel 
         <div className="text-sm text-muted">{message}</div>
         <div className="flex justify-end gap-2">
           <Btn ref={cancelRef} kind="ghost" type="button" onClick={onClose} disabled={busy}>Cancel</Btn>
-          <Btn kind="warn" type="button" onClick={() => void onConfirm()} busy={busy}>{confirmLabel}</Btn>
+          {/* `disabled` is for a confirm that CANNOT succeed — the server has
+              already said no. Offering a live button there just teaches the
+              owner to press through an error. */}
+          <Btn kind="warn" type="button" onClick={() => void onConfirm()} busy={busy} disabled={disabled}>{confirmLabel}</Btn>
         </div>
       </div>
     </Modal>

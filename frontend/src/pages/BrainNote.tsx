@@ -4,7 +4,7 @@
 import { useState } from 'react'
 import { Link, useLocation, useNavigate, useParams } from 'react-router-dom'
 import { useQueryClient } from '@tanstack/react-query'
-import { post, useNote, useRelatedNotes, useVaultStatus, vaultMove, when, type RelatedLinkItem, type RelatedNoteItem } from '../api'
+import { post, useNote, useRelatedNotes, useVaultMoveImpact, useVaultStatus, vaultMove, when, type RelatedLinkItem, type RelatedNoteItem } from '../api'
 import { GlassCard } from '../components/GlassCard'
 import { Markdown } from '../components/chat/Markdown'
 import { AttachToNote, DisputedChip, FileNoteModal, NewReminderFromNoteModal, NewTaskFromNoteModal, NoteAttachments, NoteRow, ProposalBanner, TYPE_TONE, PROVENANCE, PROVENANCE_HINT } from '../components/brain'
@@ -71,6 +71,10 @@ export function BrainNote() {
   const [modal, setModal] = useState<'file' | 'task' | 'reminder' | 'archive' | 'vault' | null>(null)
   const vault = useVaultStatus()
   const [vaultErr, setVaultErr] = useState<string | null>(null)
+  // Computed server-side and shown BEFORE the owner commits: this is the only
+  // irreversible delete in hermes-hq, and "12 activity rows will be redacted"
+  // is exactly the number someone needs in order to say no.
+  const impact = useVaultMoveImpact(nid, modal === 'vault' && vault.data?.unlocked === true)
   const [editing, setEditing] = useState(false)
   const [bodyDraft, setBodyDraft] = useState('')
   const [entry, setEntry] = useState('')
@@ -99,15 +103,34 @@ export function BrainNote() {
           the app that destroys the owner's own text. */}
       {modal === 'vault' && (
         vault.data?.unlocked ? (
-          <ConfirmModal title="Move to the vault" confirmLabel="Destroy the plaintext and seal it"
-            busy={busy === 'vault'}
+          <ConfirmModal title="Move to the vault"
+            confirmLabel={impact.data?.blocked ? 'Cannot be sealed yet' : 'Destroy the plaintext and seal it'}
+            busy={busy === 'vault'} disabled={impact.data?.blocked === true}
             message={<>
               <p>“{n.title}” is sealed into the vault with a passphrase the librarian does not have.</p>
               <p className="mt-2 text-needsyou">This is not archiving. The note, its search index entry and every
                 revision snapshot are <strong>destroyed</strong> — this is the one place in hermes-hq where text is
                 really deleted, and it cannot be undone.</p>
               <p className="mt-2 text-muted">Its area, tags and project do not come with it; the vault files nothing.</p>
-              {vaultErr && <p className="mt-3 rounded-lg border border-error/40 bg-error/10 p-2 text-error">{vaultErr}</p>}
+              {impact.isLoading && <p className="mt-2 text-xs text-muted">Working out what would be destroyed…</p>}
+              {impact.data && (
+                <div className="mt-3 rounded-lg border border-line bg-inset p-2 text-xs" data-vault-impact>
+                  <p className="font-mono text-[10px] uppercase tracking-wider text-muted">What this destroys</p>
+                  <ul className="mt-1 space-y-0.5 text-muted">
+                    <li>the note, its search-index entry and {impact.data.counts.revisions} revision{impact.data.counts.revisions === 1 ? '' : 's'}</li>
+                    {impact.data.counts.entries > 0 && <li>{impact.data.counts.entries} thought{impact.data.counts.entries === 1 ? '' : 's'}</li>}
+                    {impact.data.counts.attachments > 0 && <li>{impact.data.counts.attachments} attachment{impact.data.counts.attachments === 1 ? '' : 's'} (resealed in the vault, plaintext file removed)</li>}
+                    {impact.data.counts.proposals > 0 && <li>{impact.data.counts.proposals} librarian proposal{impact.data.counts.proposals === 1 ? '' : 's'}</li>}
+                    {impact.data.counts.activity > 0 && <li><strong className="text-needsyou">{impact.data.counts.activity}</strong> activity row{impact.data.counts.activity === 1 ? '' : 's'} redacted (the row stays, its text goes)</li>}
+                    {impact.data.counts.notifications > 0 && <li>{impact.data.counts.notifications} notification{impact.data.counts.notifications === 1 ? '' : 's'} redacted</li>}
+                  </ul>
+                  {impact.data.title_reach_note && <p className="mt-2 text-muted">{impact.data.title_reach_note}</p>}
+                </div>
+              )}
+              {impact.data?.blocked && <p className="mt-3 rounded-lg border border-needsyou/40 bg-needsyou/10 p-2 text-needsyou" data-vault-error>{impact.data.reason}</p>}
+              {vaultErr && vaultErr !== impact.data?.reason && (
+                <p className="mt-3 rounded-lg border border-error/40 bg-error/10 p-2 text-error" data-vault-error>{vaultErr}</p>
+              )}
             </>}
             onClose={() => { setModal(null); setVaultErr(null) }}
             onConfirm={async () => {

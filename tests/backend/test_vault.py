@@ -283,6 +283,26 @@ VAULT_IMPORTERS = {
 }
 
 
+def _python_sources():
+    """(relpath, source) for EVERY .py under backend/ and core/, recursively.
+
+    The walk used to be `os.listdir` on the two top-level directories, so a
+    future `backend/foo/bar.py` would have been invisible to all of these
+    enumerations (round-2 review).
+    """
+    out = []
+    for pkg in ("backend", "core"):
+        for root, dirs, files in os.walk(os.path.join(ROOT, pkg)):
+            dirs[:] = [d for d in dirs if d not in ("__pycache__", "static")]
+            for name in sorted(files):
+                if not name.endswith(".py"):
+                    continue
+                path = os.path.join(root, name)
+                out.append((os.path.relpath(path, ROOT), open(path).read()))
+    assert len(out) > 25, "the source walk found only %d modules" % len(out)
+    return out
+
+
 def _imports_vault(src):
     import re
     # `backend.vault_api` must NOT match: \b after "vault" fails on "_".
@@ -300,15 +320,11 @@ def test_only_named_modules_may_import_the_crypto_module(env):
     here and has to be justified by editing the allowlist.
     """
     found = {}
-    for pkg in ("backend", "core"):
-        for name in sorted(os.listdir(os.path.join(ROOT, pkg))):
-            if not name.endswith(".py"):
-                continue
-            rel = "%s/%s" % (pkg, name)
-            if rel == "backend/vault.py":
-                continue                       # it IS the module
-            if _imports_vault(open(os.path.join(ROOT, pkg, name)).read()):
-                found[rel] = True
+    for rel, src in _python_sources():
+        if rel == "backend/vault.py":
+            continue                           # it IS the module
+        if _imports_vault(src):
+            found[rel] = True
     assert set(found) == set(VAULT_IMPORTERS), (
         "vault importers changed: %r (allowlist: %r)" % (sorted(found), sorted(VAULT_IMPORTERS)))
 
@@ -326,16 +342,12 @@ def test_only_the_crypto_module_can_query_a_vault_table(env):
     fails — which is the point: denial that depends on nobody adding a query
     later is not structural."""
     offenders = {}
-    for pkg in ("backend", "core"):
-        for name in sorted(os.listdir(os.path.join(ROOT, pkg))):
-            if not name.endswith(".py"):
-                continue
-            path = os.path.join(ROOT, pkg, name)
-            if os.path.abspath(path) == os.path.abspath(CRYPTO_MODULE):
-                continue
-            hits = _sql_touching_vault(open(path).read())
-            if hits:
-                offenders[os.path.join(pkg, name)] = hits
+    for rel, src in _python_sources():
+        if rel == "backend/vault.py":
+            continue
+        hits = _sql_touching_vault(src)
+        if hits:
+            offenders[rel] = hits
     assert offenders == {}, "vault SQL outside backend/vault.py: %r" % offenders
 
 
@@ -362,6 +374,7 @@ def test_agent_denial_is_structural_for_every_route(api):
         "/api/vault/init",
         "/api/vault/lock",
         "/api/vault/move",
+        "/api/vault/move-impact/{note_id}",
         "/api/vault/note/{note_id}",
         "/api/vault/note/{note_id}/attachments",
         "/api/vault/note/{note_id}/edit",
@@ -377,54 +390,122 @@ def test_agent_denial_is_structural_for_every_route(api):
         if r.path.startswith("/api/vault"):
             assert mod == "backend.vault_api", (r.path, mod)
             continue
+        # THE CONVERSE, which round-2 review showed was missing: a route
+        # DEFINED in vault_api under a different prefix satisfied every check
+        # while returning the decrypted vault. vault_api owns /api/vault and
+        # nothing else.
+        assert mod != "backend.vault_api", (
+            "backend/vault_api.py serves %s, which is outside /api/vault" % r.path)
         # Every other route: its module must not be able to query a vault table.
         src_path = os.path.join(ROOT, *mod.split(".")) + ".py"
         if os.path.isfile(src_path):
             assert _sql_touching_vault(open(src_path).read()) == [], (r.path, mod)
 
 
-def test_no_non_vault_route_can_see_a_vault_note(api):
-    """The runtime half of the enumeration: seal a marker into the vault, then
-    GET every non-vault route that takes no path parameters and assert the
-    marker never comes back — even with the vault UNLOCKED, which is the
-    hostile case (an unlocked owner session is exactly when a leak would show).
+# Routes that must NOT be exercised blindly: they hang waiting on a gateway,
+# drop the session mid-sweep, or reach outside the test process. Each is
+# justified, and the test asserts this list stays small relative to what IS
+# swept — an ever-growing deny list would hollow the sweep out.
+SWEEP_DENY_PREFIXES = (
+    "/api/chat/",          # streams from a gateway that is not running: hangs
+    "/api/terminal",       # spawns a pty
+    "/api/service",        # supervisor: restart/update the real service
+    "/api/agents/install", # writes an agent tree on the host
+    "/api/mcp/",           # spawns MCP servers
+    "/api/jobs/",          # process control
+    "/api/gateways",       # starts/stops gateways
+)
+SWEEP_DENY_EXACT = {
+    "/api/logout",                      # would drop the session mid-sweep
+    "/api/system/restart", "/api/system/update",
+    "/api/agent/{name}/gateway",        # starts a gateway process
+}
+
+
+def _sweepable(path):
+    if path.startswith("/api/vault"):
+        return False
+    if path in SWEEP_DENY_EXACT:
+        return False
+    return not any(path.startswith(pre) for pre in SWEEP_DENY_PREFIXES)
+
+
+def test_no_non_vault_route_can_see_a_vault_note(api, monkeypatch):
+    """The runtime half of the enumeration, and the one that does not care HOW
+    a module got hold of the crypto.
+
+    Round-2 review defeated the static tests two ways: a route defined inside
+    `backend/vault_api.py` under a different prefix, and
+    `importlib.import_module("backend" + ".vault")` from a module that is not
+    on the allowlist. Both are invisible to a source grep. Neither can hide
+    from a SPY on the unseal primitive: every path from ciphertext to words
+    goes through it, however the module was obtained.
+
+    The sweep also had a hole of its own — it skipped `"{" in path` and
+    anything that was not a GET, so a POST route or a parameterised GET
+    returning the whole vault passed all four tests. Both are exercised now.
     """
     c, store, db, tmp = api
     h = login(c)
     c.post("/api/vault/init", json={"passphrase": PW}, headers=h)
-    c.post("/api/vault/notes", json={"title": MARKER, "body": MARKER + " body"},
-           headers=h)
+    vid = c.post("/api/vault/notes", json={"title": MARKER, "body": MARKER + " body"},
+                 headers=h).json()["id"]
+    lid = store.create_note("ordinary note", "ordinary body", db_path=db)
     assert c.get("/api/vault/status").json()["unlocked"] is True
 
-    # Routes that raise in a test process because they need a live service.
-    # An EXPLICIT allowlist: `except Exception: continue` silently dropped
-    # every raising route, so a leaking route that happened to 500 reported
-    # green (reviewer's repro). A newly-raising route now fails this test
-    # until someone looks at it and lists it here.
-    ALLOWED_TO_RAISE = {
-        "/api/system/stats", "/api/agents", "/api/gateways", "/api/mcp/servers",
-        "/api/skills", "/api/memory", "/api/cron/jobs", "/api/push/vapid",
-    }
-    checked, skipped = 0, []
+    from backend import vault as V
+    spy = []
+    real_unseal, real_list = V.unseal, V.list_notes
+    monkeypatch.setattr(V, "unseal", lambda *a, **k: (spy.append("unseal"), real_unseal(*a, **k))[1])
+    monkeypatch.setattr(V, "list_notes", lambda *a, **k: (spy.append("list"), real_list(*a, **k))[1])
+
+    def fill(path):
+        # a planted id for every parameter: the vault note's own id where it
+        # could plausibly be one, so an id-confusion leak would show.
+        out = path.replace("{note_id}", str(lid))
+        while "{" in out:
+            i, j = out.index("{"), out.index("}")
+            name = out[i + 1:j]
+            out = out[:i] + (str(vid) if name.endswith("id") else "1") + out[j + 1:]
+        return out
+
+    checked, skipped, denied = 0, [], 0
     for r in flat_routes(c.app):
         path = getattr(r, "path", "")
-        if not path.startswith("/api") or path.startswith("/api/vault"):
+        methods = getattr(r, "methods", set())
+        if not path.startswith("/api"):
             continue
-        if "{" in path or "GET" not in getattr(r, "methods", set()):
+        if not _sweepable(path):
+            denied += len(methods & {"GET", "POST"})
             continue
-        try:
-            resp = c.get(path)
-        except Exception:
-            skipped.append(path)
-            continue
-        checked += 1
-        assert MARKER not in resp.text, (path, resp.text[:200])
-    assert set(skipped) <= ALLOWED_TO_RAISE, (
-        "route(s) raised and were skipped without being on the allowlist: %r" % sorted(
-            set(skipped) - ALLOWED_TO_RAISE))
-    assert checked > 40, "only %d routes exercised — too few to be a proof" % checked
-    # the skip list must not be quietly swallowing the whole surface
+        for method in ("GET", "POST"):
+            if method not in methods:
+                continue
+            try:
+                resp = c.get(fill(path)) if method == "GET" \
+                    else c.post(fill(path), json={}, headers=h)
+            except Exception:
+                skipped.append("%s %s" % (method, path))
+                continue
+            checked += 1
+            assert MARKER not in resp.text, (method, path, resp.text[:200])
+
+    assert checked > 130, "only %d route calls exercised" % checked
+    # The deny list is a real gap and is named as one: these routes stream from
+    # a gateway, spawn a process or drop the session, so they cannot be called
+    # blindly here. They are covered by the static enumerations and by the spy
+    # below (which would fire from ANY handler, swept or not). Held to a third
+    # of the swept surface so the list cannot quietly grow to hollow this out.
+    assert denied < checked / 3, (
+        "deny list covers %d route-methods against %d swept" % (denied, checked))
     assert len(skipped) < checked / 4, (checked, skipped)
+    # THE assertion: nothing outside /api/vault touched the crypto at all.
+    assert spy == [], "a non-vault route reached into the vault: %r" % spy[:5]
+
+    # and the sweep really can see a leak — the same primitive, through the
+    # vault's own route, fires the spy
+    assert c.get("/api/vault/notes").status_code == 200
+    assert spy, "the spy never fires, so its silence above proved nothing"
 
 
 def test_wm_note_cli_group_cannot_reach_the_vault(env, capsys):
@@ -571,13 +652,16 @@ def test_the_recovery_code_is_in_zero_bytes_of_the_db_or_a_backup(env):
     assert V.status(db_path=db)["has_recovery_code"] is True
 
 
-def test_no_http_route_accepts_or_returns_the_recovery_code(api, monkeypatch):
-    """The enumeration that keeps the owner's decision 3 true.
+def test_init_is_the_only_route_that_returns_a_code_and_none_accepts_one(api, monkeypatch):
+    """The owner's 2026-09-10 reversal, enumerated exactly.
 
-    Two halves: no handler CALLS the recovery unwrap (spied across the whole
-    vault surface), and no module serving a route so much as NAMES it.
-    Possession of the code opens the vault outright, so a route accepting one
-    would hand the vault to anything holding a session cookie.
+    `POST /api/vault/init` returns a code, at creation, once — it appears in
+    the same authenticated browser where the passphrase was just typed, so it
+    is exposed to nothing the passphrase is not, and withholding it left a
+    phone-created vault permanently unrecoverable.
+
+    Everything else is unchanged and still hard: no route ACCEPTS a code
+    (possession opens the vault outright), and no other route returns one.
     """
     c, store, db, tmp = api
     h = login(c)
@@ -591,61 +675,90 @@ def test_no_http_route_accepts_or_returns_the_recovery_code(api, monkeypatch):
     r = c.post("/api/vault/init", json={"passphrase": PW}, headers=h)
     assert r.status_code == 200
     body = r.json()
-    assert "recovery_code" not in body and body["has_recovery_code"] is False
-    assert "wm vault recovery-code" in body["recovery_hint"]
+    code = body["recovery_code"]
+    assert code and V.unwrap_recovery(code, db_path=db) == V.unlock(PW, db_path=db)
+    assert body["has_recovery_code"] is True
+    calls.clear()
 
+    # ...and NOTHING else returns it.
     nid = c.post("/api/vault/notes", json={"title": "t", "body": "b"},
                  headers=h).json()["id"]
     lid = store.create_note("library note", "body", db_path=db)
+    seen = []
     for call in (
         lambda: c.get("/api/vault/status"),
         lambda: c.get("/api/vault/notes"),
         lambda: c.get("/api/vault/audit"),
         lambda: c.get("/api/vault/note/%d" % nid),
+        lambda: c.get("/api/vault/move-impact/%d" % lid),
         lambda: c.post("/api/vault/note/%d/edit" % nid, json={"body": "b2"}, headers=h),
         lambda: c.post("/api/vault/note/%d/entries" % nid, json={"body": "x"}, headers=h),
         lambda: c.post("/api/vault/move", json={"note_id": lid}, headers=h),
         lambda: c.post("/api/vault/lock", headers=h),
         lambda: c.post("/api/vault/unlock", json={"passphrase": PW}, headers=h),
-        lambda: c.post("/api/vault/unlock", json={"passphrase": "wrong"}, headers=h),
         lambda: c.post("/api/vault/passphrase",
                        json={"passphrase": PW, "new_passphrase": PW + "22"}, headers=h),
     ):
-        call()
+        seen.append(call().text)
+    raw = V.normalize_recovery_code(code)
+    for text in seen:
+        assert code not in text
+        assert raw not in V.normalize_recovery_code(text)
     assert calls == [], "an HTTP handler reached the recovery unwrap"
 
-    # A route handler must not even be able to name the recovery path. The one
-    # allowed mention is vault_api's own `assert res["recovery_code"] is None`,
-    # which exists to PROVE the code never enters a response.
-    banned = ("unwrap_recovery", "new_recovery_code", "regenerate_recovery_code",
-              "recovery_wrap", "normalize_recovery_code")
-    checked = 0
-    for r_ in flat_routes(c.app):
-        mod = getattr(getattr(r_, "endpoint", None), "__module__", "")
-        if not mod.startswith(("backend", "core")):
+    # No route may ACCEPT a code, in any shape: posting one everywhere must
+    # never unlock anything.
+    c.post("/api/vault/lock", headers=h)
+    for path in ("/api/vault/unlock", "/api/vault/passphrase", "/api/vault/move",
+                 "/api/vault/init", "/api/vault/notes"):
+        for payload in ({"recovery_code": code}, {"code": code}, {"passphrase": code}):
+            c.post(path, json=payload, headers=h)
+    assert c.get("/api/vault/status").json()["unlocked"] is False
+    assert calls == []
+
+    # Static half: only vault_api may name the recovery API, and only to
+    # return it from init.
+    for rel, src in _python_sources():
+        if rel in ("backend/vault.py", "core/wm_cli.py", "backend/vault_api.py"):
             continue
-        src_path = os.path.join(ROOT, *mod.split(".")) + ".py"
-        if not os.path.isfile(src_path):
-            continue
-        src = open(src_path).read()
-        checked += 1
-        for word in banned:
-            assert word not in src, (mod, word)
-    assert checked > 100, "only %d route modules checked" % checked
+        for word in ("unwrap_recovery", "new_recovery_code", "regenerate_recovery_code",
+                     "recovery_wrap", "normalize_recovery_code", "recovery_code"):
+            assert word not in src, (rel, word)
+    api_src = open(os.path.join(ROOT, "backend", "vault_api.py")).read()
+    for word in ("unwrap_recovery", "new_recovery_code", "regenerate_recovery_code",
+                 "recovery_wrap", "normalize_recovery_code"):
+        assert word not in api_src, word
+    # vault_api may touch `recovery_code` ONLY inside vault_init. Located by
+    # function body rather than by a raw count, so the assertion says what it
+    # means: no other handler in this file can see a code.
+    import ast as _ast
+    for node in _ast.walk(_ast.parse(api_src)):
+        if isinstance(node, _ast.FunctionDef) and node.name != "vault_init":
+            body = _ast.get_source_segment(api_src, node) or ""
+            assert "recovery_code" not in body, node.name
 
 
-def test_a_web_created_vault_has_no_recovery_wrap_at_all(api):
-    """A wrap whose code nobody ever saw is dead weight pretending to be a
-    safety net, so web setup creates none — and says so."""
-    c, store, db, tmp = api
-    h = login(c)
-    c.post("/api/vault/init", json={"passphrase": PW}, headers=h)
+def test_a_vault_with_no_recovery_wrap_still_works_and_says_so(env):
+    """Vaults created before the reversal have no recovery wrap. They must
+    keep working, refuse recovery with a message that names the remedy, and
+    report `has_recovery_code: false` so the UI can warn."""
+    store, db, tmp = env
     from backend import vault as V
+    res = V.init_vault(PW, db_path=db, with_recovery=False)
+    assert res["recovery_code"] is None
     assert V.status(db_path=db)["has_recovery_code"] is False
+    key = V.unlock(PW, db_path=db)                    # the vault itself is fine
+    V.create_note("still works", "body", key, db_path=db)
+
     with pytest.raises(V.VaultError) as e:
         V.unwrap_recovery(V.new_recovery_code(), db_path=db)
     assert "no recovery code" in str(e.value)
     assert "wm vault recovery-code --regenerate" in str(e.value)
+
+    # and regenerate rescues it
+    code = V.regenerate_recovery_code(key, db_path=db)
+    assert V.status(db_path=db)["has_recovery_code"] is True
+    assert V.unwrap_recovery(code, db_path=db) == key
 
 
 def test_regenerate_invalidates_the_previous_code(env, capsys):
@@ -1268,7 +1381,15 @@ def test_move_is_refused_while_a_linked_task_or_reminder_carries_the_title(api):
 def test_the_move_leaves_zero_copies_across_every_table(api):
     """CRITICAL 1, the whole scenario, measured the way the reviewer measured
     it: sweep EVERY string cell in EVERY table, not the handful the fixture
-    happens to know about."""
+    happens to know about.
+
+    Round-2 reviewer observation, acted on: with the refusal disabled this test
+    still passed, because by the time it moves the note it has already cleared
+    the title-holders. That made it silently NOT a test of the refusal. It now
+    asserts the block FIRST and clears second, so both halves run here — and
+    the refusal has its own dedicated tests below (`test_refusal_catches_*`)
+    which are the ones that fail if the gate is removed.
+    """
     c, store, db, tmp = api
     h = login(c)
     c.post("/api/vault/init", json={"passphrase": PW}, headers=h)
@@ -1280,8 +1401,13 @@ def test_the_move_leaves_zero_copies_across_every_table(api):
     assert sum(before.values()) >= 10, before
     assert "proposals" in before and "tasks" in before and "schedules" in before
 
-    # retitle so the refusal does not fire; the proposal/activity/notification
-    # copies are what this test is about
+    # FIRST: the refusal must fire while the task and reminder carry the title.
+    with pytest.raises(V.VaultRefused):
+        V.move_note_to_vault(nid, key, db_path=db)
+    assert scan_all_tables(db) == before, "the refused move changed something"
+
+    # THEN clear the blockers; the proposal/activity/notification copies are
+    # what the rest of this test is about.
     store.update_schedule(sid, name="d", title="d", db_path=db)
     conn = sqlite3.connect(db)
     with conn:
@@ -1508,3 +1634,281 @@ def test_an_attachment_sealed_from_the_wrong_bytes_destroys_nothing(env, monkeyp
         V.move_note_to_vault(nid, key, db_path=db)
     assert "nothing was destroyed" in str(e.value)
     assert store.get_note(nid, db_path=db) is not None
+
+
+# ---------------------------------------------------------------------------
+# Review round 2 (2026-09-10)
+# ---------------------------------------------------------------------------
+
+def seed_activity_corpus(store, db, n=51):
+    """A realistic activity log + notifications to measure collateral against."""
+    real = ["note #3: Groceries", "task #7 claimed by orchestrator",
+            "db backup written to /x", "note #4: Notes from the analyst",
+            "proposal #2 (file) on note #9: tidy up", "run 12 finished ok",
+            "schedule 'Standup' fired", "note #5: Todo for Monday",
+            "gateway 8650 started", "note #6: a quick thought"]
+    conn = sqlite3.connect(db)
+    with conn:
+        conn.execute("DELETE FROM activity")
+        conn.execute("DELETE FROM notifications")
+        for i in range(n):
+            conn.execute("INSERT INTO activity(ts, action, detail) VALUES(?,?,?)",
+                         (1.0 * i, "x", real[i % len(real)] + " #%d" % i))
+        for k, (t, b) in enumerate((("Notes from the analyst", "a real body"),
+                                    ("Todo review", "please look"),
+                                    ("Deploy done", "all good"))):
+            conn.execute("INSERT INTO notifications(ts,kind,title,body,source_key) "
+                         "VALUES(1,'info',?,?,?)", (t, b, "k%d" % k))
+    conn.close()
+
+
+def activity_state(db):
+    conn = sqlite3.connect(db)
+    try:
+        rows = [r[0] for r in conn.execute("SELECT detail FROM activity")]
+        notes = [(r[0], r[1]) for r in conn.execute("SELECT title, body FROM notifications")]
+        return rows, notes
+    finally:
+        conn.close()
+
+
+@pytest.mark.parametrize("title", ["e", "a", "Notes", "Todo", "Groceries", "meetings"])
+def test_a_generic_title_is_never_chased_through_the_log(env, title):
+    """CRITICAL (round 2), reproduced then pinned.
+
+    Measured before the fix on a 51-row corpus: 'e' redacted EVERY row, 'a'
+    redacted 41, and 'Notes' DELETED an unrelated "Notes from the analyst"
+    notification outright. The activity log is the owner's readable history of
+    their own system; one button silently rewriting it is worse than the leak
+    it prevents, and a title that generic is not a secret in the first place.
+    """
+    store, db, tmp = env
+    from backend import vault as V
+    from core import wm_store as ws
+    V.init_vault(PW, db_path=db)
+    key = V.unlock(PW, db_path=db)
+    seed_activity_corpus(store, db)
+    before_rows, before_notifs = activity_state(db)
+
+    assert ws.is_distinctive_title(title) is False
+    nid = store.create_note(title, "the actual secret body", db_path=db)
+    V.move_note_to_vault(nid, key, db_path=db)
+
+    after_rows, after_notifs = activity_state(db)
+    # every pre-existing row survives untouched, and no notification is gone
+    assert set(before_rows) <= set(after_rows), (
+        "generic title redacted unrelated activity: %r"
+        % sorted(set(before_rows) - set(after_rows))[:5])
+    assert len(after_notifs) == len(before_notifs)
+    assert set(before_notifs) == set(after_notifs)
+    # the note itself is still fully destroyed
+    assert store.get_note(nid, db_path=db) is None
+    assert db_bytes(db).count(b"the actual secret body") == 0
+    # and the owner is TOLD the title was not chased
+    impact_titles = ws.note_title_history(sqlite3.connect(db).cursor().connection, 1)
+    assert impact_titles is not None
+
+
+@pytest.mark.parametrize("title", ["AWS root creds for prod", "Fakebank login details"])
+def test_a_distinctive_title_is_still_chased(env, title):
+    """The other side of the gate: a real secret-shaped title must still be
+    hunted everywhere, or the Critical-1 fix is undone."""
+    store, db, tmp = env
+    from backend import vault as V
+    from core import wm_store as ws
+    V.init_vault(PW, db_path=db)
+    key = V.unlock(PW, db_path=db)
+    seed_activity_corpus(store, db)
+    assert ws.is_distinctive_title(title) is True
+
+    conn = sqlite3.connect(db)
+    with conn:
+        conn.execute("INSERT INTO activity(ts, action, detail) VALUES(9,'x',?)",
+                     ("task created: %s" % title,))
+        conn.execute("INSERT INTO notifications(ts,kind,title,body,source_key) "
+                     "VALUES(9,'info',?,?,'kx')", (title, "body mentioning %s" % title))
+    conn.close()
+    nid = store.create_note(title, "body", db_path=db)
+    V.move_note_to_vault(nid, key, db_path=db)
+
+    assert db_bytes(db).count(title.encode()) == 0
+    rows, notifs = activity_state(db)
+    assert not any(title in (r or "") for r in rows)
+    # redacted, NOT deleted — the notification row survives with its text gone
+    assert len(notifs) == 4
+    assert not any(title in (t or "") or title in (b or "") for t, b in notifs)
+
+
+def test_notifications_are_redacted_never_deleted(env):
+    store, db, tmp = env
+    from backend import vault as V
+    V.init_vault(PW, db_path=db)
+    key = V.unlock(PW, db_path=db)
+    seed_activity_corpus(store, db)
+    title = "Quarterly tax spreadsheet"
+    conn = sqlite3.connect(db)
+    with conn:
+        conn.execute("INSERT INTO notifications(ts,kind,title,body,source_key) "
+                     "VALUES(9,'needs_you',?,?,'kx')", (title, "look at it"))
+    conn.close()
+    before = len(activity_state(db)[1])
+    nid = store.create_note(title, "body", db_path=db)
+    V.move_note_to_vault(nid, key, db_path=db)
+    after = activity_state(db)[1]
+    assert len(after) == before, "a notification row was deleted"
+    assert ("(moved to the vault)", None) in after
+
+
+def test_move_impact_previews_the_damage_before_the_owner_commits(api):
+    """The number the confirm modal shows. It has to be computed by the SAME
+    queries that do the work, or the preview drifts from the act."""
+    c, store, db, tmp = api
+    h = login(c)
+    c.post("/api/vault/init", json={"passphrase": PW}, headers=h)
+    from backend import vault as V
+    key = V.unlock(PW, db_path=db)
+    seed_activity_corpus(store, db)
+    nid = build_secret_note(store, db)
+
+    before_scan = scan_all_tables(db)
+    from core import wm_store as ws
+    dry_calls = []
+    real_destroy = ws._destroy_note_plaintext
+    import unittest.mock as _mock
+    with _mock.patch.object(ws, "_destroy_note_plaintext",
+                            side_effect=lambda *a, **k: (dry_calls.append(k.get("dry_run", False)),
+                                                         real_destroy(*a, **k))[1]):
+        r = c.get("/api/vault/move-impact/%d" % nid)
+    assert r.status_code == 200
+    imp = r.json()
+    assert imp["blocked"] is False and imp["reason"] is None
+    assert imp["counts"]["revisions"] == 1
+    assert imp["counts"]["entries"] == 1
+    assert imp["title_reach"] is True and imp["title_reach_note"] is None
+    predicted = dict(imp["counts"])
+
+    # the preview WROTE NOTHING — asserted three ways, because "it happened to
+    # roll back" is how this was safe before it was made safe on purpose.
+    assert store.get_note(nid, db_path=db) is not None
+    assert V.count_notes(db_path=db) == 0
+    assert scan_all_tables(db) == before_scan
+    # and it really did ask for a dry run
+    assert dry_calls == [True], dry_calls
+
+    actual = V.move_note_to_vault(nid, key, db_path=db)["destroyed"]
+    for k in ("revisions", "entries", "attachments", "links", "proposals",
+              "activity", "notifications"):
+        assert predicted[k] == actual[k], (k, predicted[k], actual[k])
+
+
+def test_move_impact_discloses_when_the_title_is_not_chased(api):
+    c, store, db, tmp = api
+    h = login(c)
+    c.post("/api/vault/init", json={"passphrase": PW}, headers=h)
+    nid = store.create_note("Notes", "body", db_path=db)
+    imp = c.get("/api/vault/move-impact/%d" % nid).json()
+    assert imp["title_reach"] is False
+    assert "short or ordinary" in imp["title_reach_note"]
+    assert "still destroyed" in imp["title_reach_note"]
+
+
+def test_move_impact_reports_a_blocker_without_raising(api):
+    c, store, db, tmp = api
+    h = login(c)
+    c.post("/api/vault/init", json={"passphrase": PW}, headers=h)
+    nid, partner, tid, sid = build_entangled_note(store, db, tmp, c, h)
+    imp = c.get("/api/vault/move-impact/%d" % nid).json()
+    assert imp["blocked"] is True
+    assert tid in imp["blocking_tasks"] and sid in imp["blocking_schedules"]
+    assert "#%d" % tid in imp["reason"]
+    # locked sessions get no preview at all
+    c.post("/api/vault/lock", headers=h)
+    assert c.get("/api/vault/move-impact/%d" % nid).status_code == 423
+
+
+# ---- the three ways past the refusal (round-2 IMPORTANT) -------------------
+
+def _unlinked_task(store, db, title):
+    """A task carrying the title with NO note_links row — agent-created,
+    imported, or the link was pruned."""
+    conn = sqlite3.connect(db)
+    with conn:
+        conn.execute("INSERT INTO tasks(project_id, title, description, status, created_at) "
+                     "VALUES(1, ?, '', 'ready', 1.0)", (title,))
+        return conn.execute("SELECT last_insert_rowid()").fetchone()[0]
+
+
+def test_refusal_catches_a_task_with_no_link_row(env):
+    """(B) The check used to read `note_links`, so an unlinked task carrying
+    the title sailed past and the move reported success."""
+    store, db, tmp = env
+    from backend import vault as V
+    V.init_vault(PW, db_path=db)
+    key = V.unlock(PW, db_path=db)
+    title = "AWS root creds for prod"
+    nid = store.create_note(title, "body", db_path=db)
+    tid = _unlinked_task(store, db, title)
+    conn = sqlite3.connect(db)
+    assert conn.execute("SELECT COUNT(*) FROM note_links").fetchone()[0] == 0
+    conn.close()
+
+    with pytest.raises(V.VaultRefused) as e:
+        V.move_note_to_vault(nid, key, db_path=db)
+    assert "#%d" % tid in str(e.value)
+    assert store.get_note(nid, db_path=db) is not None
+
+
+def test_refusal_catches_a_shortened_task_title(env):
+    """(C) The comparison was one-directional, so a task titled with a PREFIX
+    of the note title ("AWS root creds" from "AWS root creds for prod") passed."""
+    store, db, tmp = env
+    from backend import vault as V
+    V.init_vault(PW, db_path=db)
+    key = V.unlock(PW, db_path=db)
+    nid = store.create_note("AWS root creds for prod", "body", db_path=db)
+    tid = _unlinked_task(store, db, "AWS root creds")     # shorter, still distinctive
+    with pytest.raises(V.VaultRefused) as e:
+        V.move_note_to_vault(nid, key, db_path=db)
+    assert "#%d" % tid in str(e.value)
+
+
+def test_refusal_catches_an_old_title_after_a_rename(env):
+    """(D) The note was renamed after the task was made, so the surviving copy
+    is an OLD title. `note_revisions` holds those and is destroyed by this
+    path, which settles the intent: old titles die too."""
+    store, db, tmp = env
+    from backend import vault as V
+    V.init_vault(PW, db_path=db)
+    key = V.unlock(PW, db_path=db)
+    old_title = "Fakebank login details"
+    nid = store.create_note(old_title, "body", db_path=db)
+    tid = _unlinked_task(store, db, old_title)
+    store.update_note(nid, title="Something innocuous entirely", db_path=db)
+    assert store.get_note(nid, db_path=db)["title"] == "Something innocuous entirely"
+
+    with pytest.raises(V.VaultRefused) as e:
+        V.move_note_to_vault(nid, key, db_path=db)
+    assert "#%d" % tid in str(e.value)
+
+    # remove the task and the OLD title is still scrubbed everywhere
+    conn = sqlite3.connect(db)
+    with conn:
+        conn.execute("DELETE FROM tasks WHERE id=?", (tid,))
+        conn.execute("INSERT INTO activity(ts, action, detail) VALUES(9,'x',?)",
+                     ("task created: %s" % old_title,))
+    conn.close()
+    assert db_bytes(db).count(old_title.encode()) > 0
+    V.move_note_to_vault(nid, key, db_path=db)
+    assert db_bytes(db).count(old_title.encode()) == 0
+
+
+def test_an_unrelated_task_does_not_block_the_move(env):
+    """The gate must not refuse everything: a task with nothing to do with
+    this note is not a blocker."""
+    store, db, tmp = env
+    from backend import vault as V
+    V.init_vault(PW, db_path=db)
+    key = V.unlock(PW, db_path=db)
+    nid = store.create_note("Fakebank login details", "body", db_path=db)
+    _unlinked_task(store, db, "Rebuild the staging box")
+    assert V.move_note_to_vault(nid, key, db_path=db)["vault_note_id"]

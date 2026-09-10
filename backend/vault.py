@@ -40,11 +40,15 @@ Key handling, in the order it matters:
    - `scrypt(recovery_code)` exists so a forgotten passphrase is not a dead
      end. The code is >= 160 bits, generated once, **printed once**, and
      never stored, never logged, never written to `activity`.
-3. **The recovery code is never accepted by the HTTP API.** Possession of the
-   code IS the credential; it opens the vault outright, so it belongs at a
-   shell the owner is sitting at, not on a route any authenticated session
-   can post to. `unwrap_recovery` exists only for `wm vault recover`, and a
-   test enumerates every route to prove none references it.
+3. **No route ever ACCEPTS a recovery code, and exactly one route returns
+   one: `POST /api/vault/init`, at creation, once.** Possession of the code
+   opens the vault outright, so nothing that takes one may sit behind a
+   session cookie — `unwrap_recovery` exists only for `wm vault recover`.
+   Showing it at creation is different in kind: it appears in the same
+   authenticated browser where the owner has just typed the passphrase, and
+   withholding it there is what made a phone-created vault unrecoverable
+   (owner's reversal, 2026-09-10). A test enumerates every route to hold
+   exactly this line — init as the single, creation-only exception.
 
 Because the recovery code is not stored, losing it is permanent — hence
 `wm vault recovery-code --regenerate`, which mints a fresh one (and thereby
@@ -210,11 +214,16 @@ def init_vault(passphrase, db_path=None, with_recovery=True):
 
     A second call is refused: re-initialising would orphan every sealed row.
 
-    `with_recovery=False` is for the HTTP setup path, which must never see a
-    code (it would then exist in a response body, a browser and any proxy log).
-    A vault set up that way has NO recovery wrap at all — deliberately, because
-    a wrap whose code nobody ever saw is dead weight pretending to be a safety
-    net. `wm vault recovery-code --regenerate` mints one later.
+    The code is returned exactly ONCE, from this call, and never persisted.
+    Both the CLI and the HTTP setup route show it to the owner at creation —
+    the owner's 2026-09-10 reversal, and it is the right call: the code is
+    displayed in the same authenticated browser where they just typed the
+    passphrase, so showing it there exposes it to nothing the passphrase is
+    not already exposed to, while withholding it left a phone-created vault
+    permanently unrecoverable.
+
+    `with_recovery=False` exists only for tests that need a vault with no
+    recovery wrap (the pre-reversal shape, which older vaults still have).
     """
     _check_passphrase(passphrase)
     conn = store._connect(db_path)
@@ -692,33 +701,84 @@ def _scrub(conn):
     return out
 
 
-def _linked_titleholders(conn, note_id, title):
-    """Linked tasks/schedules whose OWN text carries this note's title.
+def _refusal(tasks, scheds):
+    """The sentence the owner reads, naming a remedy the app can actually do.
 
-    `backend/notes.py` defaults a new task's title/description and a new
-    reminder's name/title to the note's title, so "create and link" routinely
-    produces objects carrying the exact text the vault is meant to seal. A
-    schedule is worse than a task: it keeps firing and minting fresh tasks
-    carrying the title forever, so no one-time scrub could hold.
-
-    We refuse rather than decide for the owner. Deleting their todo is a
-    surprise; leaking is a failure; naming the ids lets them retitle or delete
-    and come back. `note_links` already knows exactly which objects to check.
+    A schedule can be renamed (`update_schedule` takes name/title, POST
+    /api/schedules/{id}); a TASK cannot — nothing in hermes-hq edits a task
+    title (`edit_task` takes description/DoD/approval only) — so for a task
+    the honest instruction is "delete it", not "retitle it".
     """
-    tasks, scheds = [], []
-    for l in conn.execute("SELECT kind, target_id FROM note_links WHERE note_id=? "
-                          "AND kind IN ('task','schedule')", (note_id,)):
-        if l["kind"] == "task":
-            r = conn.execute("SELECT id, title, description FROM tasks WHERE id=?",
-                             (l["target_id"],)).fetchone()
-            if r and (title in (r["title"] or "") or title in (r["description"] or "")):
-                tasks.append(r["id"])
-        else:
-            r = conn.execute("SELECT id, name, title FROM schedules WHERE id=?",
-                             (l["target_id"],)).fetchone()
-            if r and (title in (r["name"] or "") or title in (r["title"] or "")):
-                scheds.append(r["id"])
-    return tasks, scheds
+    parts, fix = [], []
+    if tasks:
+        parts.append("task%s %s" % ("" if len(tasks) == 1 else "s",
+                                    ", ".join("#%d" % t for t in tasks)))
+        fix.append("delete the task%s (hermes-hq cannot edit a task's title)"
+                   % ("" if len(tasks) == 1 else "s"))
+    if scheds:
+        parts.append("reminder%s %s" % ("" if len(scheds) == 1 else "s",
+                                        ", ".join("#%d" % t for t in scheds)))
+        fix.append("rename the reminder%s on the Schedules page"
+                   % ("" if len(scheds) == 1 else "s"))
+    return ("this note cannot be sealed while %s still carr%s its title — "
+            "sealing it would erase the note and leave the title in plain "
+            "sight%s. To go ahead, %s, then move the note."
+            % (" and ".join(parts),
+               "ies" if len(tasks) + len(scheds) == 1 else "y",
+               ", and a reminder keeps minting new tasks carrying it" if scheds else "",
+               " and ".join(fix)))
+
+
+def move_impact(note_id, db_path=None):
+    """What a move WOULD destroy, computed without writing a thing.
+
+    The confirm modal shows this before the owner commits, because this is the
+    only irreversible delete in hermes-hq and "N activity rows will be
+    redacted" is exactly the number they need in order to say no.
+    """
+    conn = store._connect(db_path)
+    # Belt AND braces. `dry_run=True` is the contract, but this is a preview of
+    # an IRREVERSIBLE delete, so its safety must not rest on one boolean being
+    # honoured: the whole call runs inside an explicit transaction that is
+    # always rolled back. Without this the preview was safe only because
+    # sqlite3 discards uncommitted work on close — accidental, not designed,
+    # and a negative control proved it (breaking `dry_run` changed nothing).
+    conn.isolation_level = None
+    conn.execute("BEGIN")
+    try:
+        n = conn.execute("SELECT id, title FROM notes WHERE id=?", (note_id,)).fetchone()
+        if n is None:
+            raise VaultError("no such note: %r" % note_id)
+        titles = store.note_title_history(conn, note_id)
+        distinctive = [t for t in titles if store.is_distinctive_title(t)]
+        tasks, scheds = store.titleholders(conn, note_id, titles=titles)
+        counts = store._destroy_note_plaintext(conn, note_id, title=n["title"],
+                                               dry_run=True)
+        return {
+            "note_id": note_id,
+            "blocked": bool(tasks or scheds),
+            "blocking_tasks": tasks,
+            "blocking_schedules": scheds,
+            "reason": _refusal(tasks, scheds) if (tasks or scheds) else None,
+            "counts": counts,
+            "titles_known": len(titles),
+            # Told plainly rather than implied: a short or ordinary title is
+            # NOT chased through activity/notifications, so occurrences of it
+            # elsewhere survive. That is a deliberate trade (see wm_store), and
+            # the owner is the one who should know about it.
+            "title_reach": bool(distinctive),
+            "title_reach_note": None if distinctive else
+                ("The title is short or ordinary, so it is not hunted through "
+                 "the activity log or notifications — chasing a title like this "
+                 "would rewrite unrelated history. The note itself, its Thoughts, "
+                 "its revisions and its search-index entry are still destroyed."),
+        }
+    finally:
+        try:
+            conn.rollback()          # a preview NEVER writes, whatever happened
+        except Exception:
+            pass
+        conn.close()
 
 
 class VaultRefused(VaultError):
@@ -748,33 +808,12 @@ def move_note_to_vault(note_id, key, db_path=None):
             # BEFORE anything is written: does a linked task or schedule carry
             # this title? If so the move cannot erase the plaintext, so it is
             # refused with the ids rather than half-done.
-            bad_tasks, bad_scheds = _linked_titleholders(conn, note_id, title)
+            # Scans ALL tasks and schedules, both substring directions, over
+            # every title this note has ever had — not just linked objects
+            # and not just the current title (round-2 findings B, C and D).
+            bad_tasks, bad_scheds = store.titleholders(conn, note_id)
             if bad_tasks or bad_scheds:
-                # The remedy has to name what the app can ACTUALLY do. A
-                # schedule can be renamed (`update_schedule` takes name/title,
-                # POST /api/schedules/{id}); a TASK cannot — nothing in
-                # hermes-hq edits a task title today (`edit_task` takes
-                # description/DoD/approval only), so for a task the honest
-                # instruction is "delete it", not "retitle it".
-                parts, fix = [], []
-                if bad_tasks:
-                    parts.append("task%s %s" % ("" if len(bad_tasks) == 1 else "s",
-                                                ", ".join("#%d" % t for t in bad_tasks)))
-                    fix.append("delete the task%s (hermes-hq cannot edit a task's title)"
-                               % ("" if len(bad_tasks) == 1 else "s"))
-                if bad_scheds:
-                    parts.append("reminder%s %s" % ("" if len(bad_scheds) == 1 else "s",
-                                                    ", ".join("#%d" % t for t in bad_scheds)))
-                    fix.append("rename the reminder%s on the Schedules page"
-                               % ("" if len(bad_scheds) == 1 else "s"))
-                raise VaultRefused(
-                    "this note cannot be sealed while %s still carr%s its title — "
-                    "sealing it would erase the note and leave the title in plain "
-                    "sight%s. To go ahead, %s, then move the note."
-                    % (" and ".join(parts),
-                       "ies" if len(bad_tasks) + len(bad_scheds) == 1 else "y",
-                       ", and a reminder keeps minting new tasks carrying it" if bad_scheds else "",
-                       " and ".join(fix)))
+                raise VaultRefused(_refusal(bad_tasks, bad_scheds))
             entries = conn.execute(
                 "SELECT body, created_at FROM note_entries WHERE note_id=? ORDER BY id",
                 (note_id,)).fetchall()

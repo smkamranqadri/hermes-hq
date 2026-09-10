@@ -366,9 +366,19 @@ export const useVaultNotes = (enabled = true) => useQuery({ queryKey: ['vault-no
 export const useVaultNote = (id: number | null) => useQuery({ queryKey: ['vault-note', id], queryFn: () => get<VaultNoteFull>(`/api/vault/note/${id}`), enabled: id != null, retry: false })
 export const useVaultAudit = () => useQuery({ queryKey: ['vault-audit'], queryFn: () => get<{ audit: VaultAudit[] }>('/api/vault/audit') })
 export const vaultUnlock = (passphrase: string) => post<VaultStatus>('/api/vault/unlock', { passphrase })
-/** Web setup mints NO recovery code (a code in a response body is a code in
- *  every proxy log) — the server returns `recovery_hint` saying so. */
-export const vaultInit = (passphrase: string) => post<VaultStatus & { recovery_hint: string }>('/api/vault/init', { passphrase })
+/** The ONE call that ever returns a recovery code, at creation, once. It is
+ *  stored nowhere, so the UI must make the owner confirm they have saved it. */
+export const vaultInit = (passphrase: string) => post<VaultStatus & { recovery_code: string; recovery_note: string }>('/api/vault/init', { passphrase })
+/** What sealing a note would destroy, computed server-side before the owner
+ *  commits — this is the only irreversible delete in the app. */
+export type VaultMoveImpact = {
+  note_id: number; blocked: boolean; blocking_tasks: number[]; blocking_schedules: number[]
+  reason: string | null
+  counts: { revisions: number; entries: number; attachments: number; links: number; proposals: number; activity: number; notifications: number }
+  titles_known: number; title_reach: boolean; title_reach_note: string | null
+}
+export const useVaultMoveImpact = (noteId: number | null, enabled: boolean) =>
+  useQuery({ queryKey: ['vault-move-impact', noteId], queryFn: () => get<VaultMoveImpact>(`/api/vault/move-impact/${noteId}`), enabled: enabled && noteId != null, retry: false })
 export const vaultLock = () => post<VaultStatus>('/api/vault/lock')
 export const vaultCreate = (title: string, body: string) => post<{ id: number }>('/api/vault/notes', { title, body })
 export const vaultMove = (note_id: number) => post<{ ok: true; vault_note_id: number }>('/api/vault/move', { note_id })

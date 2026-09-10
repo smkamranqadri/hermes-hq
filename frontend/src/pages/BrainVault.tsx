@@ -25,16 +25,47 @@ import { usePageTitle } from '../usePageTitle'
 
 const LOCK = '🔒'
 
+/** Shown ONCE, at creation, and stored nowhere. It must survive the parent
+ *  unmounting (creating the vault unlocks it, which swaps UnlockCard out in
+ *  the same tick — that is exactly how the previous disclosure managed to
+ *  flash for a single frame and never be read), so it is rendered by the PAGE
+ *  and dismissed only by an explicit confirmation. */
+function RecoveryCodeModal({ code, note, onDone }: { code: string; note: string; onDone: () => void }) {
+  const [saved, setSaved] = useState(false)
+  const [copied, setCopied] = useState(false)
+  return (
+    <Modal title="Save your recovery code" onClose={() => { /* no accidental dismissal */ }}
+      dismissible={false} elevated>
+      <div className="flex flex-col gap-3" data-recovery-box>
+        <p className="text-sm">This is the only time this code is shown. It is stored nowhere —
+          not in the database, not in a backup, not in any log.</p>
+        <div className="rounded-lg border border-accent/50 bg-inset p-3">
+          <p className="select-all break-all font-mono text-sm tracking-wider" data-recovery-code>{code}</p>
+        </div>
+        <p className="text-xs text-muted">{note}</p>
+        <p className="text-xs text-needsyou">If you lose both this code and the passphrase, the vault is gone for good.</p>
+        <div className="flex flex-wrap items-center gap-2">
+          <Btn kind="ghost" type="button" onClick={() => {
+            // clipboard can be unavailable (insecure context) — never throw at the owner
+            void navigator.clipboard?.writeText(code).then(() => setCopied(true)).catch(() => setCopied(false))
+          }}>{copied ? 'Copied' : 'Copy'}</Btn>
+          <label className="flex items-center gap-2 text-xs">
+            <input type="checkbox" checked={saved} onChange={e => setSaved(e.target.checked)} data-recovery-saved />
+            I have saved it
+          </label>
+          <Btn className="ml-auto" disabled={!saved} onClick={onDone} data-recovery-done>Continue</Btn>
+        </div>
+      </div>
+    </Modal>
+  )
+}
+
 /** Unlock (or first-time setup). One field, submitted and immediately
  *  forgotten — the input is cleared in `finally`, so an interrupted submit
  *  does not leave the passphrase sitting in a controlled input. */
-function UnlockCard({ initialized }: { initialized: boolean }) {
+function UnlockCard({ initialized, onCreated }: { initialized: boolean; onCreated: (code: string, note: string) => void }) {
   const [pass, setPass] = useState('')
   const [busy, setBusy] = useState(false)
-  // Setting the vault up from the web mints NO recovery code — a code shown in
-  // a browser response is a code in every proxy log. The server says so in
-  // `recovery_hint` and the owner sees it here, once, right after setup.
-  const [hint, setHint] = useState<string | null>(null)
   const qc = useQueryClient(); const toast = useToast()
   const submit = async (e: React.FormEvent) => {
     e.preventDefault()
@@ -42,7 +73,9 @@ function UnlockCard({ initialized }: { initialized: boolean }) {
     setBusy(true)
     try {
       if (initialized) { await vaultUnlock(pass); toast('Vault unlocked') }
-      else { const r = await vaultInit(pass); setHint(r.recovery_hint ?? null); toast('Vault created') }
+      // No toast on creation: the recovery-code modal IS the confirmation, and
+      // a toast floats over it — covering a code that is shown exactly once.
+      else { const r = await vaultInit(pass); onCreated(r.recovery_code, r.recovery_note) }
       await qc.invalidateQueries({ queryKey: ['vault-status'] })
       await qc.invalidateQueries({ queryKey: ['vault-notes'] })
     } catch (err) {
@@ -60,7 +93,7 @@ function UnlockCard({ initialized }: { initialized: boolean }) {
           <p className="mt-1 text-xs text-muted">
             {initialized
               ? 'A separate passphrase — not your login password. It is never stored on this device, so the vault re-seals on every sign-out and every restart.'
-              : 'Choose a passphrase (12+ characters). It is not your login password, and it is the only thing protecting these notes — nothing on this server can recover it for you.'}
+              : 'Choose a passphrase (12+ characters). It is not your login password, and it is the only thing protecting these notes. You will get a one-time recovery code straight after.'}
           </p>
         </div>
         <Field label="Vault passphrase">
@@ -69,9 +102,8 @@ function UnlockCard({ initialized }: { initialized: boolean }) {
           <TextInput type="password" value={pass} onChange={e => setPass(e.target.value)}
             autoComplete="new-password" autoCapitalize="off" autoCorrect="off"
             spellCheck={false} name="vault-passphrase" aria-label="Vault passphrase"
-            placeholder={initialized ? 'Passphrase' : 'At least 8 characters'} />
+            placeholder={initialized ? 'Passphrase' : 'At least 12 characters'} />
         </Field>
-        {hint && <p className="rounded-lg border border-needsyou/40 bg-needsyou/10 p-2 text-xs text-needsyou">{hint}</p>}
         <div className="flex items-center gap-2">
           <Btn type="submit" busy={busy} disabled={!pass}>{initialized ? 'Unlock' : 'Create vault'}</Btn>
           <span className="text-[11px] text-muted">Nothing is saved on this device.</span>
@@ -208,6 +240,10 @@ export function BrainVault() {
   const notes = useVaultNotes(st.data?.initialized === true)
   const [creating, setCreating] = useState(false)
   const [open, setOpen] = useState<number | null>(null)
+  // Held by the PAGE, not by UnlockCard: creating the vault unlocks it, which
+  // unmounts UnlockCard in the same tick. The previous disclosure lived in
+  // that component's state and so rendered for exactly one frame.
+  const [newCode, setNewCode] = useState<{ code: string; note: string } | null>(null)
   const qc = useQueryClient(); const toast = useToast()
   const unlocked = st.data?.unlocked === true
   const rows = notes.data?.notes ?? []
@@ -220,6 +256,8 @@ export function BrainVault() {
   return (
     <section className="mx-auto max-w-6xl p-4 sm:p-6">
       {creating && <NewVaultNote onClose={() => setCreating(false)} />}
+      {newCode && <RecoveryCodeModal code={newCode.code} note={newCode.note}
+        onDone={() => { setNewCode(null); qc.invalidateQueries({ queryKey: ['vault-status'] }) }} />}
       <PageHeader crumb="second-brain // vault" title="Vault" right={
         <div className="flex flex-wrap items-center gap-2">
           <BrainSubNav inbox={inbox} review={review} />
@@ -233,7 +271,22 @@ export function BrainVault() {
       </p>
 
       {st.isLoading && <Loading rows={3} />}
-      {st.data && !unlocked && <UnlockCard initialized={st.data.initialized} />}
+      {st.data && !unlocked && <UnlockCard initialized={st.data.initialized}
+        onCreated={(code, note) => setNewCode({ code, note })} />}
+
+      {/* A vault created before the 2026-09-10 reversal has no recovery wrap
+          at all, and nothing used to say so — `has_recovery_code` was typed
+          and read by no component. Forgetting the passphrase on such a vault
+          is permanent, so it is stated wherever the vault is, not once. */}
+      {st.data?.initialized && st.data.has_recovery_code === false && (
+        <div className="mt-4 rounded-xl border border-needsyou/40 bg-needsyou/10 p-3 text-xs text-needsyou"
+             data-no-recovery>
+          <p className="font-semibold">This vault has no recovery code.</p>
+          <p className="mt-1">Forgetting the passphrase would be permanent. Run
+            <span className="mx-1 font-mono">wm vault recovery-code --regenerate</span>
+            on the server to mint one.</p>
+        </div>
+      )}
 
       {st.data?.initialized && (
         <div className="mt-4 grid gap-4 lg:grid-cols-[minmax(0,1fr)_minmax(0,1fr)]">
