@@ -15,6 +15,7 @@ typed, and withholding it left a phone-created vault unrecoverable). A test
 enumerates every route to hold exactly that line.
 """
 import os
+from urllib.parse import quote
 
 from fastapi import APIRouter, File, Form, HTTPException, Request, UploadFile
 from fastapi.responses import Response
@@ -207,12 +208,26 @@ def vault_attachment(request: Request, attachment_id: int):
     if got is None:
         raise HTTPException(404, "no such vault attachment")
     data, mime, name = got
-    headers = {"Cache-Control": "no-store"}
-    if name:
-        headers["Content-Disposition"] = 'inline; filename="%s"' % os.path.basename(
-            name).replace('"', "")
-    return Response(content=data, media_type=mime or "application/octet-stream",
-                    headers=headers)
+    # Active content must never run on the app origin — `backend/files.py`
+    # already carries this control and this route needs it MORE, because its
+    # sibling routes hand back decrypted vault plaintext to any same-origin
+    # fetch. An SVG or HTML attachment opened while the vault is unlocked would
+    # otherwise script `/api/vault/notes` and exfiltrate the lot. The mime is
+    # whatever the upload declared, so it is not trustworthy input.
+    # (Phase 4 security review, 2026-09-10.)
+    media = (mime or "application/octet-stream").split(";")[0].strip().lower()
+    disp = "inline"
+    if media in ("text/html", "application/xhtml+xml", "image/svg+xml",
+                 "application/xml", "text/xml"):
+        media, disp = "application/octet-stream", "attachment"
+    headers = {"Cache-Control": "no-store",
+               "X-Content-Type-Options": "nosniff",
+               "Content-Security-Policy": "sandbox; default-src 'none'"}
+    # RFC 5987: a raw interpolation raises UnicodeEncodeError on any non-Latin-1
+    # filename, which for this owner's library is not hypothetical.
+    headers["Content-Disposition"] = "%s; filename*=UTF-8''%s" % (
+        disp, quote(os.path.basename(name or "attachment")))
+    return Response(content=data, media_type=media, headers=headers)
 
 
 class MoveIn(BaseModel):

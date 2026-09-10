@@ -4808,12 +4808,16 @@ def titleholders(conn, note_id, titles=None):
     if not titles:
         return [], []
     for t in titles:
-        like = "%" + t.replace("%", r"\%").replace("_", r"\_") + "%"
+        like = "%" + _like_escape(t) + "%"
         for r in conn.execute(
+                # definition_of_done counts too: it is rendered into the
+                # agent's brief, so a title parked there is as exposed as one
+                # in the description (Phase 4 security review, 2026-09-10).
                 "SELECT id FROM tasks WHERE title LIKE ? ESCAPE '\\' "
                 "OR description LIKE ? ESCAPE '\\' "
+                "OR definition_of_done LIKE ? ESCAPE '\\' "
                 "OR (LENGTH(TRIM(title)) >= ? AND ? LIKE '%' || title || '%')",
-                (like, like, MIN_DISTINCTIVE_TITLE, t)):
+                (like, like, like, MIN_DISTINCTIVE_TITLE, t)):
             tasks.add(r["id"])
         for r in conn.execute(
                 "SELECT id FROM schedules WHERE name LIKE ? ESCAPE '\\' "
@@ -4895,7 +4899,7 @@ def _destroy_note_plaintext(conn, note_id, title=None, dry_run=False):
     counts["title_reach_skipped"] = bool(
         (title or note_title_history(conn, note_id)) and not titles)
     for t in titles:
-        like.append("%%%s%%" % t.replace("%", r"\%").replace("_", r"\_"))
+        like.append("%%%s%%" % _like_escape(t))
     where = " OR ".join(["detail LIKE ? ESCAPE '\\'"] * len(like))
     counts["activity"] = _n("SELECT COUNT(*) FROM activity WHERE " + where, *like)
 
@@ -4909,7 +4913,7 @@ def _destroy_note_plaintext(conn, note_id, title=None, dry_run=False):
         nwhere.append("source_key IN (%s)" % ",".join("?" * len(prop_ids)))
         nparams += ["proposal:%d" % p for p in prop_ids]
     for t in titles:
-        esc = "%%%s%%" % t.replace("%", r"\%").replace("_", r"\_")
+        esc = "%%%s%%" % _like_escape(t)
         nwhere.append("title LIKE ? ESCAPE '\\'"); nparams.append(esc)
         nwhere.append("body LIKE ? ESCAPE '\\'"); nparams.append(esc)
     nsql = " OR ".join(nwhere)
@@ -6043,6 +6047,21 @@ def set_note_provenance(note_id, created_at=None, updated_at=None,
                          vals + [note_id])
     finally:
         conn.close()
+
+
+def _like_escape(t):
+    """Escape a literal for a `LIKE ? ESCAPE '\\'` pattern.
+
+    The BACKSLASH must be escaped FIRST. Escaping only `%` and `_` leaves the
+    escape character itself live, so under `ESCAPE '\\'` SQLite consumes it and
+    takes the next character literally — a title like `C:\\Users\\prod creds`
+    then produces a pattern that does not match its own text. That made the
+    vault's title-survival guard fail OPEN: `titleholders` returned nothing, the
+    move was allowed, and the secret title stayed in `tasks` while the confirm
+    modal truthfully reported zero rows. (Phase 4 security review, 2026-09-10.)
+    """
+    return (str(t).replace("\\", "\\\\")
+            .replace("%", r"\%").replace("_", r"\_"))
 
 
 def export_snapshot(db_path=None):

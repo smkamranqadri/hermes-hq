@@ -86,6 +86,21 @@ class Sessions:
             self._save()
 
 
+def _normalise_path(raw):
+    """Collapse repeated slashes and resolve `.`/`..` so one spelling of a path
+    cannot be guarded while another reaches the same route."""
+    parts = []
+    for seg in str(raw or "").split("/"):
+        if seg in ("", "."):
+            continue
+        if seg == "..":
+            if parts:
+                parts.pop()
+            continue
+        parts.append(seg)
+    return "/" + "/".join(parts)
+
+
 class AuthMiddleware(BaseHTTPMiddleware):
     """401 for unauthenticated /api/*, 403 for mutations without the CSRF header."""
 
@@ -94,7 +109,13 @@ class AuthMiddleware(BaseHTTPMiddleware):
         self.sessions = sessions
 
     async def dispatch(self, request, call_next):
-        path = request.url.path
+        # Normalise BEFORE the gate: `//api/system` and `/api/./system` reach
+        # the same route while `startswith("/api/")` is false on the first and
+        # `path in PUBLIC` is false on the second. The gate must not be
+        # sidestepped by spelling (Phase 4 security review, 2026-09-10 — the
+        # same double-slash trick was a live unauthenticated file read through
+        # the SPA fallback).
+        path = _normalise_path(request.url.path)
         if not path.startswith("/api/") or path in PUBLIC:
             return await call_next(request)
         sess = self.sessions.get(request.cookies.get(COOKIE))

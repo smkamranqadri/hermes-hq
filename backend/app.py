@@ -85,10 +85,25 @@ def create_app(dispatcher_enabled: bool = True, interval: float = 30.0, password
     if os.path.isdir(STATIC_DIR):
         app.mount("/assets", StaticFiles(directory=os.path.join(STATIC_DIR, "assets")), name="assets")
 
+        _static_root = os.path.realpath(STATIC_DIR)
+
         @app.get("/{path:path}", include_in_schema=False)
         def spa(path: str):
-            candidate = os.path.join(STATIC_DIR, path)
-            if path and os.path.isfile(candidate):
+            # CONFINE to the build directory. `os.path.join(base, "/etc/passwd")`
+            # returns "/etc/passwd" — an absolute second argument discards the
+            # base — and the catch-all `{path:path}` happily binds a leading
+            # slash from a request line like `//etc/passwd`. AuthMiddleware only
+            # guards paths starting with "/api/", so this route was an
+            # UNAUTHENTICATED arbitrary file read: `//opt/data/hermes-hq/password`
+            # and `//opt/data/hermes-hq/sessions.json` both served 200 on the
+            # live box (found by the Phase 4 security review, 2026-09-10).
+            # realpath both sides so symlinks inside the build dir cannot escape
+            # either.
+            candidate = os.path.realpath(os.path.join(_static_root,
+                                                      path.lstrip("/")))
+            if path and (candidate == _static_root
+                         or candidate.startswith(_static_root + os.sep)) \
+                    and os.path.isfile(candidate):
                 return FileResponse(candidate)
             # the SPA shell must never be served stale: hashed assets change on every build
             return FileResponse(os.path.join(STATIC_DIR, "index.html"), headers={"Cache-Control": "no-cache"})

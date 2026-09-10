@@ -1363,17 +1363,16 @@ def test_move_is_refused_while_a_linked_task_or_reminder_carries_the_title(api):
     assert r.status_code == 409
     assert "#%d" % tid in r.text and "#%d" % sid in r.text
 
-    # the owner does what the message asks
-    # The owner does what the message asks. A reminder can be renamed through
-    # the real store call; a task cannot be retitled anywhere in hermes-hq, so
-    # the only remedy the message offers for it is removal.
+    # The owner does what the message asks, and BOTH remedies are real calls:
+    # schedules always could be renamed, and `edit_task` gained `title` in
+    # ce54699 — added because this very refusal had nothing to offer but
+    # deletion. The message must name renaming, not removal.
+    assert "rename the task" in msg and "rename the reminder" in msg
+    assert "delete" not in msg
     store.update_schedule(sid, name="dentist", title="call the dentist", db_path=db)
-    assert "cannot edit a task's title" in msg
-    conn = sqlite3.connect(db)
-    with conn:
-        conn.execute("DELETE FROM note_links WHERE kind='task' AND target_id=?", (tid,))
-        conn.execute("DELETE FROM tasks WHERE id=?", (tid,))
-    conn.close()
+    store.edit_task(tid, title="call the dentist", db_path=db)
+    # nothing was deleted: the task and its link both survive the remedy
+    assert store.get_task(tid, db_path=db)["title"] == "call the dentist"
     res = V.move_note_to_vault(nid, key, db_path=db)
     assert res["vault_note_id"]
 
@@ -1912,3 +1911,97 @@ def test_an_unrelated_task_does_not_block_the_move(env):
     nid = store.create_note("Fakebank login details", "body", db_path=db)
     _unlinked_task(store, db, "Rebuild the staging box")
     assert V.move_note_to_vault(nid, key, db_path=db)["vault_note_id"]
+
+
+# ---- Phase 4 security review, 2026-09-10 --------------------------------
+
+def test_a_backslash_in_a_title_does_not_defeat_the_survival_guard(env):
+    """The LIKE escape must escape the escape character FIRST.
+
+    Escaping only `%` and `_` left `\\` live: under ESCAPE '\\' SQLite consumes
+    it and takes the next character literally, so a title like
+    `C:\\Users\\prod creds` produced a pattern that did not match its own text.
+    The guard then returned nothing, the move was ALLOWED, and the secret title
+    stayed in `tasks` while the modal truthfully reported zero rows — a
+    fail-OPEN break of the control that findings B/C/D exist to enforce.
+    """
+    store, db, tmp = env
+    from backend import vault as V
+    V.init_vault(PW, db_path=db)
+    key = V.unlock(PW, db_path=db)
+    title = r"C:\Users\admin\prod creds"
+    nid = store.create_note(title, body="the secret", status="inbox", db_path=db)
+    tid = store.create_task("alpha", "Rotate %s now" % title, db_path=db)
+    store.link_note(nid, "task", tid, db_path=db)
+    with pytest.raises(V.VaultRefused) as e:
+        V.move_note_to_vault(nid, key, db_path=db)
+    assert "#%d" % tid in str(e.value)
+    assert store.get_note(nid, db_path=db) is not None      # nothing destroyed
+
+
+def test_the_definition_of_done_holds_a_title_back_too(env):
+    """`definition_of_done` is rendered into the agent's brief, so a title
+    parked there is as exposed as one in the description."""
+    store, db, tmp = env
+    from backend import vault as V
+    V.init_vault(PW, db_path=db)
+    key = V.unlock(PW, db_path=db)
+    title = "Fakebank account recovery codes"
+    nid = store.create_note(title, body="x", status="inbox", db_path=db)
+    tid = store.create_task("alpha", "unrelated", "unrelated",
+                            "check %s are rotated" % title, db_path=db)
+    store.link_note(nid, "task", tid, db_path=db)
+    with pytest.raises(V.VaultRefused) as e:
+        V.move_note_to_vault(nid, key, db_path=db)
+    assert "#%d" % tid in str(e.value)
+
+
+def _last_vault_attachment_id(db):
+    import sqlite3
+    conn = sqlite3.connect(db)
+    try:
+        return conn.execute("SELECT MAX(id) FROM vault_attachments").fetchone()[0]
+    finally:
+        conn.close()
+
+
+def test_a_vault_attachment_is_never_served_as_active_content(api):
+    """Sibling routes hand back decrypted plaintext to any same-origin fetch,
+    so an SVG or HTML attachment rendering on the app origin while the vault is
+    unlocked would script `/api/vault/notes` and exfiltrate the lot. The mime is
+    whatever the upload declared — untrusted input."""
+    c, store, db, tmp = api
+    h = login(c)
+    c.post("/api/vault/init", json={"passphrase": PW}, headers=h)
+    nid = c.post("/api/vault/notes", json={"title": "holder", "body": "b"},
+                 headers=h).json()["note"]["id"]
+    svg = b'<svg xmlns="http://www.w3.org/2000/svg"><script>fetch("/api/vault/notes")</script></svg>'
+    r = c.post("/api/vault/note/%d/attachments" % nid,
+               files={"file": ("payload.svg", svg, "image/svg+xml")},
+               data={"kind": "photo"}, headers=h)
+    assert r.status_code == 200
+    got = c.get("/api/vault/attachment/%d" % _last_vault_attachment_id(db))
+    assert got.status_code == 200
+    assert "svg" not in got.headers["content-type"]
+    assert got.headers["content-type"].startswith("application/octet-stream")
+    assert got.headers["content-disposition"].startswith("attachment")
+    assert got.headers["x-content-type-options"] == "nosniff"
+    assert "default-src 'none'" in got.headers["content-security-policy"]
+    assert got.content == svg                       # the bytes are intact
+
+
+def test_a_non_latin1_attachment_name_does_not_500(api):
+    """A raw `filename="%s"` interpolation raises UnicodeEncodeError on any
+    non-Latin-1 name, which for this owner's library is not hypothetical."""
+    c, store, db, tmp = api
+    h = login(c)
+    c.post("/api/vault/init", json={"passphrase": PW}, headers=h)
+    nid = c.post("/api/vault/notes", json={"title": "holder", "body": "b"},
+                 headers=h).json()["note"]["id"]
+    r = c.post("/api/vault/note/%d/attachments" % nid,
+               files={"file": ("اردو-نوٹ.png", b"\x89PNG-bytes", "image/png")},
+               data={"kind": "photo"}, headers=h)
+    assert r.status_code == 200
+    got = c.get("/api/vault/attachment/%d" % _last_vault_attachment_id(db))
+    assert got.status_code == 200 and got.content == b"\x89PNG-bytes"
+    assert "filename*=UTF-8''" in got.headers["content-disposition"]

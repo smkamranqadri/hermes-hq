@@ -704,16 +704,16 @@ def _scrub(conn):
 def _refusal(tasks, scheds):
     """The sentence the owner reads, naming a remedy the app can actually do.
 
-    A schedule can be renamed (`update_schedule` takes name/title, POST
-    /api/schedules/{id}); a TASK cannot — nothing in hermes-hq edits a task
-    title (`edit_task` takes description/DoD/approval only) — so for a task
-    the honest instruction is "delete it", not "retitle it".
+    Both halves are renameable as of 2026-09-10: schedules always were
+    (`update_schedule` takes name/title), and `edit_task` gained `title` in
+    `ce54699` — added precisely because this refusal had no remedy to offer but
+    deletion. Keep this message honest if either capability changes.
     """
     parts, fix = [], []
     if tasks:
         parts.append("task%s %s" % ("" if len(tasks) == 1 else "s",
                                     ", ".join("#%d" % t for t in tasks)))
-        fix.append("delete the task%s (hermes-hq cannot edit a task's title)"
+        fix.append("rename the task%s on its task page (the ✎ beside the title)"
                    % ("" if len(tasks) == 1 else "s"))
     if scheds:
         parts.append("reminder%s %s" % ("" if len(scheds) == 1 else "s",
