@@ -622,6 +622,82 @@ CREATE TABLE IF NOT EXISTS import_quarantine (
 CREATE UNIQUE INDEX IF NOT EXISTS idx_quarantine_unit
     ON import_quarantine(source, ident);
 
+-- Phase 4 slice B: the PRIVATE VAULT. A SEPARATE table, deliberately not a
+-- flag on `notes` — that is the whole design. Agent denial becomes
+-- STRUCTURAL: list_notes / search_notes / lint_library / related_notes / the
+-- proposal path / the `wm note` CLI group / the export all read `notes`, and
+-- a row that is not in `notes` is a row none of them can reach, whatever the
+-- prompt says. Nothing in this module reads or writes these tables; every
+-- read and write lives in backend/vault.py behind the passphrase.
+--
+-- Every user-visible field is a sealed BLOB (AES-GCM, nonce||ciphertext).
+-- What stays plaintext is only what a lock icon needs: an id and two dates.
+CREATE TABLE IF NOT EXISTS vault_notes (
+    id         INTEGER PRIMARY KEY,
+    title_enc  BLOB NOT NULL,
+    body_enc   BLOB NOT NULL,
+    kind       TEXT DEFAULT 'note',
+    created_at REAL,
+    updated_at REAL
+);
+
+-- Thoughts. Sealed the same way; no area, no tags, no project anywhere in
+-- this schema (owner decision: a row you cannot read is a row you cannot file).
+CREATE TABLE IF NOT EXISTS vault_entries (
+    id         INTEGER PRIMARY KEY,
+    note_id    INTEGER NOT NULL REFERENCES vault_notes(id) ON DELETE CASCADE,
+    body_enc   BLOB NOT NULL,
+    created_at REAL
+);
+
+-- Attachment BYTES live sealed IN the row, not on disk beside the library.
+-- A vault attachment written to <hq_home>/attachments would be a plaintext
+-- file the vault claims to have sealed; keeping the ciphertext in the DB
+-- means there is no second lifecycle to get wrong.
+CREATE TABLE IF NOT EXISTS vault_attachments (
+    id         INTEGER PRIMARY KEY,
+    note_id    INTEGER NOT NULL REFERENCES vault_notes(id) ON DELETE CASCADE,
+    kind       TEXT NOT NULL DEFAULT 'photo',
+    name_enc   BLOB,
+    mime_enc   BLOB,
+    blob_enc   BLOB NOT NULL,
+    bytes      INTEGER,                     -- ciphertext length, metadata only
+    created_at REAL
+);
+
+-- The wrapped data key. TWO wraps of the SAME random key: one under
+-- scrypt(passphrase) — the only one the API/web read path ever touches — and
+-- one under a server-held escrow key that lives OUTSIDE hq_home and is used
+-- exclusively by the root-only `wm vault recover` CLI. Without that
+-- separation the passphrase would be decoration.
+CREATE TABLE IF NOT EXISTS vault_meta (
+    key   TEXT PRIMARY KEY,
+    value TEXT
+);
+
+-- Move-to-vault is the ONE carve-out from archive-only (2026-09-07 rule holds
+-- everywhere else). It destroys the plaintext in `notes`, `notes_fts` and
+-- every `note_revisions` snapshot in one transaction. This row is what proves
+-- the deletion happened WITHOUT preserving the secret: the title is recorded
+-- as a sha256, never as text.
+CREATE TABLE IF NOT EXISTS vault_audit (
+    id            INTEGER PRIMARY KEY,
+    action        TEXT NOT NULL,        -- created | moved_in | drained | recovered | rewrapped
+    old_note_id   INTEGER,              -- the `notes` id that was destroyed
+    vault_note_id INTEGER,
+    title_sha256  TEXT,
+    revisions     INTEGER DEFAULT 0,    -- note_revisions rows destroyed
+    entries       INTEGER DEFAULT 0,
+    attachments   INTEGER DEFAULT 0,
+    links         INTEGER DEFAULT 0,
+    proposals     INTEGER DEFAULT 0,
+    detail        TEXT,
+    created_at    REAL
+);
+
+CREATE INDEX IF NOT EXISTS idx_vault_entries_note ON vault_entries(note_id);
+CREATE INDEX IF NOT EXISTS idx_vault_att_note     ON vault_attachments(note_id);
+
 CREATE INDEX IF NOT EXISTS idx_notes_status   ON notes(status);
 CREATE INDEX IF NOT EXISTS idx_notes_area     ON notes(area_id);
 CREATE INDEX IF NOT EXISTS idx_notes_project  ON notes(project_id);
@@ -751,6 +827,11 @@ def _migrate(conn):
         )""")
     conn.execute("CREATE UNIQUE INDEX IF NOT EXISTS idx_quarantine_unit "
                  "ON import_quarantine(source, ident)")
+    # Phase 4 slice B: `wm vault drain-quarantine` moves a held-back secret into
+    # the vault and stamps the row instead of deleting it — the quarantine
+    # ledger stays a permanent record of what the import refused to store.
+    if "drained_at" not in _table_columns(conn, "import_quarantine"):
+        conn.execute("ALTER TABLE import_quarantine ADD COLUMN drained_at REAL")
 
 
 def init_db(db_path=None):
@@ -4639,6 +4720,92 @@ def _fts_sync(conn, note_id):
     conn.execute(
         "INSERT INTO notes_fts(rowid, title, body, tags) VALUES(?,?,?,?)",
         (note_id, row["title"] or "", body, tags))
+
+
+# ---------------------------------------------------------------------------
+# Phase 4 slice B: the ONE carve-out from archive-only.
+# ---------------------------------------------------------------------------
+def _destroy_note_plaintext(conn, note_id):
+    """Erase every plaintext trace of one note, inside the CALLER's transaction.
+
+    Deliberately private and connection-taking: this is not a command anyone
+    can run. Its only caller is backend/vault.py's move-to-vault, which opens
+    one transaction, writes the ciphertext, READS IT BACK, and only then calls
+    this — so a failure anywhere leaves the note untouched.
+
+    The FTS delete is written to match `_fts_sync` exactly (same
+    `DELETE FROM notes_fts WHERE rowid=?`, same NOTES_FTS guard). If the index
+    were maintained one way and cleared another, the "destroyed" note's text
+    would survive in notes_fts, which is the single highest-consequence line
+    in this phase.
+
+    Returns the counts of what was destroyed, for the vault_audit row.
+
+    NOT touched, deliberately: a task or schedule the owner graduated FROM this
+    note. Those are separate objects the owner created on purpose ("create and
+    link, never convert"), and deleting someone's todo because its source note
+    was vaulted would be a surprise. The `note_links` rows pointing at them go;
+    whatever text the owner typed into the task stays theirs. `note_tag_taxonomy`
+    is untouched too — a tag is library vocabulary, not this note's text.
+    """
+    counts = {}
+    def _n(sql, *params):
+        return conn.execute(sql, params).fetchone()[0]
+
+    counts["revisions"] = _n("SELECT COUNT(*) FROM note_revisions WHERE note_id=?", note_id)
+    counts["entries"] = _n("SELECT COUNT(*) FROM note_entries WHERE note_id=?", note_id)
+    counts["attachments"] = _n("SELECT COUNT(*) FROM note_attachments WHERE note_id=?", note_id)
+    # Links point BOTH ways: a disputed pair records the partner as a target,
+    # and leaving that half behind would keep a dangling id pointing at a note
+    # that no longer exists.
+    counts["links"] = _n("SELECT COUNT(*) FROM note_links WHERE note_id=? "
+                         "OR (kind='note' AND target_id=?)", note_id, note_id)
+    # A proposal's `payload` restates the note and its `summary` is librarian
+    # prose ABOUT it that routinely quotes the title, so a proposal is
+    # plaintext too — it goes with the note.
+    prop_ids = [r[0] for r in conn.execute(
+        "SELECT id FROM proposals WHERE note_id=?", (note_id,))]
+    counts["proposals"] = len(prop_ids)
+
+    # The two plaintext holders the plan's "three places" did not name, both
+    # found by grepping the schema rather than by reading the spec:
+    #
+    #   activity.detail    — `note_created` writes "note #N: <title[:120]>",
+    #                        and `proposal_created` writes the summary.
+    #   notifications      — `create_proposal` raises "Librarian: <kind>
+    #                        proposal on '<title[:80]>'".
+    #
+    # A secret carried in the TITLE survives in both. Every pattern below is
+    # anchored on the character AFTER the id (":", " ", or end of string) so
+    # note #12 can never match note #120.
+    like = ["note #%d: %%" % note_id, "note #%d by %%" % note_id,
+            "%%on note #%d: %%" % note_id, "%%on note #%d" % note_id]
+    where = " OR ".join(["detail LIKE ?"] * len(like))
+    counts["activity"] = _n("SELECT COUNT(*) FROM activity WHERE " + where, *like)
+    # Redacted, not deleted: the activity log is the tamper audit `wm check`
+    # reads, and a hole in it is itself a finding. The row stays, its text goes.
+    conn.execute(
+        "UPDATE activity SET detail=? WHERE " + where,
+        ["note #%d: (moved to the vault)" % note_id] + like)
+    counts["notifications"] = 0
+    if prop_ids:
+        keys = ["proposal:%d" % p for p in prop_ids]
+        counts["notifications"] = _n(
+            "SELECT COUNT(*) FROM notifications WHERE source_key IN (%s)"
+            % ",".join("?" * len(keys)), *keys)
+        conn.execute("DELETE FROM notifications WHERE source_key IN (%s)"
+                     % ",".join("?" * len(keys)), keys)
+
+    conn.execute("DELETE FROM note_revisions WHERE note_id=?", (note_id,))
+    conn.execute("DELETE FROM note_entries WHERE note_id=?", (note_id,))
+    conn.execute("DELETE FROM note_attachments WHERE note_id=?", (note_id,))
+    conn.execute("DELETE FROM note_links WHERE note_id=? OR (kind='note' AND target_id=?)",
+                 (note_id, note_id))
+    conn.execute("DELETE FROM proposals WHERE note_id=?", (note_id,))
+    if NOTES_FTS:
+        conn.execute("DELETE FROM notes_fts WHERE rowid=?", (note_id,))
+    conn.execute("DELETE FROM notes WHERE id=?", (note_id,))
+    return counts
 
 
 def create_area(name, parent_id=None, description=None, db_path=None):

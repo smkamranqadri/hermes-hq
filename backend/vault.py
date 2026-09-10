@@ -1,0 +1,790 @@
+"""The private vault (Second Brain Phase 4 slice B, `intent/Phase4Plan.md`).
+
+Everything the vault knows how to do lives here: the crypto, the row access
+and the one destruction path. `core/wm_store.py` owns the tables and nothing
+else — it has no function that reads or writes a `vault_notes` row, which is
+what makes the librarian's denial STRUCTURAL rather than prompted. Every
+agent-facing surface (`list_notes`, `search_notes`, `lint_library`,
+`related_notes`, the proposal path, the `wm note` CLI group, the export) reads
+`notes`, and a row that is not in `notes` is a row none of them can reach.
+
+Key handling, in the order it matters:
+
+1. A random 32-byte DATA KEY seals every field (AES-GCM, `nonce || ct`).
+2. It is wrapped TWICE. `scrypt(passphrase)` is the READ PATH — the API, the
+   web UI and `wm vault list` unwrap with the passphrase and nothing else.
+   A server-held ESCROW key is the second wrap and exists so a forgotten
+   passphrase is recoverable.
+3. **The escrow wrap is never on the read path.** `unwrap_escrow` refuses
+   unless a caller has opened `escrow_cli_gate()`, and the only place that
+   does is `core/wm_cli.cmd_vault_recover`. Nothing under `backend/` outside
+   this file so much as names the escrow. Without that separation the
+   passphrase would be decoration.
+4. The escrow key file lives OUTSIDE `hq_home`, 0600, derived from
+   `hq_home()` the way `wm_store.quarantine_dir()` derives its own directory
+   (owner rule: never hardcode `/opt/data`). It is therefore never swept into
+   `wm backup` — if a backup ever carried both halves, a single leaked backup
+   would be plaintext and the passphrase would have bought nothing.
+
+The unlocked data key NEVER enters `backend/auth.py`'s session dict:
+`Sessions._save()` serialises that dict to `sessions.json` on disk, so a key
+put there would be written out on the next save. Unlocked keys live in
+`KEYS`, a process-memory map keyed by session token with an idle timeout,
+cleared on logout and gone on every restart (including the 05:00 PKT
+auto-update).
+"""
+import contextlib
+import hashlib
+import hmac
+import json
+import os
+import secrets
+import threading
+import time
+
+from cryptography.exceptions import InvalidTag
+from cryptography.hazmat.primitives.ciphers.aead import AESGCM
+
+from core import wm_store as store
+
+# scrypt parameters. Stored in vault_meta at init so they can be raised later
+# without stranding an existing vault. n=2**15/r=8/p=1 is 32 MiB of scratch,
+# so maxmem has to be raised past OpenSSL's 32 MiB default or the KDF errors.
+SCRYPT_N = 1 << 15
+SCRYPT_R = 8
+SCRYPT_P = 1
+SCRYPT_MAXMEM = 96 << 20
+KEY_BYTES = 32
+NONCE_BYTES = 12
+
+# How long an unlocked session key survives without use.
+IDLE_SECONDS = 30 * 60
+
+VAULT_KINDS = ("note", "secret")
+ATTACHMENT_KINDS = ("photo", "voice", "file")
+
+
+class VaultError(Exception):
+    """Refusals the API turns into 4xx: wrong passphrase, locked, not set up."""
+
+
+class VaultLocked(VaultError):
+    pass
+
+
+# ---------------------------------------------------------------------------
+# escrow key file — outside hq_home, 0600, never in a backup
+# ---------------------------------------------------------------------------
+def escrow_key_path():
+    """A SIBLING of hq_home, never inside it.
+
+    `wm backup` copies the DB out of hq_home and `attachments/` beside it;
+    anything under hq_home is a candidate to be swept along. Derived from
+    `hq_home()` rather than hardcoded, exactly like
+    `wm_store.quarantine_dir()` (owner rule: never assume /opt/data).
+    """
+    return os.environ.get("HERMES_HQ_VAULT_ESCROW_KEY") or \
+        os.path.join(os.path.dirname(os.path.abspath(store.hq_home())),
+                     "hq-vault-escrow.key")
+
+
+def _create_escrow_key():
+    """Mint the escrow key 0600 from the moment it exists.
+
+    O_EXCL, and never create-then-chmod: that leaves a world-readable window
+    around the one file that can open the vault without the passphrase.
+    """
+    path = escrow_key_path()
+    os.makedirs(os.path.dirname(path), exist_ok=True)
+    key = secrets.token_bytes(KEY_BYTES)
+    fd = os.open(path, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
+    try:
+        os.write(fd, key.hex().encode() + b"\n")
+    finally:
+        os.close(fd)
+    return key
+
+
+# The escrow gate. Closed by default, so a call from a request handler raises
+# even if the file is readable by the server process. `core/wm_cli.py` is the
+# ONLY module that opens it, and only inside `wm vault recover`.
+_gate = threading.local()
+
+
+@contextlib.contextmanager
+def escrow_cli_gate():
+    """Open the root-only recovery path for the duration of one CLI command."""
+    prev = getattr(_gate, "open", False)
+    _gate.open = True
+    try:
+        yield
+    finally:
+        _gate.open = prev
+
+
+def _read_escrow_key():
+    if not getattr(_gate, "open", False):
+        raise VaultError(
+            "escrow recovery is a root-only CLI operation (`wm vault recover`); "
+            "the API read path unwraps with the passphrase alone")
+    path = escrow_key_path()
+    if not os.path.isfile(path):
+        raise VaultError("no escrow key at %s — this vault cannot be recovered" % path)
+    return bytes.fromhex(open(path).read().strip())
+
+
+# ---------------------------------------------------------------------------
+# sealing
+# ---------------------------------------------------------------------------
+def seal(key, plaintext, aad=b""):
+    """nonce || AES-GCM(plaintext). `aad` binds a ciphertext to its column, so
+    a body blob copied into the title column fails to open rather than
+    silently rendering somewhere it was never meant to be."""
+    if isinstance(plaintext, str):
+        plaintext = plaintext.encode("utf-8")
+    nonce = secrets.token_bytes(NONCE_BYTES)
+    return nonce + AESGCM(key).encrypt(nonce, plaintext, aad)
+
+
+def unseal(key, blob, aad=b""):
+    if blob is None:
+        return b""
+    blob = bytes(blob)
+    if len(blob) < NONCE_BYTES + 16:
+        raise VaultError("sealed value is truncated")
+    try:
+        return AESGCM(key).decrypt(blob[:NONCE_BYTES], blob[NONCE_BYTES:], aad)
+    except InvalidTag:
+        raise VaultError("sealed value did not open with this key")
+
+
+def unseal_text(key, blob, aad=b""):
+    return unseal(key, blob, aad).decode("utf-8", "replace")
+
+
+AAD_TITLE = b"vault.note.title"
+AAD_BODY = b"vault.note.body"
+AAD_ENTRY = b"vault.entry.body"
+AAD_ATT_BLOB = b"vault.attachment.blob"
+AAD_ATT_NAME = b"vault.attachment.name"
+AAD_ATT_MIME = b"vault.attachment.mime"
+AAD_DATA_KEY = b"vault.datakey"
+
+
+# ---------------------------------------------------------------------------
+# vault_meta — the wrapped key
+# ---------------------------------------------------------------------------
+def _meta(conn):
+    return {r["key"]: r["value"] for r in conn.execute("SELECT key, value FROM vault_meta")}
+
+
+def _set_meta(conn, **kw):
+    for k, v in kw.items():
+        conn.execute("INSERT INTO vault_meta(key, value) VALUES(?,?) "
+                     "ON CONFLICT(key) DO UPDATE SET value=excluded.value", (k, str(v)))
+
+
+def _derive(passphrase, salt, params):
+    if not isinstance(passphrase, str) or not passphrase:
+        raise VaultError("a passphrase is required")
+    return hashlib.scrypt(passphrase.encode("utf-8"), salt=salt,
+                          n=int(params["scrypt_n"]), r=int(params["scrypt_r"]),
+                          p=int(params["scrypt_p"]), dklen=KEY_BYTES,
+                          maxmem=SCRYPT_MAXMEM)
+
+
+def is_initialized(db_path=None):
+    conn = store._connect(db_path)
+    try:
+        return "pass_wrap" in _meta(conn)
+    finally:
+        conn.close()
+
+
+def init_vault(passphrase, db_path=None):
+    """Mint the data key and both wraps. Idempotent only in the sense that a
+    second call is refused — re-initialising would orphan every sealed row."""
+    if not isinstance(passphrase, str) or len(passphrase) < 8:
+        raise VaultError("the vault passphrase must be at least 8 characters")
+    conn = store._connect(db_path)
+    try:
+        if "pass_wrap" in _meta(conn):
+            raise VaultError("the vault is already set up")
+        data_key = secrets.token_bytes(KEY_BYTES)
+        salt = secrets.token_bytes(16)
+        params = {"scrypt_n": SCRYPT_N, "scrypt_r": SCRYPT_R, "scrypt_p": SCRYPT_P}
+        pass_key = _derive(passphrase, salt, params)
+        # The escrow file is minted here and NOWHERE else: an existing file is
+        # reused (a second vault on the same box shares the escrow key), never
+        # silently replaced, which would strand the older vault.
+        path = escrow_key_path()
+        if os.path.isfile(path):
+            escrow = bytes.fromhex(open(path).read().strip())
+        else:
+            escrow = _create_escrow_key()
+        with conn:
+            _set_meta(conn, kdf="scrypt", salt=salt.hex(),
+                      pass_wrap=seal(pass_key, data_key, AAD_DATA_KEY).hex(),
+                      escrow_wrap=seal(escrow, data_key, AAD_DATA_KEY).hex(),
+                      created_at=time.time(), **params)
+        return {"escrow_key_path": path, "created": True}
+    finally:
+        conn.close()
+
+
+def unlock(passphrase, db_path=None):
+    """THE READ PATH. Returns the data key, or raises. Never touches escrow."""
+    conn = store._connect(db_path)
+    try:
+        m = _meta(conn)
+    finally:
+        conn.close()
+    if "pass_wrap" not in m:
+        raise VaultError("the vault is not set up yet")
+    pass_key = _derive(passphrase, bytes.fromhex(m["salt"]), m)
+    try:
+        return unseal(pass_key, bytes.fromhex(m["pass_wrap"]), AAD_DATA_KEY)
+    except VaultError:
+        raise VaultError("wrong passphrase")
+
+
+def unwrap_escrow(db_path=None):
+    """ROOT-ONLY CLI recovery. Raises unless `escrow_cli_gate()` is open."""
+    escrow = _read_escrow_key()
+    conn = store._connect(db_path)
+    try:
+        m = _meta(conn)
+    finally:
+        conn.close()
+    if "escrow_wrap" not in m:
+        raise VaultError("the vault is not set up yet")
+    try:
+        return unseal(escrow, bytes.fromhex(m["escrow_wrap"]), AAD_DATA_KEY)
+    except VaultError:
+        raise VaultError("the escrow key does not match this vault")
+
+
+def set_passphrase(data_key, passphrase, db_path=None):
+    """Re-wrap an already-open data key under a new passphrase. The escrow
+    wrap is untouched: the data key itself never changes, so every sealed row
+    stays readable and the recovery path keeps working."""
+    if not isinstance(passphrase, str) or len(passphrase) < 8:
+        raise VaultError("the vault passphrase must be at least 8 characters")
+    conn = store._connect(db_path)
+    try:
+        m = _meta(conn)
+        if "pass_wrap" not in m:
+            raise VaultError("the vault is not set up yet")
+        salt = secrets.token_bytes(16)
+        params = {"scrypt_n": SCRYPT_N, "scrypt_r": SCRYPT_R, "scrypt_p": SCRYPT_P}
+        pass_key = _derive(passphrase, salt, params)
+        with conn:
+            _set_meta(conn, salt=salt.hex(),
+                      pass_wrap=seal(pass_key, data_key, AAD_DATA_KEY).hex(), **params)
+            _audit(conn, "rewrapped", detail="passphrase changed")
+    finally:
+        conn.close()
+    return True
+
+
+# ---------------------------------------------------------------------------
+# unlocked keys — PROCESS MEMORY ONLY
+# ---------------------------------------------------------------------------
+class KeyStore:
+    """Unlocked data keys, keyed by session token, never serialised.
+
+    Deliberately NOT `request.state.session`: `auth.Sessions._save()` json-dumps
+    that dict to `sessions.json` (0600, but on disk) on the next create/drop,
+    so a key parked there would be written out. This map dies with the process
+    — which is the intended behaviour, the vault re-seals on every restart.
+    """
+
+    def __init__(self, idle_seconds=IDLE_SECONDS):
+        self.idle = idle_seconds
+        self._keys = {}
+        self._lock = threading.Lock()
+
+    def put(self, token, key):
+        if not token:
+            raise VaultError("no session")
+        with self._lock:
+            self._keys[token] = [key, time.time()]
+
+    def get(self, token):
+        with self._lock:
+            row = self._keys.get(token or "")
+            if row is None:
+                return None
+            if time.time() - row[1] > self.idle:
+                self._keys.pop(token, None)
+                return None
+            row[1] = time.time()
+            return row[0]
+
+    def drop(self, token):
+        with self._lock:
+            self._keys.pop(token or "", None)
+
+    def clear(self):
+        with self._lock:
+            self._keys.clear()
+
+    def unlocked_at(self, token):
+        with self._lock:
+            row = self._keys.get(token or "")
+            return row[1] if row else None
+
+
+KEYS = KeyStore()
+
+
+# ---------------------------------------------------------------------------
+# audit
+# ---------------------------------------------------------------------------
+def _audit(conn, action, old_note_id=None, vault_note_id=None, title=None,
+           counts=None, detail=None):
+    """Record WHAT happened without preserving the secret: a title is stored
+    as a sha256, which proves a specific note was destroyed to anyone who
+    already knows the title and reveals nothing to anyone who does not."""
+    counts = counts or {}
+    conn.execute(
+        "INSERT INTO vault_audit(action, old_note_id, vault_note_id, title_sha256, "
+        "revisions, entries, attachments, links, proposals, detail, created_at) "
+        "VALUES(?,?,?,?,?,?,?,?,?,?,?)",
+        (action, old_note_id, vault_note_id,
+         hashlib.sha256(title.encode("utf-8")).hexdigest() if title else None,
+         counts.get("revisions", 0), counts.get("entries", 0),
+         counts.get("attachments", 0), counts.get("links", 0),
+         counts.get("proposals", 0), detail, time.time()))
+
+
+def list_audit(limit=100, db_path=None):
+    conn = store._connect(db_path)
+    try:
+        return [dict(r) for r in conn.execute(
+            "SELECT * FROM vault_audit ORDER BY id DESC LIMIT ?", (int(limit),))]
+    finally:
+        conn.close()
+
+
+# ---------------------------------------------------------------------------
+# vault notes
+# ---------------------------------------------------------------------------
+def count_notes(db_path=None):
+    conn = store._connect(db_path)
+    try:
+        return conn.execute("SELECT COUNT(*) AS n FROM vault_notes").fetchone()["n"]
+    finally:
+        conn.close()
+
+
+def list_notes(key=None, db_path=None, limit=500):
+    """Locked (`key=None`) returns id + dates ONLY — the lock-icon-and-a-date
+    row. Unlocked decrypts titles, so an unlocked vault reads like an ordinary
+    list instead of a wall of dates (owner decision: a vault that is annoying
+    to read becomes write-only)."""
+    conn = store._connect(db_path)
+    try:
+        rows = conn.execute(
+            "SELECT n.id, n.kind, n.created_at, n.updated_at, n.title_enc,"
+            " (SELECT COUNT(*) FROM vault_entries e WHERE e.note_id=n.id) AS entry_count,"
+            " (SELECT COUNT(*) FROM vault_attachments a WHERE a.note_id=n.id) AS attachment_count"
+            " FROM vault_notes n ORDER BY COALESCE(n.updated_at, n.created_at) DESC "
+            "LIMIT ?", (int(limit),)).fetchall()
+    finally:
+        conn.close()
+    out = []
+    for r in rows:
+        d = {"id": r["id"], "kind": r["kind"], "created_at": r["created_at"],
+             "updated_at": r["updated_at"], "entry_count": r["entry_count"],
+             "attachment_count": r["attachment_count"], "locked": key is None,
+             "title": None}
+        if key is not None:
+            d["title"] = unseal_text(key, r["title_enc"], AAD_TITLE)
+        out.append(d)
+    return out
+
+
+def get_note(note_id, key, db_path=None):
+    if key is None:
+        raise VaultLocked("the vault is locked")
+    conn = store._connect(db_path)
+    try:
+        r = conn.execute("SELECT * FROM vault_notes WHERE id=?", (note_id,)).fetchone()
+        if r is None:
+            return None
+        entries = conn.execute(
+            "SELECT id, body_enc, created_at FROM vault_entries WHERE note_id=? "
+            "ORDER BY id DESC", (note_id,)).fetchall()
+        atts = conn.execute(
+            "SELECT id, kind, name_enc, mime_enc, bytes, created_at "
+            "FROM vault_attachments WHERE note_id=? ORDER BY id", (note_id,)).fetchall()
+    finally:
+        conn.close()
+    return {
+        "id": r["id"], "kind": r["kind"], "created_at": r["created_at"],
+        "updated_at": r["updated_at"], "locked": False,
+        "title": unseal_text(key, r["title_enc"], AAD_TITLE),
+        "body": unseal_text(key, r["body_enc"], AAD_BODY),
+        "entries": [{"id": e["id"], "created_at": e["created_at"],
+                     "body": unseal_text(key, e["body_enc"], AAD_ENTRY)}
+                    for e in entries],
+        "attachments": [{"id": a["id"], "kind": a["kind"], "bytes": a["bytes"],
+                         "created_at": a["created_at"],
+                         "name": unseal_text(key, a["name_enc"], AAD_ATT_NAME)
+                         if a["name_enc"] else None,
+                         "mime": unseal_text(key, a["mime_enc"], AAD_ATT_MIME)
+                         if a["mime_enc"] else None}
+                        for a in atts],
+    }
+
+
+def create_note(title, body, key, kind="note", db_path=None, created_at=None,
+                _conn=None, _audit_action="created"):
+    if key is None:
+        raise VaultLocked("the vault is locked")
+    if not isinstance(title, str) or not title.strip():
+        raise VaultError("a title is required")
+    if kind not in VAULT_KINDS:
+        raise VaultError("invalid vault kind %r" % (kind,))
+    now = time.time() if created_at is None else float(created_at)
+    own = _conn is None
+    conn = _conn or store._connect(db_path)
+    try:
+        ctx = conn if own else contextlib.nullcontext()
+        with ctx:
+            cur = conn.execute(
+                "INSERT INTO vault_notes(title_enc, body_enc, kind, created_at, updated_at) "
+                "VALUES(?,?,?,?,?)",
+                (seal(key, title.strip(), AAD_TITLE), seal(key, body or "", AAD_BODY),
+                 kind, now, now))
+            nid = cur.lastrowid
+            if _audit_action:
+                _audit(conn, _audit_action, vault_note_id=nid, title=title.strip())
+            return nid
+    finally:
+        if own:
+            conn.close()
+
+
+def update_note(note_id, key, title=None, body=None, db_path=None):
+    """No revision snapshots. `note_revisions` is plaintext history by design,
+    and the vault deliberately keeps none — an edited-away secret that lingers
+    in a snapshot table is exactly what move-to-vault destroys elsewhere."""
+    if key is None:
+        raise VaultLocked("the vault is locked")
+    if title is None and body is None:
+        raise VaultError("nothing to update")
+    conn = store._connect(db_path)
+    try:
+        with conn:
+            if conn.execute("SELECT 1 FROM vault_notes WHERE id=?", (note_id,)).fetchone() is None:
+                raise VaultError("no such vault note: %r" % note_id)
+            sets, params = [], []
+            if title is not None:
+                if not isinstance(title, str) or not title.strip():
+                    raise VaultError("a title is required")
+                sets.append("title_enc=?"); params.append(seal(key, title.strip(), AAD_TITLE))
+            if body is not None:
+                sets.append("body_enc=?"); params.append(seal(key, body, AAD_BODY))
+            sets.append("updated_at=?"); params.append(time.time())
+            params.append(note_id)
+            conn.execute("UPDATE vault_notes SET %s WHERE id=?" % ", ".join(sets), params)
+    finally:
+        conn.close()
+    return get_note(note_id, key, db_path=db_path)
+
+
+def add_entry(note_id, body, key, db_path=None, created_at=None, _conn=None):
+    if key is None:
+        raise VaultLocked("the vault is locked")
+    if not isinstance(body, str) or not body.strip():
+        raise VaultError("an entry body is required")
+    now = time.time()
+    own = _conn is None
+    conn = _conn or store._connect(db_path)
+    try:
+        ctx = conn if own else contextlib.nullcontext()
+        with ctx:
+            if conn.execute("SELECT 1 FROM vault_notes WHERE id=?", (note_id,)).fetchone() is None:
+                raise VaultError("no such vault note: %r" % note_id)
+            cur = conn.execute(
+                "INSERT INTO vault_entries(note_id, body_enc, created_at) VALUES(?,?,?)",
+                (note_id, seal(key, body.strip(), AAD_ENTRY),
+                 now if created_at is None else float(created_at)))
+            conn.execute("UPDATE vault_notes SET updated_at=? WHERE id=?", (now, note_id))
+            return cur.lastrowid
+    finally:
+        if own:
+            conn.close()
+
+
+def add_attachment(note_id, data, key, kind="photo", mime=None, name=None,
+                   db_path=None, created_at=None, _conn=None):
+    """Bytes are sealed INTO the row. A vault attachment written to
+    <hq_home>/attachments would be a plaintext file the vault claims to have
+    sealed."""
+    if key is None:
+        raise VaultLocked("the vault is locked")
+    if not data:
+        raise VaultError("empty attachment")
+    if kind not in ATTACHMENT_KINDS:
+        raise VaultError("kind must be one of %s" % (ATTACHMENT_KINDS,))
+    blob = seal(key, data, AAD_ATT_BLOB)
+    own = _conn is None
+    conn = _conn or store._connect(db_path)
+    try:
+        ctx = conn if own else contextlib.nullcontext()
+        with ctx:
+            if conn.execute("SELECT 1 FROM vault_notes WHERE id=?", (note_id,)).fetchone() is None:
+                raise VaultError("no such vault note: %r" % note_id)
+            cur = conn.execute(
+                "INSERT INTO vault_attachments(note_id, kind, name_enc, mime_enc, "
+                "blob_enc, bytes, created_at) VALUES(?,?,?,?,?,?,?)",
+                (note_id, kind,
+                 seal(key, name, AAD_ATT_NAME) if name else None,
+                 seal(key, mime, AAD_ATT_MIME) if mime else None,
+                 blob, len(blob),
+                 time.time() if created_at is None else float(created_at)))
+            return cur.lastrowid
+    finally:
+        if own:
+            conn.close()
+
+
+def read_attachment(attachment_id, key, db_path=None):
+    """Returns (bytes, mime, name) or None."""
+    if key is None:
+        raise VaultLocked("the vault is locked")
+    conn = store._connect(db_path)
+    try:
+        r = conn.execute("SELECT * FROM vault_attachments WHERE id=?",
+                         (attachment_id,)).fetchone()
+    finally:
+        conn.close()
+    if r is None:
+        return None
+    return (unseal(key, r["blob_enc"], AAD_ATT_BLOB),
+            unseal_text(key, r["mime_enc"], AAD_ATT_MIME) if r["mime_enc"] else None,
+            unseal_text(key, r["name_enc"], AAD_ATT_NAME) if r["name_enc"] else None)
+
+
+# ---------------------------------------------------------------------------
+# move-to-vault — the ONE carve-out from archive-only
+# ---------------------------------------------------------------------------
+def _scrub(conn):
+    """Make the destruction real on DISK, not just in the b-tree.
+
+    A plain DELETE leaves the row's bytes on a freed page and the note's terms
+    in old FTS5 segments, so a `grep hq.db` for the secret still hits. Three
+    knobs, all cheap: `secure_delete` zeroes freed content as it goes, the FTS5
+    `optimize` merges the segments the delete marked, and a TRUNCATE checkpoint
+    empties the -wal file where the pre-delete pages also live.
+    """
+    try:
+        conn.execute("INSERT INTO notes_fts(notes_fts) VALUES('optimize')")
+        conn.commit()                      # the checkpoint below needs no open txn
+    except Exception:                      # no FTS5 in this build: nothing to merge
+        try:
+            conn.rollback()
+        except Exception:
+            pass
+    try:
+        conn.execute("PRAGMA wal_checkpoint(TRUNCATE)")
+    except Exception:                      # a reader holds the WAL — never fatal
+        pass
+
+
+def move_note_to_vault(note_id, key, db_path=None):
+    """Seal a library note into the vault and destroy its plaintext.
+
+    Order is the whole safety argument: the ciphertext is written, READ BACK
+    and compared against the original inside the same transaction, and only
+    then is the plaintext destroyed. Any failure — a bad key, a truncated
+    blob, a disk error — raises before the DELETE and rolls the whole thing
+    back, so the note is either fully in the vault or fully untouched.
+    """
+    if key is None:
+        raise VaultLocked("the vault is locked")
+    conn = store._connect(db_path)
+    try:
+        # secure_delete must be set BEFORE the transaction that frees the pages.
+        conn.execute("PRAGMA secure_delete=ON")
+        with conn:
+            n = conn.execute("SELECT * FROM notes WHERE id=?", (note_id,)).fetchone()
+            if n is None:
+                raise VaultError("no such note: %r" % note_id)
+            title, body = n["title"], n["body"] or ""
+            entries = conn.execute(
+                "SELECT body, created_at FROM note_entries WHERE note_id=? ORDER BY id",
+                (note_id,)).fetchall()
+            atts = conn.execute(
+                "SELECT * FROM note_attachments WHERE note_id=? ORDER BY id",
+                (note_id,)).fetchall()
+            # Filing is NOT carried over: vault notes have no area, tags or
+            # project by decision. What would be lost silently goes into the
+            # body as a provenance line instead.
+            trail = ["", "---",
+                     "_moved into the vault from library note #%d_" % note_id]
+            if n["tags"] and n["tags"] != "[]":
+                try:
+                    tags = ", ".join(json.loads(n["tags"]))
+                except ValueError:
+                    tags = ""
+                if tags:
+                    trail.append("_former tags: %s_" % tags)
+            body_out = body + "\n".join(trail)
+
+            vid = create_note(title, body_out, key, kind="note", _conn=conn,
+                              created_at=n["created_at"], _audit_action=None)
+            for e in entries:
+                add_entry(vid, e["body"], key, _conn=conn, created_at=e["created_at"])
+            moved_bytes = []
+            for a in atts:
+                try:
+                    path = store.attachment_path(a["note_id"], a["stored_name"])
+                    data = open(path, "rb").read()
+                except (OSError, ValueError):
+                    # The row outlived its bytes (already a 410 in the API).
+                    # Nothing to seal and nothing to unlink; the count still
+                    # tells the audit row an attachment row went away.
+                    continue
+                add_attachment(vid, data, key, kind=a["kind"], mime=a["mime"],
+                               name=a["orig_name"] or a["stored_name"], _conn=conn,
+                               created_at=a["created_at"])
+                moved_bytes.append(path)
+
+            # READ BACK before destroying anything. This is the line that makes
+            # the delete safe: it proves the ciphertext in the DB opens with
+            # this key and yields exactly what went in.
+            check = get_note_in_conn(conn, vid, key)
+            if check["title"] != title or check["body"] != body_out:
+                raise VaultError("vault read-back mismatch — nothing was destroyed")
+            if len(check["entries"]) != len(entries):
+                raise VaultError("vault read-back lost a Thought — nothing was destroyed")
+
+            counts = store._destroy_note_plaintext(conn, note_id)
+            _audit(conn, "moved_in", old_note_id=note_id, vault_note_id=vid,
+                   title=title, counts=counts,
+                   detail="plaintext destroyed in notes, notes_fts, note_revisions, "
+                          "note_entries, note_links, note_attachments, proposals; "
+                          "%d activity row(s) redacted, %d notification(s) removed"
+                          % (counts.get("activity", 0), counts.get("notifications", 0)))
+        _scrub(conn)
+    finally:
+        conn.close()
+    # Files AFTER the commit: row before file on delete, so a stray file is
+    # inert rather than a row pointing at nothing (the 2c rule).
+    for path in moved_bytes:
+        try:
+            os.remove(path)
+        except OSError:
+            pass
+    try:
+        os.rmdir(store.attachments_dir(note_id))
+    except OSError:
+        pass
+    store.log_activity("note_vaulted",
+                       detail="note #%s sealed into the vault as vault note #%s "
+                              "(plaintext destroyed)" % (note_id, vid),
+                       db_path=db_path)
+    return {"vault_note_id": vid, "destroyed": counts}
+
+
+def get_note_in_conn(conn, note_id, key):
+    """get_note against a live connection — used by the read-back check, which
+    has to happen INSIDE the destruction transaction."""
+    r = conn.execute("SELECT * FROM vault_notes WHERE id=?", (note_id,)).fetchone()
+    if r is None:
+        return None
+    entries = conn.execute("SELECT body_enc FROM vault_entries WHERE note_id=? ORDER BY id",
+                           (note_id,)).fetchall()
+    return {"title": unseal_text(key, r["title_enc"], AAD_TITLE),
+            "body": unseal_text(key, r["body_enc"], AAD_BODY),
+            "entries": [unseal_text(key, e["body_enc"], AAD_ENTRY) for e in entries]}
+
+
+# ---------------------------------------------------------------------------
+# quarantine drain
+# ---------------------------------------------------------------------------
+def drain_quarantine(key, db_path=None, apply=False):
+    """Move the import's held-back secrets into the vault.
+
+    Phase 3 refused to store these units: no note row was created, and the
+    bytes went into a 0600 file outside hq_home so they would never ride in a
+    backup. The vault is where they were always headed. Each becomes a vault
+    note, the quarantine row is STAMPED (never deleted — the ledger of what the
+    import refused is worth keeping) and the 0600 file is removed only after
+    the ciphertext has been read back.
+    """
+    if key is None:
+        raise VaultLocked("the vault is locked")
+    conn = store._connect(db_path)
+    try:
+        rows = [dict(r) for r in conn.execute(
+            "SELECT * FROM import_quarantine WHERE drained_at IS NULL ORDER BY id")]
+    finally:
+        conn.close()
+    out = {"drained": [], "skipped": [], "would_drain": [], "errors": []}
+    for r in rows:
+        path = r.get("stored_path") or ""
+        if not path or not os.path.isfile(path):
+            out["skipped"].append({"id": r["id"], "why": "bytes are gone from %s" % (path or "(no path)")})
+            continue
+        if not apply:
+            out["would_drain"].append({"id": r["id"], "source": r["source"], "ident": r["ident"]})
+            continue
+        try:
+            data = open(path, "rb").read()
+        except OSError as e:
+            out["errors"].append("#%s: %s" % (r["id"], e))
+            continue
+        text = data.decode("utf-8", "replace")
+        # The title is built from source+ident, which are ALREADY plaintext
+        # columns in import_quarantine — no new secret enters the clear.
+        title = "%s · %s" % (r["source"], os.path.basename(r["ident"]) or r["ident"])
+        body = ("_quarantined by the %s import: %s_\n\n"
+                "```\n%s\n```" % (r["source"], r["reason"], text))
+        c = store._connect(db_path)
+        try:
+            c.execute("PRAGMA secure_delete=ON")
+            with c:
+                vid = create_note(title, body, key, kind="secret", _conn=c,
+                                  created_at=r["created_at"], _audit_action=None)
+                check = get_note_in_conn(c, vid, key)
+                if check["body"] != body:
+                    raise VaultError("vault read-back mismatch for quarantine #%s" % r["id"])
+                c.execute("UPDATE import_quarantine SET drained_at=? WHERE id=?",
+                          (time.time(), r["id"]))
+                _audit(c, "drained", vault_note_id=vid, title=title,
+                       detail="import_quarantine #%s (%s %s), sha256 %s"
+                              % (r["id"], r["source"], r["ident"], r["sha256"][:16]))
+        finally:
+            c.close()
+        try:
+            os.remove(path)
+        except OSError as e:
+            out["errors"].append("#%s: sealed, but the 0600 file remains: %s" % (r["id"], e))
+        out["drained"].append({"id": r["id"], "vault_note_id": vid,
+                               "source": r["source"], "ident": r["ident"]})
+    return out
+
+
+# ---------------------------------------------------------------------------
+# status
+# ---------------------------------------------------------------------------
+def status(token=None, db_path=None):
+    return {
+        "initialized": is_initialized(db_path=db_path),
+        "unlocked": KEYS.get(token) is not None,
+        "notes": count_notes(db_path=db_path),
+        "idle_seconds": KEYS.idle,
+        "unlocked_at": KEYS.unlocked_at(token),
+    }
+
+
+def verify_title_sha(title, digest):
+    """What a `vault_audit` row is FOR: prove a specific note was the one
+    destroyed, for someone who already knows the title."""
+    return hmac.compare_digest(hashlib.sha256(title.encode("utf-8")).hexdigest(),
+                              digest or "")

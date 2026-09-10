@@ -727,6 +727,196 @@ def cmd_brain_export(args):
     return 0
 
 
+# ---------------------------------------------------------------------------
+# `wm vault` (Phase 4 slice B) — OWNER-ONLY, and gated by the PASSPHRASE, not
+# by absence. It sits outside the `wm note` group for the same reason
+# brain-import/brain-export do: `wm note` is the librarian's surface and its
+# test asserts it has no note-write verb. Nothing here can be used without the
+# passphrase the owner keeps, so an agent holding this binary still cannot
+# read a vault row.
+# ---------------------------------------------------------------------------
+def _vault():
+    from backend import vault as V
+    return V
+
+
+def _ask_passphrase(args, prompt="Vault passphrase: "):
+    """--passphrase for scripts and tests; getpass otherwise, so the secret
+    never lands in the shell history or a process listing."""
+    if getattr(args, "passphrase", None):
+        return args.passphrase
+    import getpass
+    return getpass.getpass(prompt)
+
+
+def _vault_unlock(args):
+    V = _vault()
+    if not V.is_initialized():
+        _p("The vault is not set up yet. Run `wm vault init` first.")
+        return None, None
+    try:
+        return V, V.unlock(_ask_passphrase(args))
+    except V.VaultError as e:
+        _p("error: %s" % e)
+        return None, None
+
+
+def cmd_vault_status(args):
+    V = _vault()
+    if not V.is_initialized():
+        _p("Vault: NOT SET UP. `wm vault init` mints the data key and both wraps.")
+        return 0
+    _p("Vault: sealed at rest · %d note(s)" % V.count_notes())
+    _p("  escrow key: %s (outside hq_home, never in `wm backup`)" % V.escrow_key_path())
+    _p("  read path : passphrase only — the escrow wrap opens ONLY via `wm vault recover`")
+    return 0
+
+
+def cmd_vault_init(args):
+    V = _vault()
+    pw = _ask_passphrase(args, "New vault passphrase: ")
+    if not getattr(args, "passphrase", None):
+        import getpass
+        if getpass.getpass("Repeat: ") != pw:
+            _p("error: the two passphrases differ")
+            return 1
+    try:
+        res = V.init_vault(pw)
+    except V.VaultError as e:
+        _p("error: %s" % e)
+        return 1
+    _p("Vault created.")
+    _p("  escrow key: %s (0600, outside hq_home)" % res["escrow_key_path"])
+    _p("  If you forget the passphrase, `wm vault recover` opens the vault with")
+    _p("  that file. Nothing on the web path can use it.")
+    return 0
+
+
+def cmd_vault_list(args):
+    V, key = _vault_unlock(args)
+    if key is None:
+        return 1
+    rows = V.list_notes(key)
+    if not rows:
+        _p("The vault is empty.")
+        return 0
+    _p("Vault (%d):" % len(rows))
+    for r in rows:
+        extra = []
+        if r["entry_count"]:
+            extra.append("%d thought%s" % (r["entry_count"], "" if r["entry_count"] == 1 else "s"))
+        if r["attachment_count"]:
+            extra.append("%d file%s" % (r["attachment_count"], "" if r["attachment_count"] == 1 else "s"))
+        _p("  #%-4d %s%s" % (r["id"], r["title"],
+                             ("  (%s)" % ", ".join(extra)) if extra else ""))
+    return 0
+
+
+def cmd_vault_show(args):
+    V, key = _vault_unlock(args)
+    if key is None:
+        return 1
+    n = V.get_note(args.id, key)
+    if n is None:
+        _p("error: no such vault note: %s" % args.id)
+        return 1
+    _p("#%d  %s" % (n["id"], n["title"]))
+    _p("")
+    _p(n["body"] or "(empty)")
+    for e in n["entries"]:
+        _p("")
+        _p("  --- %s" % time.strftime("%Y-%m-%d %H:%M", time.localtime(e["created_at"])))
+        _p("  %s" % e["body"].replace("\n", "\n  "))
+    for a in n["attachments"]:
+        _p("  [%s] %s (%s, %d bytes sealed)" % (a["kind"], a["name"] or "-", a["mime"] or "?", a["bytes"]))
+    return 0
+
+
+def cmd_vault_audit(args):
+    V = _vault()
+    rows = V.list_audit()
+    if not rows:
+        _p("No vault audit rows.")
+        return 0
+    _p("Vault audit (newest first) — titles are sha256, never text:")
+    for r in rows:
+        _p("  #%-4d %-10s %s" % (r["id"], r["action"],
+                                 time.strftime("%Y-%m-%d %H:%M", time.localtime(r["created_at"]))))
+        if r["old_note_id"]:
+            _p("        destroyed note #%s: %d revision(s), %d thought(s), "
+               "%d attachment(s), %d link(s), %d proposal(s)"
+               % (r["old_note_id"], r["revisions"], r["entries"],
+                  r["attachments"], r["links"], r["proposals"]))
+        if r["title_sha256"]:
+            _p("        title sha256 %s" % r["title_sha256"])
+        if r["detail"]:
+            _p("        %s" % r["detail"])
+    return 0
+
+
+def cmd_vault_drain(args):
+    """Drain the import quarantine into the vault (dry run unless --apply)."""
+    V, key = _vault_unlock(args)
+    if key is None:
+        return 1
+    res = V.drain_quarantine(key, apply=args.apply)
+    if not args.apply:
+        if not res["would_drain"]:
+            _p("Nothing to drain.")
+        else:
+            _p("DRY RUN — nothing was written. Would drain %d unit(s):" % len(res["would_drain"]))
+            for r in res["would_drain"]:
+                _p("  #%-4d %-12s %s" % (r["id"], r["source"], r["ident"]))
+            _p("Re-run with --apply. Each becomes a vault note; the quarantine row")
+            _p("is stamped drained and the 0600 file is removed.")
+    else:
+        _p("Drained %d unit(s) into the vault:" % len(res["drained"]))
+        for r in res["drained"]:
+            _p("  #%-4d %-12s %s  ->  vault note #%s"
+               % (r["id"], r["source"], r["ident"], r["vault_note_id"]))
+    for s in res["skipped"]:
+        _p("  SKIP  #%s: %s" % (s["id"], s["why"]))
+    for e in res["errors"]:
+        _p("  ERROR %s" % e)
+    return 1 if res["errors"] else 0
+
+
+def cmd_vault_recover(args):
+    """ROOT-ONLY escrow recovery — the ONLY caller of `escrow_cli_gate()`.
+
+    This is the whole point of decision 3: the API/web path unwraps with the
+    passphrase alone, and the second wrap opens here and nowhere else. Running
+    it is a deliberate act at a shell on the box, with the escrow key file
+    readable.
+    """
+    V = _vault()
+    if not V.is_initialized():
+        _p("The vault is not set up yet.")
+        return 1
+    try:
+        with V.escrow_cli_gate():
+            key = V.unwrap_escrow()
+    except V.VaultError as e:
+        _p("error: %s" % e)
+        return 1
+    _p("Vault opened with the escrow key at %s." % V.escrow_key_path())
+    rows = V.list_notes(key)
+    _p("  %d note(s):" % len(rows))
+    for r in rows:
+        _p("    #%-4d %s" % (r["id"], r["title"]))
+    if args.set_passphrase is not None:
+        new = args.set_passphrase or _ask_passphrase(
+            argparse.Namespace(passphrase=None), "New vault passphrase: ")
+        try:
+            V.set_passphrase(key, new)
+        except V.VaultError as e:
+            _p("error: %s" % e)
+            return 1
+        _p("  passphrase re-set. The data key is unchanged, so every sealed row")
+        _p("  stays readable and the escrow wrap still works.")
+    return 0
+
+
 def cmd_note_quarantine(args):
     rows = store.list_quarantine()
     if not rows:
@@ -1417,6 +1607,40 @@ def build_parser():
     bex.add_argument("--no-attachments", dest="no_attachments", action="store_true",
                      help="notes only — skip the attachment bytes")
     bex.set_defaults(fn=cmd_brain_export)
+
+    # Phase 4 slice B. OWNER-ONLY and passphrase-gated; deliberately NOT under
+    # `wm note` (that group is the librarian's, and its test asserts it has no
+    # write verb — a vault verb there would read as one).
+    vlt = sub.add_parser("vault", help="OWNER-ONLY: the private vault "
+                                       "(passphrase-sealed; the librarian cannot see it)")
+    vlt_sub = vlt.add_subparsers(dest="sub", required=True)
+    vs = vlt_sub.add_parser("status", help="is the vault set up, and where the escrow key lives")
+    vs.set_defaults(fn=cmd_vault_status)
+    vi = vlt_sub.add_parser("init", help="mint the data key and both wraps")
+    vi.add_argument("--passphrase", default=None,
+                    help="non-interactive (scripts/tests); otherwise prompted")
+    vi.set_defaults(fn=cmd_vault_init)
+    vl = vlt_sub.add_parser("list", help="list vault notes (needs the passphrase)")
+    vl.add_argument("--passphrase", default=None)
+    vl.set_defaults(fn=cmd_vault_list)
+    vsh = vlt_sub.add_parser("show", help="one vault note (needs the passphrase)")
+    vsh.add_argument("id", type=int)
+    vsh.add_argument("--passphrase", default=None)
+    vsh.set_defaults(fn=cmd_vault_show)
+    va = vlt_sub.add_parser("audit", help="what the vault destroyed (titles are sha256)")
+    va.set_defaults(fn=cmd_vault_audit)
+    vd = vlt_sub.add_parser("drain-quarantine",
+                            help="move the import's held-back secrets into the vault "
+                                 "(dry run unless --apply)")
+    vd.add_argument("--apply", action="store_true")
+    vd.add_argument("--passphrase", default=None)
+    vd.set_defaults(fn=cmd_vault_drain)
+    vr = vlt_sub.add_parser("recover",
+                            help="ROOT-ONLY: open the vault with the server-held escrow "
+                                 "key when the passphrase is lost")
+    vr.add_argument("--set-passphrase", dest="set_passphrase", nargs="?", const="",
+                    default=None, help="also re-wrap under a new passphrase")
+    vr.set_defaults(fn=cmd_vault_recover)
 
     sub.add_parser("status", help="Grouped text readout").set_defaults(
         fn=cmd_status)
