@@ -81,6 +81,48 @@ This also fixes a shipped self-contradiction: `agents/librarian/skills/librarian
 | 4 | apple-notes | 250 | exercises attachments (79 images, all binding) and hostile filenames; drops nothing |
 | 5 | keep | 296 | biggest and weakest signal — **re-planned after wave 4**, once librarian judgment quality is observable rather than assumed |
 
+## Wave 5 — RE-PLANNED 2026-09-10 (the plan required this before it could run)
+
+The original entry deferred wave 5 "until librarian judgment quality is observable rather than assumed". It now is, and the answer is specific: the librarian is **reliable on structure** — across 100 audited proposals it produced 0 splits (including on a 57,444-char bookmark dump), 0 `routine`, 0 filings into a retired area, 0 coined areas, 0 unregistered tags, 0 empty summaries — and **unreliable on inference**: proposal #274 filed a product-owner job description into Content under a summary describing an entirely different note, and summaries repeatedly asserted years the notes do not carry (now forbidden by the ingest brief and DoD 4c).
+
+**That matters because keep is almost entirely an inference problem.** It is the source most likely to expose the weakness we have now measured, not the least.
+
+### What the source actually is (measured 2026-09-10)
+
+- **402 units → 296 librarian, 95 auto-archive, 11 duplicate.** No secrets, no empties.
+- **It arrives with ZERO tags.** Keep is one flat `Google Keep Document.txt`; idents are `#0`, `#1`, `#2`, so there are no folders and `folder_tags` yields nothing. **The mechanism that made waves 3 and 4 land organized does not apply here** — this wave reproduces the pre-reconcile condition on purpose-built ground.
+- **Fragments are small and titles are weak.** Median body **129 chars**; 64 units ≤40 chars, 133 more at 41–120. Titles come from the first line, so **92 of 296 are sentence fragments** and 4 are near-empty.
+- **Latent signal the original plan missed:** 116 notes carry URLs across 117 domains — facebook 51, github 23, **portalroms 23**, medium 21, youtube 17, **emuparadise 12**, dev.to 10. `portalroms` + `emuparadise` = **35 retro-game ROM links**, which the existing `Games` area and `retro` tag already cover.
+- Content is genuinely mixed: medicine lists (`Medicine 4 mg`), product feedback (`Timetable`, `Arrow in news in mobile view`), saved articles, product Q&A, long technical write-ups.
+
+### Owner decisions (2026-09-10 — locked)
+
+1. **Drain the current queue first.** Wave 5 does not start until wave 4's remaining untriaged notes are triaged and the owner has cleared the pending proposals. Two very different sources must not mix in one review queue — this is the plan's own "owner reviews between waves" rule, applied.
+2. **The librarian assigns tags from content; no new tagging mechanism.** A URL-domain→tag rule in the importer was offered and declined: use what exists. It reads the note text — the only signal keep has — and has used 0 unregistered tags across 100 proposals.
+3. **The auto-archive rule is unchanged** (≤40 normalized chars, or every line a bare URL). Samples confirm it catches junk (`Fifalwet`, `Extrafinder`, a bare Google search URL) and not content; the 41–120 char band holds real material (medicine lists, product feedback) that must reach the owner's desk.
+
+### Execution
+
+1. **Gate:** untriaged inbox is 0 and the owner has worked the pending queue down. Do not import before that.
+2. `wm backup` — notes are archive-only, so the backup IS the rollback.
+3. `analyze_notes_dump.py --check` green, then `wm brain-import run keep` dry run reconciling to **402 = 296 + 95 + 11**, then `--apply`.
+4. Verify: counts, tasks unchanged, distinct `content_hash` per note, re-run a no-op, `wm check`, health 200.
+5. Triage on the existing `*/30` schedule at ~20/run — **296 notes is ~15 runs**, and the schedule only advances while the owner's machine is awake (see State → Known debt).
+
+### What to expect, so it is not mistaken for failure
+
+- **Many notes will land unfiled.** The owner's standing decision is that a note with no area description covering it goes back to his inbox rather than being stretched into a nearly-right area. With untagged, undated fragments this will fire often. That is the rule working.
+- **Living-vs-museum calls will be weaker here than in waves 3–4**, because there are no folders and no dates. DoD 4c forbids inventing a year to justify archiving, so expect era judgements worded as judgements.
+- **Titles will read badly in lists** — 92 are sentence fragments. `plainExcerpt` keeps the row previews readable, but the titles themselves are the source's, and renaming 296 notes is not in scope.
+
+### Acceptance
+
+- Dry run and apply both reconcile to the committed baseline (402 = 296 + 95 + 11); `--check` green before and after.
+- Tasks unchanged; every imported note carries a distinct `content_hash`; re-run reports `already there 296, created 0`.
+- `wm check` Integrity OK, health 200, 0 homeless active notes.
+- The 95 auto-archived land `archived`, searchable, with no origin tag.
+- 390×844: `scrollWidth` 390, 0 page errors, no row showing raw markdown.
+
 ## Acceptance checks
 
 **W0 — MET 2026-09-08.** Librarian found a filed note by search and proposed `append_entry` against it; approval appended a Thought and created no new note; `routine` refused; owner capture picked first during a backlog; suite 242.
