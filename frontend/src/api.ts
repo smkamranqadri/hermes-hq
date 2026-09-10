@@ -353,7 +353,7 @@ export async function streamChat(profile: string, sessionId: string, message: st
 // and on logout, so every surface here treats "locked" as the normal state
 // rather than an error. The passphrase is NEVER persisted client-side — no
 // localStorage, no sessionStorage, not even a ref that outlives the submit.
-export type VaultStatus = { initialized: boolean; unlocked: boolean; notes: number; idle_seconds: number; unlocked_at: number | null }
+export type VaultStatus = { initialized: boolean; unlocked: boolean; notes: number; idle_seconds: number; unlocked_at: number | null; has_recovery_code: boolean }
 /** A locked row is a lock icon and a date: `title` is null and the server
  *  never sent one. Unlocking decrypts titles for THIS session only. */
 export type VaultNoteRow = { id: number; kind: string; created_at: number; updated_at: number | null; entry_count: number; attachment_count: number; locked: boolean; title: string | null }
@@ -366,7 +366,9 @@ export const useVaultNotes = (enabled = true) => useQuery({ queryKey: ['vault-no
 export const useVaultNote = (id: number | null) => useQuery({ queryKey: ['vault-note', id], queryFn: () => get<VaultNoteFull>(`/api/vault/note/${id}`), enabled: id != null, retry: false })
 export const useVaultAudit = () => useQuery({ queryKey: ['vault-audit'], queryFn: () => get<{ audit: VaultAudit[] }>('/api/vault/audit') })
 export const vaultUnlock = (passphrase: string) => post<VaultStatus>('/api/vault/unlock', { passphrase })
-export const vaultInit = (passphrase: string) => post<VaultStatus & { escrow_key_path: string }>('/api/vault/init', { passphrase })
+/** Web setup mints NO recovery code (a code in a response body is a code in
+ *  every proxy log) — the server returns `recovery_hint` saying so. */
+export const vaultInit = (passphrase: string) => post<VaultStatus & { recovery_hint: string }>('/api/vault/init', { passphrase })
 export const vaultLock = () => post<VaultStatus>('/api/vault/lock')
 export const vaultCreate = (title: string, body: string) => post<{ id: number }>('/api/vault/notes', { title, body })
 export const vaultMove = (note_id: number) => post<{ ok: true; vault_note_id: number }>('/api/vault/move', { note_id })

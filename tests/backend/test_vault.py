@@ -10,10 +10,9 @@ The two tests that matter most:
   * `test_agent_denial_is_structural` ENUMERATES every registered API route and
     every `wm note` CLI verb rather than spot-checking a few, so a route or a
     verb added later fails this test instead of quietly gaining vault reach.
-  * `test_escrow_is_never_on_the_read_path` proves the separation that makes
-    the passphrase real. A server-held escrow key that the web path could use
-    would make the passphrase decoration; here the key file is present and
-    readable throughout and a wrong passphrase still fails.
+  * `test_no_http_route_accepts_or_returns_the_recovery_code` proves the
+    separation that makes the passphrase real. Recovery that the web path
+    could invoke would make the passphrase decoration.
 
 Isolation: `tests/backend/conftest.py` clears the engine env overrides for
 every test (a suite run inside a dispatched agent once wrote 33 phantom rows
@@ -38,9 +37,8 @@ MARKER = "ZZVAULTMARKERZZ"
 
 @pytest.fixture()
 def env(tmp_path, monkeypatch):
-    """A scratch hq_home. The escrow key path is deliberately NOT overridden:
-    letting it derive from hq_home() is what exercises the "sibling of
-    hq_home, never inside it" rule the backup test then relies on."""
+    """A scratch hq_home. No key file is involved anywhere any more — both
+    wraps live in `vault_meta` inside hq.db."""
     monkeypatch.setenv("HERMES_HQ_HOME", str(tmp_path / "hq"))
     monkeypatch.setenv("HERMES_HQ_PASSWORD", "pw-test")
     monkeypatch.setenv("HERMES_HQ_QUARANTINE_DIR", str(tmp_path / "quarantine"))
@@ -281,7 +279,7 @@ def _sql_touching_vault(src):
 VAULT_IMPORTERS = {
     "backend/vault_api.py": "the vault's own router — the only HTTP surface",
     "backend/writes.py": "logout drops the session key (KEYS.drop) and nothing else",
-    "core/wm_cli.py": "the `wm vault` CLI group, including the escrow recovery gate",
+    "core/wm_cli.py": "the `wm vault` CLI group, including recovery-code recovery",
 }
 
 
@@ -514,159 +512,260 @@ def test_search_and_list_and_related_cannot_see_a_vault_note(env):
     assert MARKER not in json.dumps(lint)
     assert store.notes_tree(db_path=db)["counts"].get("inbox", 0) == 0
 
-
 # ---------------------------------------------------------------------------
-# the escrow wrap is never on the read path
+# the recovery code is never on the read path, and never on the WEB at all
 # ---------------------------------------------------------------------------
+#
+# The original design put a server-held key FILE outside hq_home at 0600. It
+# was dropped on 2026-09-10 after the coordinator settled the question
+# empirically: /opt/data is a virtiofs mount whose ownership is remapped per
+# viewer, so an agent run (uid 10000) sees a root-owned 0600 file there as its
+# own and reads it. No file mode under that mount is a boundary. The
+# replacement is a high-entropy code printed once and stored nowhere —
+# possession of it IS the credential, which is exactly why no HTTP route may
+# accept one.
 
-def test_escrow_is_never_on_the_read_path(api):
-    """The test that makes the owner's design real rather than decorative.
+def test_recovery_code_opens_the_vault_with_the_passphrase_unknown(env):
+    store, db, tmp = env
+    from backend import vault as V
+    code = V.init_vault(PW, db_path=db)["recovery_code"]
+    assert code and len(V.normalize_recovery_code(code)) >= 32      # >= 160 bits
+    key = V.unlock(PW, db_path=db)
+    V.create_note("Bank PIN", MARKER, key, db_path=db)
 
-    The escrow key file exists and is READABLE by this process for the whole
-    test. If the read path could fall back to it, a wrong passphrase would
-    still open the vault — and the passphrase would be theatre. It cannot:
-    `V.unlock` derives scrypt(passphrase) and unwraps the passphrase wrap
-    alone, and `unwrap_escrow` refuses outside the CLI gate.
+    got = V.unwrap_recovery(code, db_path=db)
+    assert got == key
+    assert V.list_notes(got, db_path=db)[0]["title"] == "Bank PIN"
+    # retyped however the owner has it: spaces, no dashes, any case
+    assert V.unwrap_recovery(code.replace("-", " ").lower(), db_path=db) == got
+    assert V.unwrap_recovery(code.replace("-", ""), db_path=db) == got
+    with pytest.raises(V.VaultError) as e:
+        V.unwrap_recovery(V.new_recovery_code(), db_path=db)
+    assert "does not open this vault" in str(e.value)
+
+
+def test_the_recovery_code_is_in_zero_bytes_of_the_db_or_a_backup(env):
+    """It is never stored — only the wrap it opens is. A raw code anywhere on
+    disk would be a second passphrase lying in the open."""
+    store, db, tmp = env
+    from backend import vault as V
+    code = V.init_vault(PW, db_path=db)["recovery_code"]
+    key = V.unlock(PW, db_path=db)
+    V.create_note("Bank PIN", MARKER, key, db_path=db)
+
+    raw = V.normalize_recovery_code(code)
+    for form in (code.encode(), raw.encode(), code.lower().encode(), raw.lower().encode()):
+        assert db_bytes(db).count(form) == 0, form
+    dest = store.backup_db(db_path=db, backup_dir=str(tmp / "backups"))
+    for form in (code.encode(), raw.encode()):
+        assert open(dest, "rb").read().count(form) == 0, form
+    conn = sqlite3.connect(db)
+    try:
+        blob = " ".join(str(r[0]) for r in conn.execute("SELECT detail FROM activity"))
+        assert raw not in V.normalize_recovery_code(blob)
+        aud = " ".join(str(r[0]) for r in conn.execute("SELECT detail FROM vault_audit"))
+        assert raw not in V.normalize_recovery_code(aud)
+    finally:
+        conn.close()
+    # the WRAP is stored — recovery has to survive a restore
+    assert V.status(db_path=db)["has_recovery_code"] is True
+
+
+def test_no_http_route_accepts_or_returns_the_recovery_code(api, monkeypatch):
+    """The enumeration that keeps the owner's decision 3 true.
+
+    Two halves: no handler CALLS the recovery unwrap (spied across the whole
+    vault surface), and no module serving a route so much as NAMES it.
+    Possession of the code opens the vault outright, so a route accepting one
+    would hand the vault to anything holding a session cookie.
     """
     c, store, db, tmp = api
     h = login(c)
-    c.post("/api/vault/init", json={"passphrase": PW}, headers=h)
-    from backend import vault as V
-
-    path = V.escrow_key_path()
-    assert os.path.isfile(path) and open(path).read().strip(), "no escrow key to test against"
-    assert oct(os.stat(path).st_mode & 0o777) == "0o600"
-
-    c.post("/api/vault/lock", headers=h)
-    assert c.post("/api/vault/unlock", json={"passphrase": "wrong"},
-                  headers=h).status_code == 401
-    assert c.get("/api/vault/status").json()["unlocked"] is False
-    with pytest.raises(V.VaultError):
-        V.unlock("wrong", db_path=db)
-
-    # The gate itself: closed by default, even for a direct in-process call.
-    with pytest.raises(V.VaultError) as e:
-        V.unwrap_escrow(db_path=db)
-    assert "root-only CLI" in str(e.value)
-    # Open it the way `wm vault recover` does, and the SAME data key comes back.
-    with V.escrow_cli_gate():
-        assert V.unwrap_escrow(db_path=db) == V.unlock(PW, db_path=db)
-    # and it closes again afterwards
-    with pytest.raises(V.VaultError):
-        V.unwrap_escrow(db_path=db)
-
-
-def test_no_http_request_ever_reads_the_escrow_key(api, monkeypatch):
-    """A spy across the whole vault HTTP surface. If any handler ever reached
-    for the escrow key — directly or three calls down — this trips."""
-    c, store, db, tmp = api
-    h = login(c)
-    c.post("/api/vault/init", json={"passphrase": PW}, headers=h)
     from backend import vault as V
 
     calls = []
-    real = V._read_escrow_key
-    monkeypatch.setattr(V, "_read_escrow_key",
+    real = V.unwrap_recovery
+    monkeypatch.setattr(V, "unwrap_recovery",
                         lambda *a, **k: (calls.append(1), real(*a, **k))[1])
+
+    r = c.post("/api/vault/init", json={"passphrase": PW}, headers=h)
+    assert r.status_code == 200
+    body = r.json()
+    assert "recovery_code" not in body and body["has_recovery_code"] is False
+    assert "wm vault recovery-code" in body["recovery_hint"]
 
     nid = c.post("/api/vault/notes", json={"title": "t", "body": "b"},
                  headers=h).json()["id"]
     lid = store.create_note("library note", "body", db_path=db)
-    c.get("/api/vault/status"); c.get("/api/vault/notes"); c.get("/api/vault/audit")
-    c.get("/api/vault/note/%d" % nid)
-    c.post("/api/vault/note/%d/edit" % nid, json={"body": "b2"}, headers=h)
-    c.post("/api/vault/note/%d/entries" % nid, json={"body": "thought"}, headers=h)
-    c.post("/api/vault/move", json={"note_id": lid}, headers=h)
-    c.post("/api/vault/passphrase", json={"passphrase": PW, "new_passphrase": PW + "2"},
-           headers=h)
-    c.post("/api/vault/lock", headers=h)
-    c.post("/api/vault/unlock", json={"passphrase": PW + "2"}, headers=h)
-    c.post("/api/vault/unlock", json={"passphrase": "wrong"}, headers=h)
-    assert calls == [], "an HTTP handler reached the escrow key"
+    for call in (
+        lambda: c.get("/api/vault/status"),
+        lambda: c.get("/api/vault/notes"),
+        lambda: c.get("/api/vault/audit"),
+        lambda: c.get("/api/vault/note/%d" % nid),
+        lambda: c.post("/api/vault/note/%d/edit" % nid, json={"body": "b2"}, headers=h),
+        lambda: c.post("/api/vault/note/%d/entries" % nid, json={"body": "x"}, headers=h),
+        lambda: c.post("/api/vault/move", json={"note_id": lid}, headers=h),
+        lambda: c.post("/api/vault/lock", headers=h),
+        lambda: c.post("/api/vault/unlock", json={"passphrase": PW}, headers=h),
+        lambda: c.post("/api/vault/unlock", json={"passphrase": "wrong"}, headers=h),
+        lambda: c.post("/api/vault/passphrase",
+                       json={"passphrase": PW, "new_passphrase": PW + "22"}, headers=h),
+    ):
+        call()
+    assert calls == [], "an HTTP handler reached the recovery unwrap"
+
+    # A route handler must not even be able to name the recovery path. The one
+    # allowed mention is vault_api's own `assert res["recovery_code"] is None`,
+    # which exists to PROVE the code never enters a response.
+    banned = ("unwrap_recovery", "new_recovery_code", "regenerate_recovery_code",
+              "recovery_wrap", "normalize_recovery_code")
+    checked = 0
+    for r_ in flat_routes(c.app):
+        mod = getattr(getattr(r_, "endpoint", None), "__module__", "")
+        if not mod.startswith(("backend", "core")):
+            continue
+        src_path = os.path.join(ROOT, *mod.split(".")) + ".py"
+        if not os.path.isfile(src_path):
+            continue
+        src = open(src_path).read()
+        checked += 1
+        for word in banned:
+            assert word not in src, (mod, word)
+    assert checked > 100, "only %d route modules checked" % checked
 
 
-def test_escrow_key_is_absent_from_a_fresh_backup(env):
-    """`wm backup` must never carry BOTH halves. If it did, one leaked backup
-    would be plaintext and the passphrase would have bought nothing."""
-    store, db, tmp = env
+def test_a_web_created_vault_has_no_recovery_wrap_at_all(api):
+    """A wrap whose code nobody ever saw is dead weight pretending to be a
+    safety net, so web setup creates none — and says so."""
+    c, store, db, tmp = api
+    h = login(c)
+    c.post("/api/vault/init", json={"passphrase": PW}, headers=h)
     from backend import vault as V
-    V.init_vault(PW, db_path=db)
-    key = V.unlock(PW, db_path=db)
-    V.create_note("Bank PIN", MARKER, key, db_path=db)
-
-    escrow_path = V.escrow_key_path()
-    escrow_hex = open(escrow_path).read().strip()
-    home = os.path.abspath(store.hq_home())
-    # 1. it is not inside hq_home in the first place
-    assert not os.path.abspath(escrow_path).startswith(home + os.sep)
-    assert os.path.dirname(os.path.abspath(escrow_path)) == os.path.dirname(home)
-
-    backup_dir = str(tmp / "backups")
-    dest = store.backup_db(db_path=db, backup_dir=backup_dir)
-    assert os.path.isfile(dest)
-
-    # 2. no file in the backup tree is the escrow key, by name or by content
-    found = []
-    for root, _dirs, files in os.walk(backup_dir):
-        for f in files:
-            p = os.path.join(root, f)
-            found.append(f)
-            assert escrow_hex.encode() not in open(p, "rb").read(), p
-    assert found, "the backup produced nothing — the assertion would be vacuous"
-    assert not any("escrow" in f for f in found), found
-
-    # 3. the ciphertext DID ride along (a vault you cannot restore is a bug)
-    b = sqlite3.connect(dest)
-    try:
-        assert b.execute("SELECT COUNT(*) FROM vault_notes").fetchone()[0] == 1
-        assert b.execute("SELECT COUNT(*) FROM vault_meta WHERE key='escrow_wrap'"
-                         ).fetchone()[0] == 1
-    finally:
-        b.close()
-    # 4. and the backup alone cannot open it
-    assert MARKER.encode() not in open(dest, "rb").read()
+    assert V.status(db_path=db)["has_recovery_code"] is False
+    with pytest.raises(V.VaultError) as e:
+        V.unwrap_recovery(V.new_recovery_code(), db_path=db)
+    assert "no recovery code" in str(e.value)
+    assert "wm vault recovery-code --regenerate" in str(e.value)
 
 
-def test_root_cli_recover_opens_the_vault_with_the_passphrase_unknown(env, capsys):
-    """`wm vault recover` is the ONLY caller of the gate. It opens a vault
-    whose passphrase nobody here knows, and can re-wrap under a new one."""
+def test_regenerate_invalidates_the_previous_code(env, capsys):
     store, db, tmp = env
     from backend import vault as V
     from core import wm_cli
-    V.init_vault("a passphrase nobody will remember", db_path=db)
+    old_code = V.init_vault(PW, db_path=db)["recovery_code"]
+    key = V.unlock(PW, db_path=db)
+    V.create_note("Bank PIN", MARKER, key, db_path=db)
+    assert V.unwrap_recovery(old_code, db_path=db) == key
+
+    new_code = V.regenerate_recovery_code(key, db_path=db)
+    assert new_code != old_code
+    assert V.unwrap_recovery(new_code, db_path=db) == key
+    with pytest.raises(V.VaultError):
+        V.unwrap_recovery(old_code, db_path=db)
+    # every sealed row still opens: the DATA key never changed
+    assert V.list_notes(key, db_path=db)[0]["title"] == "Bank PIN"
+    assert db_bytes(db).count(V.normalize_recovery_code(new_code).encode()) == 0
+
+    # through the CLI, which is the only thing that ever prints one
+    capsys.readouterr()
+    assert wm_cli.main(["vault", "recovery-code", "--regenerate", "--passphrase", PW]) == 0
+    out = capsys.readouterr().out
+    assert "RECOVERY CODE" in out and "shown this once" in out
+    printed = [l.strip() for l in out.splitlines() if l.strip().count("-") >= 4]
+    assert printed, out
+    assert V.unwrap_recovery(printed[0], db_path=db) == key
+    with pytest.raises(V.VaultError):
+        V.unwrap_recovery(new_code, db_path=db)
+
+    # without --regenerate it reports, and cannot re-display the code
+    capsys.readouterr()
+    assert wm_cli.main(["vault", "recovery-code", "--passphrase", PW]) == 0
+    report = capsys.readouterr().out
+    assert "EXISTS" in report and "cannot be shown again" in report
+    assert V.normalize_recovery_code(printed[0]) not in V.normalize_recovery_code(report)
+
+
+def test_cli_recover_opens_the_vault_and_can_reset_the_passphrase(env, capsys):
+    store, db, tmp = env
+    from backend import vault as V
+    from core import wm_cli
+    code = V.init_vault("a passphrase nobody will remember", db_path=db)["recovery_code"]
     key = V.unlock("a passphrase nobody will remember", db_path=db)
     V.create_note("Recovered title", "body", key, db_path=db)
-    del key
 
     capsys.readouterr()
-    assert wm_cli.main(["vault", "recover"]) == 0
+    assert wm_cli.main(["vault", "recover", "--recovery-code", code]) == 0
     out = capsys.readouterr().out
-    assert "Recovered title" in out
-    assert "escrow key" in out
+    assert "Recovered title" in out and "recovery code" in out
 
-    # recover --set-passphrase re-wraps; the data key is unchanged, so the row
-    # sealed under the OLD passphrase is still readable under the new one.
-    assert wm_cli.main(["vault", "recover", "--set-passphrase", "brand new phrase"]) == 0
+    assert wm_cli.main(["vault", "recover", "--recovery-code", code,
+                        "--set-passphrase", "brand new phrase"]) == 0
     key2 = V.unlock("brand new phrase", db_path=db)
     assert V.list_notes(key2, db_path=db)[0]["title"] == "Recovered title"
     with pytest.raises(V.VaultError):
         V.unlock("a passphrase nobody will remember", db_path=db)
-    # the escrow wrap still works after the re-wrap
-    with V.escrow_cli_gate():
-        assert V.unwrap_escrow(db_path=db) == key2
+    assert V.unwrap_recovery(code, db_path=db) == key2      # code survives the reset
+
+    capsys.readouterr()
+    assert wm_cli.main(["vault", "recover", "--recovery-code", V.new_recovery_code()]) == 1
+    assert "does not open this vault" in capsys.readouterr().out
 
 
-def test_recover_refuses_without_the_escrow_file(env, monkeypatch):
+def test_there_is_no_key_file_anywhere(env):
+    """The dropped design, pinned: no code path may write a key to disk. A
+    file under /opt/data cannot be hidden from an agent run, so a server-held
+    key file would have been a boundary that is not one."""
     store, db, tmp = env
     from backend import vault as V
     V.init_vault(PW, db_path=db)
-    monkeypatch.setenv("HERMES_HQ_VAULT_ESCROW_KEY", str(tmp / "gone.key"))
-    with V.escrow_cli_gate():
-        with pytest.raises(V.VaultError) as e:
-            V.unwrap_escrow(db_path=db)
-    assert "cannot be recovered" in str(e.value)
-    # the passphrase path is untouched by a missing escrow file
-    assert V.unlock(PW, db_path=db)
+    for root, _dirs, files in os.walk(str(tmp)):
+        for f in files:
+            assert "escrow" not in f.lower(), os.path.join(root, f)
+            assert not f.endswith(".key"), os.path.join(root, f)
+    src = open(os.path.join(ROOT, "backend", "vault.py")).read()
+    for gone in ("escrow_key_path", "_read_escrow_key", "escrow_cli_gate",
+                 "_create_escrow_key", "unwrap_escrow"):
+        assert gone not in src, gone
+
+
+def test_a_short_passphrase_is_refused_at_init_and_at_change(api):
+    """12, not 8: hq.db sits on a mount anything on this box can read, so the
+    passphrase is the whole defence in an offline attack."""
+    c, store, db, tmp = api
+    h = login(c)
+    from backend import vault as V
+    assert V.MIN_PASSPHRASE == 12
+
+    r = c.post("/api/vault/init", json={"passphrase": "short"}, headers=h)
+    assert r.status_code == 409 and "at least 12" in r.text
+    assert c.post("/api/vault/init", json={"passphrase": "elevenchars"},
+                  headers=h).status_code == 409          # 11 — one short
+    assert V.is_initialized(db_path=db) is False
+
+    assert c.post("/api/vault/init", json={"passphrase": "twelvechars!"},
+                  headers=h).status_code == 200          # 12 — exactly enough
+    r = c.post("/api/vault/passphrase",
+               json={"passphrase": "twelvechars!", "new_passphrase": "tooshort"},
+               headers=h)
+    assert r.status_code == 409 and "at least 12" in r.text
+    c.post("/api/vault/lock", headers=h)
+    assert c.post("/api/vault/unlock", json={"passphrase": "twelvechars!"},
+                  headers=h).status_code == 200
+
+
+def test_vault_status_never_mentions_a_key_file(env, capsys):
+    """The old status line advertised an escrow key path. There is no such
+    file now, and status must say what recovery actually depends on."""
+    store, db, tmp = env
+    from backend import vault as V
+    from core import wm_cli
+    V.init_vault(PW, db_path=db)
+    capsys.readouterr()
+    wm_cli.main(["vault", "status"])
+    out = capsys.readouterr().out
+    assert "escrow" not in out.lower() and ".key" not in out
+    assert "recovery code exists" in out
+    assert "the passphrase, and nothing else" in out
 
 
 # ---------------------------------------------------------------------------
@@ -1044,12 +1143,7 @@ def test_passphrase_change_keeps_every_row_readable(api):
     assert c.get("/api/vault/notes").json()["notes"][0]["title"] == "before"
 
 
-def test_a_short_passphrase_is_refused(api):
-    c, store, db, tmp = api
-    h = login(c)
-    r = c.post("/api/vault/init", json={"passphrase": "short"}, headers=h)
-    assert r.status_code == 409
-    assert "at least 8" in r.text
+
 
 
 def test_polling_status_does_not_keep_the_vault_awake(api):
@@ -1390,23 +1484,8 @@ def test_a_leftover_plaintext_file_is_named_in_the_audit(env, monkeypatch):
     assert os.path.isfile(path)                   # it really is still there
 
 
-def test_init_vault_says_when_it_reused_an_escrow_key(env):
-    """MINOR (reviewer): a pre-existing escrow key is reused, never replaced
-    (replacing would strand an older vault). The owner is told, because
-    "someone else's key can open this vault" belongs at setup time."""
-    store, db, tmp = env
-    from backend import vault as V
-    open(V.escrow_key_path(), "w").write("ab" * 32 + "\n")
-    os.chmod(V.escrow_key_path(), 0o600)
-    res = V.init_vault(PW, db_path=db)
-    assert res["escrow_reused"] is True
-
-    from core import wm_cli
-    import io, contextlib as cl
-    buf = io.StringIO()
-    with cl.redirect_stdout(buf):
-        wm_cli.main(["vault", "status"])
-    assert "escrow key" in buf.getvalue()
+# (the escrow-reuse test lived here; there is no key file to reuse any more —
+#  `test_there_is_no_key_file_anywhere` replaces it)
 
 
 def test_an_attachment_sealed_from_the_wrong_bytes_destroys_nothing(env, monkeypatch):

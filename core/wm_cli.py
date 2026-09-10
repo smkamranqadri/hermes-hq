@@ -764,12 +764,32 @@ def _vault_unlock(args):
 def cmd_vault_status(args):
     V = _vault()
     if not V.is_initialized():
-        _p("Vault: NOT SET UP. `wm vault init` mints the data key and both wraps.")
+        _p("Vault: NOT SET UP. `wm vault init` mints the data key and its wraps.")
         return 0
-    _p("Vault: sealed at rest · %d note(s)" % V.count_notes())
-    _p("  escrow key: %s (outside hq_home, never in `wm backup`)" % V.escrow_key_path())
-    _p("  read path : passphrase only — the escrow wrap opens ONLY via `wm vault recover`")
+    st = V.status()
+    _p("Vault: sealed at rest · %d note(s)" % st["notes"])
+    _p("  read path : the passphrase, and nothing else")
+    if st["has_recovery_code"]:
+        _p("  recovery  : a recovery code exists (its wrap is in hq.db; the code")
+        _p("              itself was printed once and is stored nowhere)")
+    else:
+        _p("  recovery  : NONE. Forgetting the passphrase would be permanent.")
+        _p("              Run `wm vault recovery-code --regenerate` to mint one.")
     return 0
+
+
+def _print_recovery_code(code):
+    """The one place a code is ever printed. Said loudly, because it is said once."""
+    _p("")
+    _p("  RECOVERY CODE — written down NOWHERE else, shown this once:")
+    _p("")
+    _p("      %s" % code)
+    _p("")
+    _p("  Put it in your password manager now. It is not stored in hq.db, not in")
+    _p("  any backup and not in any log — only the wrap it opens is. If you lose")
+    _p("  both this code and the passphrase, the vault is gone for good.")
+    _p("  It opens the vault on its own, so treat it like the passphrase itself.")
+    _p("")
 
 
 def cmd_vault_init(args):
@@ -786,13 +806,9 @@ def cmd_vault_init(args):
         _p("error: %s" % e)
         return 1
     _p("Vault created.")
-    _p("  escrow key: %s (0600, outside hq_home)" % res["escrow_key_path"])
-    if res.get("escrow_reused"):
-        _p("  WARN  that escrow key ALREADY EXISTED and was reused, not replaced.")
-        _p("        Replacing it would strand any older vault wrapped under it.")
-        _p("        Whoever can read that file can open this vault too.")
-    _p("  If you forget the passphrase, `wm vault recover` opens the vault with")
-    _p("  that file. Nothing on the web path can use it.")
+    _print_recovery_code(res["recovery_code"])
+    _p("  `wm vault recover --recovery-code <code>` opens the vault if the")
+    _p("  passphrase is ever lost. No HTTP route accepts the code.")
     return 0
 
 
@@ -886,24 +902,28 @@ def cmd_vault_drain(args):
 
 
 def cmd_vault_recover(args):
-    """ROOT-ONLY escrow recovery — the ONLY caller of `escrow_cli_gate()`.
+    """Open the vault with the RECOVERY CODE when the passphrase is lost.
 
-    This is the whole point of decision 3: the API/web path unwraps with the
-    passphrase alone, and the second wrap opens here and nowhere else. Running
-    it is a deliberate act at a shell on the box, with the escrow key file
-    readable.
+    This is the whole point of the owner's decision 3: the API/web path
+    unwraps with the passphrase alone, and the second wrap opens here and
+    nowhere else. It is a CLI verb because possession of the code opens the
+    vault outright — that belongs at a shell the owner is sitting at, not on
+    a route any authenticated session can post to.
     """
     V = _vault()
     if not V.is_initialized():
         _p("The vault is not set up yet.")
         return 1
+    code = args.recovery_code
+    if not code:
+        import getpass
+        code = getpass.getpass("Recovery code: ")
     try:
-        with V.escrow_cli_gate():
-            key = V.unwrap_escrow()
+        key = V.unwrap_recovery(code)
     except V.VaultError as e:
         _p("error: %s" % e)
         return 1
-    _p("Vault opened with the escrow key at %s." % V.escrow_key_path())
+    _p("Vault opened with the recovery code.")
     rows = V.list_notes(key)
     _p("  %d note(s):" % len(rows))
     for r in rows:
@@ -917,7 +937,30 @@ def cmd_vault_recover(args):
             _p("error: %s" % e)
             return 1
         _p("  passphrase re-set. The data key is unchanged, so every sealed row")
-        _p("  stays readable and the escrow wrap still works.")
+        _p("  stays readable and the recovery code still works.")
+    return 0
+
+
+def cmd_vault_recovery_code(args):
+    """Mint a FRESH recovery code, invalidating the previous one.
+
+    Needs the passphrase: this is for someone who still has access and has
+    lost (or wants to rotate) the code. A code cannot be re-displayed, only
+    replaced — it is not stored anywhere to display.
+    """
+    V, key = _vault_unlock(args)
+    if key is None:
+        return 1
+    if not args.regenerate:
+        st = V.status()
+        _p("A recovery code %s for this vault." % ("EXISTS" if st["has_recovery_code"]
+                                                   else "does NOT exist"))
+        _p("Codes are never stored, so an existing one cannot be shown again.")
+        _p("Run with --regenerate to mint a new one (the old one stops working).")
+        return 0
+    code = V.regenerate_recovery_code(key)
+    _p("New recovery code minted. Any previous code no longer opens this vault.")
+    _print_recovery_code(code)
     return 0
 
 
@@ -1618,7 +1661,7 @@ def build_parser():
     vlt = sub.add_parser("vault", help="OWNER-ONLY: the private vault "
                                        "(passphrase-sealed; the librarian cannot see it)")
     vlt_sub = vlt.add_subparsers(dest="sub", required=True)
-    vs = vlt_sub.add_parser("status", help="is the vault set up, and where the escrow key lives")
+    vs = vlt_sub.add_parser("status", help="is the vault set up, and does it have a recovery code")
     vs.set_defaults(fn=cmd_vault_status)
     vi = vlt_sub.add_parser("init", help="mint the data key and both wraps")
     vi.add_argument("--passphrase", default=None,
@@ -1640,11 +1683,21 @@ def build_parser():
     vd.add_argument("--passphrase", default=None)
     vd.set_defaults(fn=cmd_vault_drain)
     vr = vlt_sub.add_parser("recover",
-                            help="ROOT-ONLY: open the vault with the server-held escrow "
-                                 "key when the passphrase is lost")
+                            help="open the vault with the RECOVERY CODE when the "
+                                 "passphrase is lost (CLI only — no HTTP route "
+                                 "accepts the code)")
+    vr.add_argument("--recovery-code", dest="recovery_code", default=None,
+                    help="the code printed at `wm vault init` (prompted if omitted)")
     vr.add_argument("--set-passphrase", dest="set_passphrase", nargs="?", const="",
                     default=None, help="also re-wrap under a new passphrase")
     vr.set_defaults(fn=cmd_vault_recover)
+    vrc = vlt_sub.add_parser("recovery-code",
+                             help="mint a FRESH recovery code (needs the passphrase); "
+                                  "an existing code can never be re-displayed")
+    vrc.add_argument("--regenerate", action="store_true",
+                     help="actually mint one — the previous code stops working")
+    vrc.add_argument("--passphrase", default=None)
+    vrc.set_defaults(fn=cmd_vault_recovery_code)
 
     sub.add_parser("status", help="Grouped text readout").set_defaults(
         fn=cmd_status)

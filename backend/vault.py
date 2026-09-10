@@ -8,23 +8,47 @@ agent-facing surface (`list_notes`, `search_notes`, `lint_library`,
 `related_notes`, the proposal path, the `wm note` CLI group, the export) reads
 `notes`, and a row that is not in `notes` is a row none of them can reach.
 
+WHAT THIS ACTUALLY PROTECTS — read this before trusting it
+----------------------------------------------------------
+`/opt/data` is a **virtiofs** mount from the owner's Mac, and ownership is
+remapped per viewer: a file written by root with mode 0600 is seen by an agent
+run (uid 10000) as its own `-rw-------` and read without obstacle. This was
+settled empirically on 2026-09-10, not assumed. Consequences, stated plainly
+because an implied property is worse than none:
+
+  * **No file mode or ownership under `/opt/data` is a security boundary.**
+    A server-held key file there could not be hidden from an agent, so no
+    such file exists any more — see the recovery code below.
+  * `hq.db` is on that same mount, so an agent run **can read the vault
+    ciphertext and the wrapped keys**. It cannot read the plaintext.
+  * Vault security therefore reduces to **passphrase strength against an
+    offline attack**. That is why scrypt runs at n=2**15 and why a passphrase
+    shorter than MIN_PASSPHRASE characters is refused outright.
+
+What the vault does buy, precisely: the librarian cannot reach a vault row
+through any tool it has (structural — the rows are not in `notes`), a live
+session on an unlocked phone cannot open the vault, and a stolen `hq.db`
+alone is useless without the passphrase.
+
 Key handling, in the order it matters:
 
 1. A random 32-byte DATA KEY seals every field (AES-GCM, `nonce || ct`).
-2. It is wrapped TWICE. `scrypt(passphrase)` is the READ PATH — the API, the
-   web UI and `wm vault list` unwrap with the passphrase and nothing else.
-   A server-held ESCROW key is the second wrap and exists so a forgotten
-   passphrase is recoverable.
-3. **The escrow wrap is never on the read path.** `unwrap_escrow` refuses
-   unless a caller has opened `escrow_cli_gate()`, and the only place that
-   does is `core/wm_cli.cmd_vault_recover`. Nothing under `backend/` outside
-   this file so much as names the escrow. Without that separation the
-   passphrase would be decoration.
-4. The escrow key file lives OUTSIDE `hq_home`, 0600, derived from
-   `hq_home()` the way `wm_store.quarantine_dir()` derives its own directory
-   (owner rule: never hardcode `/opt/data`). It is therefore never swept into
-   `wm backup` — if a backup ever carried both halves, a single leaked backup
-   would be plaintext and the passphrase would have bought nothing.
+2. It is wrapped TWICE, both times with scrypt, and BOTH wraps live in
+   `vault_meta`. There is no key file anywhere.
+   - `scrypt(passphrase)` is the READ PATH — the API, the web UI and
+     `wm vault list` unwrap with the passphrase and nothing else.
+   - `scrypt(recovery_code)` exists so a forgotten passphrase is not a dead
+     end. The code is >= 160 bits, generated once, **printed once**, and
+     never stored, never logged, never written to `activity`.
+3. **The recovery code is never accepted by the HTTP API.** Possession of the
+   code IS the credential; it opens the vault outright, so it belongs at a
+   shell the owner is sitting at, not on a route any authenticated session
+   can post to. `unwrap_recovery` exists only for `wm vault recover`, and a
+   test enumerates every route to prove none references it.
+
+Because the recovery code is not stored, losing it is permanent — hence
+`wm vault recovery-code --regenerate`, which mints a fresh one (and thereby
+invalidates the old) for anyone who still knows the passphrase.
 
 The unlocked data key NEVER enters `backend/auth.py`'s session dict:
 `Sessions._save()` serialises that dict to `sessions.json` on disk, so a key
@@ -60,6 +84,10 @@ NONCE_BYTES = 12
 # How long an unlocked session key survives without use.
 IDLE_SECONDS = 30 * 60
 
+# See the module docstring: the ciphertext is assumed readable by anything on
+# this box, so the passphrase is the whole defence in an offline attack.
+MIN_PASSPHRASE = 12
+
 VAULT_KINDS = ("note", "secret")
 ATTACHMENT_KINDS = ("photo", "voice", "file")
 
@@ -73,64 +101,24 @@ class VaultLocked(VaultError):
 
 
 # ---------------------------------------------------------------------------
-# escrow key file — outside hq_home, 0600, never in a backup
+# recovery code — high entropy, printed ONCE, never stored
 # ---------------------------------------------------------------------------
-def escrow_key_path():
-    """A SIBLING of hq_home, never inside it.
-
-    `wm backup` copies the DB out of hq_home and `attachments/` beside it;
-    anything under hq_home is a candidate to be swept along. Derived from
-    `hq_home()` rather than hardcoded, exactly like
-    `wm_store.quarantine_dir()` (owner rule: never assume /opt/data).
-    """
-    return os.environ.get("HERMES_HQ_VAULT_ESCROW_KEY") or \
-        os.path.join(os.path.dirname(os.path.abspath(store.hq_home())),
-                     "hq-vault-escrow.key")
+# base32 without the padding: unambiguous in print and safe to retype. 25
+# bytes is 200 bits, comfortably past the 160-bit floor.
+RECOVERY_BYTES = 25
+RECOVERY_GROUP = 5
 
 
-def _create_escrow_key():
-    """Mint the escrow key 0600 from the moment it exists.
-
-    O_EXCL, and never create-then-chmod: that leaves a world-readable window
-    around the one file that can open the vault without the passphrase.
-    """
-    path = escrow_key_path()
-    os.makedirs(os.path.dirname(path), exist_ok=True)
-    key = secrets.token_bytes(KEY_BYTES)
-    fd = os.open(path, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
-    try:
-        os.write(fd, key.hex().encode() + b"\n")
-    finally:
-        os.close(fd)
-    return key
+def new_recovery_code():
+    """A fresh code in readable groups. The ONLY place one is minted."""
+    import base64
+    raw = base64.b32encode(secrets.token_bytes(RECOVERY_BYTES)).decode().rstrip("=")
+    return "-".join(raw[i:i + RECOVERY_GROUP] for i in range(0, len(raw), RECOVERY_GROUP))
 
 
-# The escrow gate. Closed by default, so a call from a request handler raises
-# even if the file is readable by the server process. `core/wm_cli.py` is the
-# ONLY module that opens it, and only inside `wm vault recover`.
-_gate = threading.local()
-
-
-@contextlib.contextmanager
-def escrow_cli_gate():
-    """Open the root-only recovery path for the duration of one CLI command."""
-    prev = getattr(_gate, "open", False)
-    _gate.open = True
-    try:
-        yield
-    finally:
-        _gate.open = prev
-
-
-def _read_escrow_key():
-    if not getattr(_gate, "open", False):
-        raise VaultError(
-            "escrow recovery is a root-only CLI operation (`wm vault recover`); "
-            "the API read path unwraps with the passphrase alone")
-    path = escrow_key_path()
-    if not os.path.isfile(path):
-        raise VaultError("no escrow key at %s — this vault cannot be recovered" % path)
-    return bytes.fromhex(open(path).read().strip())
+def normalize_recovery_code(code):
+    """Accept it however the owner retypes it: spaces, dashes, any case."""
+    return "".join(str(code or "").split()).replace("-", "").upper()
 
 
 # ---------------------------------------------------------------------------
@@ -201,11 +189,34 @@ def is_initialized(db_path=None):
         conn.close()
 
 
-def init_vault(passphrase, db_path=None):
-    """Mint the data key and both wraps. Idempotent only in the sense that a
-    second call is refused — re-initialising would orphan every sealed row."""
-    if not isinstance(passphrase, str) or len(passphrase) < 8:
-        raise VaultError("the vault passphrase must be at least 8 characters")
+def _check_passphrase(passphrase):
+    """One rule, applied at init AND at every change.
+
+    The floor is 12, not 8: `hq.db` sits on a virtiofs mount an agent run can
+    read, so the ciphertext is assumed obtainable and the passphrase is all
+    that stands between it and plaintext in an OFFLINE attack. An 8-character
+    passphrase is not a credential under that threat model.
+    """
+    if not isinstance(passphrase, str) or len(passphrase) < MIN_PASSPHRASE:
+        raise VaultError(
+            "the vault passphrase must be at least %d characters — hq.db can be "
+            "read by anything running on this box, so the passphrase is the only "
+            "thing protecting the contents against an offline attack"
+            % MIN_PASSPHRASE)
+
+
+def init_vault(passphrase, db_path=None, with_recovery=True):
+    """Mint the data key and its wraps. Returns the recovery code ONCE.
+
+    A second call is refused: re-initialising would orphan every sealed row.
+
+    `with_recovery=False` is for the HTTP setup path, which must never see a
+    code (it would then exist in a response body, a browser and any proxy log).
+    A vault set up that way has NO recovery wrap at all — deliberately, because
+    a wrap whose code nobody ever saw is dead weight pretending to be a safety
+    net. `wm vault recovery-code --regenerate` mints one later.
+    """
+    _check_passphrase(passphrase)
     conn = store._connect(db_path)
     try:
         if "pass_wrap" in _meta(conn):
@@ -214,31 +225,36 @@ def init_vault(passphrase, db_path=None):
         salt = secrets.token_bytes(16)
         params = {"scrypt_n": SCRYPT_N, "scrypt_r": SCRYPT_R, "scrypt_p": SCRYPT_P}
         pass_key = _derive(passphrase, salt, params)
-        # The escrow file is minted here and NOWHERE else: an existing file is
-        # reused (a second vault on the same box shares the escrow key), never
-        # silently replaced, which would strand the older vault.
-        path = escrow_key_path()
-        reused = os.path.isfile(path)
-        if reused:
-            # Reused, never replaced: replacing would strand any older vault
-            # wrapped under the previous key. The caller is TOLD, because
-            # "this box already had an escrow key" is something the owner
-            # should know at setup time rather than discover at recovery time.
-            escrow = bytes.fromhex(open(path).read().strip())
-        else:
-            escrow = _create_escrow_key()
+        meta = {"kdf": "scrypt", "salt": salt.hex(),
+                "pass_wrap": seal(pass_key, data_key, AAD_DATA_KEY).hex(),
+                "created_at": time.time()}
+        meta.update(params)
+        code = None
+        if with_recovery:
+            code, rmeta = _wrap_for_recovery(data_key)
+            meta.update(rmeta)
         with conn:
-            _set_meta(conn, kdf="scrypt", salt=salt.hex(),
-                      pass_wrap=seal(pass_key, data_key, AAD_DATA_KEY).hex(),
-                      escrow_wrap=seal(escrow, data_key, AAD_DATA_KEY).hex(),
-                      created_at=time.time(), **params)
-        return {"escrow_key_path": path, "created": True, "escrow_reused": reused}
+            _set_meta(conn, **meta)
+        # The code is RETURNED, never persisted and never logged. This return
+        # value is the only time it exists outside the caller's terminal.
+        return {"created": True, "recovery_code": code}
     finally:
         conn.close()
 
 
+def _wrap_for_recovery(data_key):
+    """(code, meta) — a fresh code and the vault_meta fields that wrap under it."""
+    code = new_recovery_code()
+    rsalt = secrets.token_bytes(16)
+    params = {"scrypt_n": SCRYPT_N, "scrypt_r": SCRYPT_R, "scrypt_p": SCRYPT_P}
+    rkey = _derive(normalize_recovery_code(code), rsalt, params)
+    return code, {"recovery_salt": rsalt.hex(),
+                  "recovery_wrap": seal(rkey, data_key, AAD_DATA_KEY).hex()}
+
+
 def unlock(passphrase, db_path=None):
-    """THE READ PATH. Returns the data key, or raises. Never touches escrow."""
+    """THE READ PATH. Returns the data key, or raises. The passphrase wrap is
+    the only one it touches — the recovery wrap is not a fallback here."""
     conn = store._connect(db_path)
     try:
         m = _meta(conn)
@@ -253,28 +269,56 @@ def unlock(passphrase, db_path=None):
         raise VaultError("wrong passphrase")
 
 
-def unwrap_escrow(db_path=None):
-    """ROOT-ONLY CLI recovery. Raises unless `escrow_cli_gate()` is open."""
-    escrow = _read_escrow_key()
+def unwrap_recovery(code, db_path=None):
+    """Open the vault with the recovery code, the passphrase unknown.
+
+    No gate and no uid check: possession of a 200-bit code IS the credential,
+    and a `geteuid` test would buy nothing on a mount whose ownership is
+    remapped per viewer anyway. What keeps this off the web is that no HTTP
+    route calls it — enumerated by test.
+    """
     conn = store._connect(db_path)
     try:
         m = _meta(conn)
     finally:
         conn.close()
-    if "escrow_wrap" not in m:
+    if "pass_wrap" not in m:
         raise VaultError("the vault is not set up yet")
+    if "recovery_wrap" not in m:
+        raise VaultError(
+            "this vault has no recovery code (it was set up from the web). "
+            "Run `wm vault recovery-code --regenerate` while you still know "
+            "the passphrase.")
+    rkey = _derive(normalize_recovery_code(code), bytes.fromhex(m["recovery_salt"]), m)
     try:
-        return unseal(escrow, bytes.fromhex(m["escrow_wrap"]), AAD_DATA_KEY)
+        return unseal(rkey, bytes.fromhex(m["recovery_wrap"]), AAD_DATA_KEY)
     except VaultError:
-        raise VaultError("the escrow key does not match this vault")
+        raise VaultError("that recovery code does not open this vault")
+
+
+def regenerate_recovery_code(data_key, db_path=None):
+    """Mint a fresh code for an already-open data key, invalidating the old.
+
+    The data key itself is untouched, so every sealed row stays readable and
+    the passphrase wrap keeps working.
+    """
+    code, rmeta = _wrap_for_recovery(data_key)
+    conn = store._connect(db_path)
+    try:
+        with conn:
+            _set_meta(conn, **rmeta)
+            # No code, no hash, no hint — just that it happened.
+            _audit(conn, "rewrapped", detail="recovery code regenerated")
+    finally:
+        conn.close()
+    return code
 
 
 def set_passphrase(data_key, passphrase, db_path=None):
-    """Re-wrap an already-open data key under a new passphrase. The escrow
+    """Re-wrap an already-open data key under a new passphrase. The recovery
     wrap is untouched: the data key itself never changes, so every sealed row
-    stays readable and the recovery path keeps working."""
-    if not isinstance(passphrase, str) or len(passphrase) < 8:
-        raise VaultError("the vault passphrase must be at least 8 characters")
+    stays readable and the recovery code keeps working."""
+    _check_passphrase(passphrase)
     conn = store._connect(db_path)
     try:
         m = _meta(conn)
@@ -939,13 +983,20 @@ def drain_quarantine(key, db_path=None, apply=False):
 # status
 # ---------------------------------------------------------------------------
 def status(token=None, db_path=None):
+    conn = store._connect(db_path)
+    try:
+        m = _meta(conn)
+    finally:
+        conn.close()
     return {
-        "initialized": is_initialized(db_path=db_path),
+        "initialized": "pass_wrap" in m,
         # peek, not get: polling status must not keep the vault awake.
         "unlocked": KEYS.peek(token),
         "notes": count_notes(db_path=db_path),
         "idle_seconds": KEYS.idle,
         "unlocked_at": KEYS.unlocked_at(token),
+        # whether a recovery code EXISTS — never anything about what it is
+        "has_recovery_code": "recovery_wrap" in m,
     }
 
 

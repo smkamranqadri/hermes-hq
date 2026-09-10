@@ -31,6 +31,10 @@ const LOCK = '🔒'
 function UnlockCard({ initialized }: { initialized: boolean }) {
   const [pass, setPass] = useState('')
   const [busy, setBusy] = useState(false)
+  // Setting the vault up from the web mints NO recovery code — a code shown in
+  // a browser response is a code in every proxy log. The server says so in
+  // `recovery_hint` and the owner sees it here, once, right after setup.
+  const [hint, setHint] = useState<string | null>(null)
   const qc = useQueryClient(); const toast = useToast()
   const submit = async (e: React.FormEvent) => {
     e.preventDefault()
@@ -38,7 +42,7 @@ function UnlockCard({ initialized }: { initialized: boolean }) {
     setBusy(true)
     try {
       if (initialized) { await vaultUnlock(pass); toast('Vault unlocked') }
-      else { const r = await vaultInit(pass); toast(`Vault created — escrow key at ${r.escrow_key_path}`) }
+      else { const r = await vaultInit(pass); setHint(r.recovery_hint ?? null); toast('Vault created') }
       await qc.invalidateQueries({ queryKey: ['vault-status'] })
       await qc.invalidateQueries({ queryKey: ['vault-notes'] })
     } catch (err) {
@@ -56,7 +60,7 @@ function UnlockCard({ initialized }: { initialized: boolean }) {
           <p className="mt-1 text-xs text-muted">
             {initialized
               ? 'A separate passphrase — not your login password. It is never stored on this device, so the vault re-seals on every sign-out and every restart.'
-              : 'Choose a passphrase (8+ characters). It is not your login password and the server cannot recover it from the web — only a root shell on the box can, using the escrow key.'}
+              : 'Choose a passphrase (12+ characters). It is not your login password, and it is the only thing protecting these notes — nothing on this server can recover it for you.'}
           </p>
         </div>
         <Field label="Vault passphrase">
@@ -67,6 +71,7 @@ function UnlockCard({ initialized }: { initialized: boolean }) {
             spellCheck={false} name="vault-passphrase" aria-label="Vault passphrase"
             placeholder={initialized ? 'Passphrase' : 'At least 8 characters'} />
         </Field>
+        {hint && <p className="rounded-lg border border-needsyou/40 bg-needsyou/10 p-2 text-xs text-needsyou">{hint}</p>}
         <div className="flex items-center gap-2">
           <Btn type="submit" busy={busy} disabled={!pass}>{initialized ? 'Unlock' : 'Create vault'}</Btn>
           <span className="text-[11px] text-muted">Nothing is saved on this device.</span>

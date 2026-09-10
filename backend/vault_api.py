@@ -6,10 +6,12 @@ passphrase is what turns a row into words, and it is held only in
 `vault.KEYS`, a process-memory map — never in `request.state.session`, which
 `auth.Sessions._save()` writes to `sessions.json` on disk.
 
-Deliberately absent from this file: any mention of the escrow key. The escrow
-wrap is not on the read path, so no request handler can reach it — the only
-opener of `vault.escrow_cli_gate()` is `wm vault recover`. A test enumerates
-every module under `backend/` to keep that true.
+Deliberately absent from this file: the RECOVERY CODE, in every direction.
+No route accepts one, none returns one, and setup here mints no recovery wrap
+at all — a code returned in a response body would exist in a browser and in
+any proxy log, and possession of the code opens the vault outright. Recovery
+is `wm vault recover`, at a shell. A test enumerates every route to keep this
+true.
 """
 import os
 
@@ -87,11 +89,23 @@ def vault_status(request: Request):
 
 @router.post("/init")
 def vault_init(request: Request, body: Passphrase):
-    res = _guard(V.init_vault, body.passphrase, db_path=_db())
+    """Set the vault up from the web. NO recovery code is minted here.
+
+    `with_recovery=False` is the point: this route cannot show the owner a
+    code, and a wrap whose code nobody ever saw is dead weight pretending to
+    be a safety net. The response says so, and the UI repeats it — the owner
+    runs `wm vault recovery-code --regenerate` on the box to gain one.
+    """
+    res = _guard(V.init_vault, body.passphrase, db_path=_db(), with_recovery=False)
+    assert res["recovery_code"] is None      # belt and braces: never in a response
     # Setting it up unlocks it — otherwise the owner types the passphrase
     # twice in a row to reach an empty vault.
     V.KEYS.put(_token(request), _guard(V.unlock, body.passphrase, db_path=_db()))
-    return {"ok": True, "escrow_key_path": res["escrow_key_path"],
+    return {"ok": True,
+            "recovery_hint": "No recovery code exists for this vault. Run "
+                             "`wm vault recovery-code --regenerate` on the server "
+                             "to mint one — without it, forgetting the passphrase "
+                             "is permanent.",
             **V.status(token=_token(request), db_path=_db())}
 
 
@@ -117,7 +131,7 @@ def vault_lock(request: Request):
 @router.post("/passphrase")
 def vault_passphrase(request: Request, body: NewPassphrase):
     """Change the passphrase. The DATA key is unchanged, so every sealed row
-    stays readable and the escrow wrap keeps working untouched."""
+    stays readable and the recovery code keeps working untouched."""
     try:
         key = V.unlock(body.passphrase, db_path=_db())
     except V.VaultError as e:

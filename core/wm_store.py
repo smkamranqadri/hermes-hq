@@ -665,11 +665,14 @@ CREATE TABLE IF NOT EXISTS vault_attachments (
     created_at REAL
 );
 
--- The wrapped data key. TWO wraps of the SAME random key: one under
--- scrypt(passphrase) — the only one the API/web read path ever touches — and
--- one under a server-held escrow key that lives OUTSIDE hq_home and is used
--- exclusively by the root-only `wm vault recover` CLI. Without that
--- separation the passphrase would be decoration.
+-- The wrapped data key. TWO scrypt wraps of the SAME random key, both stored
+-- here; there is no key file anywhere on disk. One is under the passphrase —
+-- the only wrap the API/web read path ever touches — and one is under a
+-- high-entropy RECOVERY CODE that is printed once at setup and stored nowhere.
+-- No HTTP route accepts the code; `wm vault recover` is its only consumer.
+-- (A server-held key FILE was the original design and was dropped: /opt/data
+-- is a virtiofs mount whose ownership is remapped per viewer, so an agent run
+-- reads a root-owned 0600 file there without obstacle. See backend/vault.py.)
 CREATE TABLE IF NOT EXISTS vault_meta (
     key   TEXT PRIMARY KEY,
     value TEXT
