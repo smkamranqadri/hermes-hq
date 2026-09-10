@@ -4,7 +4,7 @@
 import { useState } from 'react'
 import { Link, useLocation, useNavigate, useParams } from 'react-router-dom'
 import { useQueryClient } from '@tanstack/react-query'
-import { post, useNote, useRelatedNotes, when, type RelatedLinkItem, type RelatedNoteItem } from '../api'
+import { post, useNote, useRelatedNotes, useVaultStatus, vaultMove, when, type RelatedLinkItem, type RelatedNoteItem } from '../api'
 import { GlassCard } from '../components/GlassCard'
 import { Markdown } from '../components/chat/Markdown'
 import { AttachToNote, DisputedChip, FileNoteModal, NewReminderFromNoteModal, NewTaskFromNoteModal, NoteAttachments, NoteRow, ProposalBanner, TYPE_TONE, PROVENANCE, PROVENANCE_HINT } from '../components/brain'
@@ -13,6 +13,8 @@ import { Chip, Crumbs, Empty, Label, Loading, Skeleton } from '../components/ui'
 import { useToast } from '../components/Toast'
 import { usePageTitle } from '../usePageTitle'
 import clsx from 'clsx'
+
+const LOCK = '\u{1F512}'
 
 function LinkedTargetRow({ item }: { item: RelatedLinkItem }) {
   return (
@@ -66,7 +68,8 @@ export function BrainNote() {
   // archiving returns the owner to the filtered list they came from,
   // instead of always bouncing to the unfiltered Library.
   const from = (loc.state as { from?: string } | null)?.from
-  const [modal, setModal] = useState<'file' | 'task' | 'reminder' | 'archive' | null>(null)
+  const [modal, setModal] = useState<'file' | 'task' | 'reminder' | 'archive' | 'vault' | null>(null)
+  const vault = useVaultStatus()
   const [editing, setEditing] = useState(false)
   const [bodyDraft, setBodyDraft] = useState('')
   const [entry, setEntry] = useState('')
@@ -90,6 +93,35 @@ export function BrainNote() {
       {modal === 'file' && <FileNoteModal n={n} onClose={() => setModal(null)} />}
       {modal === 'task' && <NewTaskFromNoteModal n={n} onClose={() => setModal(null)} />}
       {modal === 'reminder' && <NewReminderFromNoteModal n={n} onClose={() => setModal(null)} />}
+      {/* Move to vault: the ONE carve-out from archive-only. The copy has to
+          say plainly that this is not archiving — it is the only button in
+          the app that destroys the owner's own text. */}
+      {modal === 'vault' && (
+        vault.data?.unlocked ? (
+          <ConfirmModal title="Move to the vault" confirmLabel="Destroy the plaintext and seal it"
+            busy={busy === 'vault'}
+            message={<>
+              <p>“{n.title}” is sealed into the vault with a passphrase the librarian does not have.</p>
+              <p className="mt-2 text-needsyou">This is not archiving. The note, its search index entry and every
+                revision snapshot are <strong>destroyed</strong> — this is the one place in hermes-hq where text is
+                really deleted, and it cannot be undone.</p>
+              <p className="mt-2 text-muted">Its area, tags and project do not come with it; the vault files nothing.</p>
+            </>}
+            onClose={() => setModal(null)}
+            onConfirm={async () => {
+              await act('vault', () => vaultMove(n.id), 'Sealed into the vault — the plaintext is gone')
+              setModal(null); nav('/brain/vault', { replace: true })
+            }} />
+        ) : (
+          <ConfirmModal title="Unlock the vault first" confirmLabel="Go to the vault"
+            message={<>
+              <p>The vault is locked, so there is no key to seal this note with.</p>
+              <p className="mt-2 text-muted">Unlock it, then come back and move the note.</p>
+            </>}
+            onClose={() => setModal(null)}
+            onConfirm={() => { setModal(null); nav('/brain/vault') }} />
+        )
+      )}
       {modal === 'archive' && (
         <ConfirmModal title="Archive note" confirmLabel="Archive"
           message={`Archive “${n.title}”? It leaves the library views but stays searchable — nothing is deleted.`}
@@ -156,6 +188,12 @@ export function BrainNote() {
                     const status = homeless ? 'inbox' : 'active'
                     return <Btn kind="ghost" busy={busy === 'restore'} onClick={() => void act('restore', () => post(`/api/note/${n.id}/edit`, { status }), 'Restored')}>{homeless ? 'Restore to inbox' : 'Restore'}</Btn>
                   })()}
+              {/* Last in the row and never the primary action: it is the only
+                  destructive button in the app. */}
+              <Btn kind="ghost" data-move-to-vault onClick={() => setModal('vault')}
+                title="Seal this note in the private vault. The plaintext here is destroyed — this cannot be undone.">
+                {LOCK} Move to vault
+              </Btn>
             </div>
           </>
         )}

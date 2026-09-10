@@ -18,6 +18,9 @@ export function BrainSubNav({ inbox, review }: { inbox?: number; review?: number
       <NavLink to="/brain" end className={pill}>Home{typeof inbox === 'number' && inbox > 0 ? ` · ${inbox}` : ''}</NavLink>
       <NavLink to="/brain/library" className={pill}>Library</NavLink>
       <NavLink to="/brain/review" className={pill}>Review{typeof review === 'number' && review > 0 ? ` · ${review}` : ''}</NavLink>
+      {/* The vault is its own Library folder. No count: a badge would leak how
+          much is in there to anyone glancing at the phone. */}
+      <NavLink to="/brain/vault" className={pill}>Vault</NavLink>
     </nav>
   )
 }

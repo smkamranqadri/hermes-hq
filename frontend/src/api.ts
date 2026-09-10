@@ -347,3 +347,27 @@ export async function streamChat(profile: string, sessionId: string, message: st
     }
   }
 }
+
+// ---- private vault (Phase 4 slice B) -----------------------------------
+// The vault re-seals on every restart (including the 05:00 PKT auto-update)
+// and on logout, so every surface here treats "locked" as the normal state
+// rather than an error. The passphrase is NEVER persisted client-side — no
+// localStorage, no sessionStorage, not even a ref that outlives the submit.
+export type VaultStatus = { initialized: boolean; unlocked: boolean; notes: number; idle_seconds: number; unlocked_at: number | null }
+/** A locked row is a lock icon and a date: `title` is null and the server
+ *  never sent one. Unlocking decrypts titles for THIS session only. */
+export type VaultNoteRow = { id: number; kind: string; created_at: number; updated_at: number | null; entry_count: number; attachment_count: number; locked: boolean; title: string | null }
+export type VaultAttachment = { id: number; kind: string; bytes: number; created_at: number; name: string | null; mime: string | null }
+export type VaultNoteFull = { id: number; kind: string; created_at: number; updated_at: number | null; locked: false; title: string; body: string; entries: { id: number; created_at: number; body: string }[]; attachments: VaultAttachment[] }
+export type VaultAudit = { id: number; action: string; old_note_id: number | null; vault_note_id: number | null; title_sha256: string | null; revisions: number; entries: number; attachments: number; links: number; proposals: number; detail: string | null; created_at: number }
+
+export const useVaultStatus = () => useQuery({ queryKey: ['vault-status'], queryFn: () => get<VaultStatus>('/api/vault/status'), refetchInterval: 60000 })
+export const useVaultNotes = (enabled = true) => useQuery({ queryKey: ['vault-notes'], queryFn: () => get<{ locked: boolean; notes: VaultNoteRow[] }>('/api/vault/notes'), enabled })
+export const useVaultNote = (id: number | null) => useQuery({ queryKey: ['vault-note', id], queryFn: () => get<VaultNoteFull>(`/api/vault/note/${id}`), enabled: id != null, retry: false })
+export const useVaultAudit = () => useQuery({ queryKey: ['vault-audit'], queryFn: () => get<{ audit: VaultAudit[] }>('/api/vault/audit') })
+export const vaultUnlock = (passphrase: string) => post<VaultStatus>('/api/vault/unlock', { passphrase })
+export const vaultInit = (passphrase: string) => post<VaultStatus & { escrow_key_path: string }>('/api/vault/init', { passphrase })
+export const vaultLock = () => post<VaultStatus>('/api/vault/lock')
+export const vaultCreate = (title: string, body: string) => post<{ id: number }>('/api/vault/notes', { title, body })
+export const vaultMove = (note_id: number) => post<{ ok: true; vault_note_id: number }>('/api/vault/move', { note_id })
+export const vaultAttachmentUrl = (id: number) => `/api/vault/attachment/${id}`
