@@ -4,7 +4,7 @@
 import { useState } from 'react'
 import { Link, useLocation, useNavigate, useParams } from 'react-router-dom'
 import { useQueryClient } from '@tanstack/react-query'
-import { post, useNote, useRelatedNotes, useVaultMoveImpact, useVaultStatus, vaultMove, when, type RelatedLinkItem, type RelatedNoteItem } from '../api'
+import { post, useNote, useNoteRevisions, useRelatedNotes, useVaultMoveImpact, useVaultStatus, vaultMove, when, type NoteRevision, type RelatedLinkItem, type RelatedNoteItem } from '../api'
 import { GlassCard } from '../components/GlassCard'
 import { Markdown } from '../components/chat/Markdown'
 import { AttachToNote, DisputedChip, FileNoteModal, NewReminderFromNoteModal, NewTaskFromNoteModal, NoteAttachments, NoteRow, ProposalBanner, TYPE_TONE, PROVENANCE, PROVENANCE_HINT } from '../components/brain'
@@ -364,6 +364,70 @@ export function BrainNote() {
           <p className="mt-2 text-xs text-error">Could not load related notes.</p>
         </GlassCard>
       )}
+      <History noteId={n.id} />
     </section>
+  )
+}
+
+/** Edit history. `update_note` has snapshotted the previous content on every
+ * edit since Phase 1 and nothing ever read it — 400+ rows by the time this
+ * shipped, including every librarian-approved filing. Collapsed by default:
+ * it is a "what happened to this note" question, not part of reading it, and
+ * fetching it on open would cost a query per note view. */
+function History({ noteId }: { noteId: number }) {
+  const [open, setOpen] = useState(false)
+  const q = useNoteRevisions(noteId, open)
+  const revs = q.data?.revisions ?? []
+  return (
+    <GlassCard>
+      <button type="button" onClick={() => setOpen(o => !o)}
+              className="flex w-full items-center justify-between text-left"
+              aria-expanded={open} data-history-toggle>
+        <Label>History</Label>
+        <span className="font-mono text-[10px] uppercase tracking-widest text-muted">
+          {open ? 'hide' : 'show'}
+        </span>
+      </button>
+      {open && (
+        <div className="mt-3">
+          {q.isLoading && <Skeleton rows={3} />}
+          {q.isError && <p className="text-xs text-error">Could not load history.</p>}
+          {!q.isLoading && !q.isError && revs.length === 0 && (
+            <p className="text-xs text-muted">No edits — this note is as it was written.</p>
+          )}
+          <ol className="flex flex-col gap-3">
+            {revs.map(r => <Revision key={r.id} r={r} />)}
+          </ol>
+        </div>
+      )}
+    </GlassCard>
+  )
+}
+
+/** One edit. A snapshot is the state BEFORE the edit, so the readable framing
+ * is "X changed from <this> to <what replaced it>", not a raw dump. */
+function Revision({ r }: { r: NoteRevision }) {
+  const changed = r.changed.length ? r.changed.join(', ') : 'nothing (re-saved)'
+  const after = r.superseded_by
+  return (
+    <li className="border-l border-line pl-3">
+      <div className="flex flex-wrap items-baseline gap-x-2 gap-y-0.5">
+        <span className="font-mono text-[10px] uppercase tracking-widest text-muted">{when(r.created_at)}</span>
+        <Chip>{r.edited_by}</Chip>
+        <span className="text-[11px] text-muted">changed {changed}</span>
+      </div>
+      {r.changed.includes('title') && (
+        <p className="mt-1 break-words text-xs"><span className="text-muted line-through">{r.title}</span>{' → '}<span>{after.title}</span></p>
+      )}
+      {r.changed.includes('tags') && (
+        <p className="mt-1 break-words text-xs"><span className="text-muted line-through">{r.tags.join(', ') || '—'}</span>{' → '}<span>{after.tags.join(', ') || '—'}</span></p>
+      )}
+      {r.changed.includes('body') && (
+        <details className="mt-1">
+          <summary className="cursor-pointer text-[11px] text-muted hover:text-fg">body before this edit ({r.body.length} chars)</summary>
+          <pre className="mt-1 max-h-64 overflow-auto whitespace-pre-wrap break-words rounded-lg bg-inset p-2 text-[11px]">{r.body || '—'}</pre>
+        </details>
+      )}
+    </li>
   )
 }

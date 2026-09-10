@@ -284,6 +284,23 @@ export type RelatedNotes = {
 }
 export const useRelatedNotes = (id: number) =>
   useQuery({ queryKey: ['note-related', id], queryFn: () => get<RelatedNotes>(`/api/note/${id}/related`), enabled: Number.isFinite(id), refetchInterval: NOTES_REFETCH })
+export type NoteRevision = {
+  id: number
+  note_id: number
+  title: string
+  body: string
+  tags: string[]
+  edited_by: string
+  created_at: number
+  /** which of title/body/tags this edit actually changed */
+  changed: string[]
+  /** the content that REPLACED this snapshot (the next edit, or the note as it stands) */
+  superseded_by: { title: string; body: string; tags: string[] }
+}
+// Not on NOTES_REFETCH: history only changes when the note does, and the note
+// page already polls. A 15s poll of every note's full edit log would be noise.
+export const useNoteRevisions = (id: number, enabled = true) =>
+  useQuery({ queryKey: ['note-revisions', id], queryFn: () => get<{ revisions: NoteRevision[] }>(`/api/note/${id}/revisions`), enabled: enabled && Number.isFinite(id) })
 export const useProjectNotes = (slug: string) =>
   useQuery({ queryKey: ['project-notes', slug], queryFn: () => get<{ notes: Note[] }>(`/api/project/${slug}/notes`), refetchInterval: NOTES_REFETCH })
 export const useTaskNotes = (id: number) =>

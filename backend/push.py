@@ -126,7 +126,11 @@ def push_notifications(ids, db_path=None, background=True):
 def sync_and_push(db_path=None, background=True):
     """Turn new state transitions into notifications and push them. Safe to call often (idempotent)."""
     try:
-        new_ids = store.sync_notifications(db_path=db_path)
+        store.sync_notifications(db_path=db_path)
+        # Push what is UNPUSHED, not what the sync happened to create: rows
+        # written directly by `add_notification` (a due reminder, a librarian
+        # proposal, a schedule error) never reached the phone before this.
+        new_ids = store.unpushed_notifications(db_path=db_path)
     except Exception:
         log.exception("notification sync failed")
         return 0

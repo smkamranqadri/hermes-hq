@@ -4219,6 +4219,41 @@ def render_task_brief(task_id, db_path=None):
 NOTIFY_NEEDS_YOU = {"blocked", "failed", "stalled", "waiting_approval", "needs_review", "manual"}
 NOTIFY_INFO = {"done", "rework"}
 _NOTIF_WATERMARK = "notif_last_transition_id"
+_PUSH_WATERMARK = "push_last_notification_id"
+
+
+def unpushed_notifications(db_path=None):
+    """Notification ids that have never been pushed, oldest first.
+
+    `sync_and_push` used to push only what `sync_notifications` returned — the
+    ones DERIVED from state transitions — so every notification written
+    directly by `add_notification` reached the bell and never the phone: the
+    librarian's proposal alerts, schedule errors, and (from 2026-09-10) due
+    reminders. This watermark covers the table itself, whatever wrote the row.
+
+    The first call sets the watermark and returns nothing: an upgrade must not
+    push a backlog of everything the owner already read.
+    """
+    conn = _connect(db_path)
+    try:
+        last = conn.execute("SELECT value FROM wm_meta WHERE key=?",
+                            (_PUSH_WATERMARK,)).fetchone()
+        top = conn.execute("SELECT COALESCE(MAX(id), 0) FROM notifications").fetchone()[0]
+        if last is None:
+            with conn:
+                conn.execute("INSERT OR REPLACE INTO wm_meta(key, value) VALUES (?,?)",
+                             (_PUSH_WATERMARK, str(top)))
+            return []
+        ids = [r["id"] for r in conn.execute(
+            "SELECT id FROM notifications WHERE id > ? ORDER BY id",
+            (int(last["value"]),))]
+        if ids:
+            with conn:
+                conn.execute("INSERT OR REPLACE INTO wm_meta(key, value) VALUES (?,?)",
+                             (_PUSH_WATERMARK, str(ids[-1])))
+        return ids
+    finally:
+        conn.close()
 
 
 def _set_meta(key, value, db_path=None):
@@ -4563,6 +4598,21 @@ def _spawn_from_schedule(row, kind, now, db_path=None):
         mark_ready(tid, db_path=db_path)
     except ValueError:
         pass          # e.g. under an unreleased goal: stays parked, still linked
+    # A REMINDER that fires has to tell the owner — until 2026-09-10 this
+    # function minted the task and told nobody, so a due reminder was a silent
+    # row on a board. Owner-assigned only: an agent schedule (the librarian
+    # ingest every 30 min) is not something a human is waiting on. `manual`
+    # firings are the owner pressing Run now, who already knows.
+    # `source_key` carries the firing's DUE time, so a `late` catch-up for the
+    # same window is the same notification and inserts once.
+    if kind in ("fired", "late") and row["assignee_profile"] == OWNER_ASSIGNEE:
+        add_notification(
+            "needs_you", "Reminder: %s" % (row["name"] or "")[:80],
+            body=ex(row["title"])[:300] or None,
+            href="/tasks/%d" % tid, task_id=tid, project_id=row["project_id"],
+            source_key="reminder:%s:%s" % (row["id"],
+                                           int(row["next_fire_at"] or now)),
+            db_path=db_path)
     return tid
 
 
@@ -6062,6 +6112,54 @@ def _like_escape(t):
     """
     return (str(t).replace("\\", "\\\\")
             .replace("%", r"\%").replace("_", r"\_"))
+
+
+def list_note_revisions(note_id, limit=50, db_path=None):
+    """A note's edit history, newest first, with what CHANGED on each edit.
+
+    `update_note` has been snapshotting the PREVIOUS content on every edit
+    since Phase 1 — 400+ rows by 2026-09-10 — and until this function there was
+    no store call, no route and no UI that read one. A snapshot is the state
+    BEFORE that edit, so "what changed" is each row compared against the one
+    that superseded it (the next-newer row, or the note's current content for
+    the newest snapshot).
+
+    Vault notes never appear here: they are not in `notes`, and move-to-vault
+    destroys the note's snapshots along with the plaintext.
+    """
+    conn = _connect(db_path)
+    try:
+        cur = conn.execute("SELECT title, body, tags FROM notes WHERE id=?",
+                           (note_id,)).fetchone()
+        if cur is None:
+            return None
+        rows = [dict(r) for r in conn.execute(
+            "SELECT id, note_id, title, body, tags, edited_by, created_at "
+            "FROM note_revisions WHERE note_id=? ORDER BY id DESC LIMIT ?",
+            (note_id, int(limit)))]
+        after = {"title": cur["title"], "body": cur["body"] or "",
+                 "tags": cur["tags"] or "[]"}
+        out = []
+        for r in rows:
+            before = {"title": r["title"], "body": r["body"] or "",
+                      "tags": r["tags"] or "[]"}
+            changed = [f for f in ("title", "body", "tags")
+                       if (before[f] or "") != (after[f] or "")]
+            try:
+                r["tags"] = json.loads(r["tags"] or "[]")
+            except ValueError:
+                r["tags"] = []
+            r["changed"] = changed
+            r["superseded_by"] = dict(after)
+            try:
+                r["superseded_by"]["tags"] = json.loads(after["tags"] or "[]")
+            except ValueError:
+                r["superseded_by"]["tags"] = []
+            out.append(r)
+            after = before
+        return out
+    finally:
+        conn.close()
 
 
 def export_snapshot(db_path=None):

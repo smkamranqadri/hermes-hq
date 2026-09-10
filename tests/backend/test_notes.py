@@ -289,3 +289,47 @@ def test_retitling_is_refused_when_empty_and_when_the_task_is_running(env):
     with pytest.raises(ValueError, match="edits are refused while running"):
         store.edit_task(tid, title="too late", db_path=db)
     assert store.get_task(tid, db_path=db)["title"] == "original"
+
+
+# ---- Phase 4 slice D: the revision history read path --------------------
+#
+# `update_note` has snapshotted the previous content on every edit since Phase
+# 1 — 400+ rows on the live library by 2026-09-10 — and until this there was no
+# store call, no route and no UI that read one.
+
+def test_revisions_report_what_each_edit_changed(env):
+    c, store, db = env
+    h = login(c)
+    nid = c.post("/api/notes", json={"title": "first title", "body": "first body",
+                                     "tags": []}, headers=h).json()["id"]
+    store.update_note(nid, title="second title", db_path=db)
+    store.update_note(nid, body="second body", db_path=db)
+    store.update_note(nid, edited_by="librarian", tags=["docker"], db_path=db)
+
+    revs = c.get("/api/note/%d/revisions" % nid, headers=h).json()["revisions"]
+    assert len(revs) == 3
+    # newest first, and each row says what the edit that superseded it changed
+    assert [r["changed"] for r in revs] == [["tags"], ["body"], ["title"]]
+    assert [r["edited_by"] for r in revs] == ["librarian", "owner", "owner"]
+    # a snapshot is the state BEFORE its edit; superseded_by is what replaced it
+    assert revs[0]["tags"] == [] and revs[0]["superseded_by"]["tags"] == ["docker"]
+    assert revs[2]["title"] == "first title"
+    assert revs[2]["superseded_by"]["title"] == "second title"
+    assert revs[1]["body"] == "first body"
+
+
+def test_a_never_edited_note_has_no_history_and_a_missing_one_404s(env):
+    c, store, db = env
+    h = login(c)
+    nid = c.post("/api/notes", json={"title": "untouched"}, headers=h).json()["id"]
+    assert c.get("/api/note/%d/revisions" % nid, headers=h).json()["revisions"] == []
+    assert c.get("/api/note/999999/revisions", headers=h).status_code == 404
+    assert c.get("/api/note/%d/revisions" % nid).status_code in (200, 401)
+
+
+def test_revisions_require_an_owner_session(env):
+    c, store, db = env
+    h = login(c)
+    nid = c.post("/api/notes", json={"title": "x"}, headers=h).json()["id"]
+    c.cookies.clear()
+    assert c.get("/api/note/%d/revisions" % nid).status_code == 401

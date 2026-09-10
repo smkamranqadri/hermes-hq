@@ -119,3 +119,117 @@ def test_api_roundtrip(env):
     assert c.post(f"/api/schedules/{sid}/delete").json() == {"ok": True}
     assert c.get("/api/schedules").json()["schedules"] == []
     assert c.get("/api/tasks").json()["tasks"][0]["schedule_id"] is None      # unlinked, task kept
+
+
+# ---- Phase 4 slice C: a due reminder tells the owner --------------------
+#
+# Until 2026-09-10 `_spawn_from_schedule` minted the task and notified nobody,
+# so a due reminder was a silent row on a board. And `sync_and_push` pushed
+# only what `sync_notifications` DERIVED from state transitions, so any
+# directly-added notification reached the bell and never the phone.
+
+def _notifs(db, prefix="Reminder:"):
+    import sqlite3
+    conn = sqlite3.connect(db); conn.row_factory = sqlite3.Row
+    try:
+        return [dict(r) for r in conn.execute(
+            "SELECT * FROM notifications ORDER BY id")
+            if not prefix or (r["title"] or "").startswith(prefix)]
+    finally:
+        conn.close()
+
+
+def _arm(db, sid, when=None):
+    import sqlite3
+    conn = sqlite3.connect(db)
+    with conn:
+        conn.execute("UPDATE schedules SET next_fire_at=? WHERE id=?",
+                     (when or (time.time() - 5), sid))
+    conn.close()
+
+
+def test_a_fired_reminder_notifies_exactly_once(env):
+    _c, store, _sch = env
+    db = store.DEFAULT_DB_PATH
+    sid = store.create_schedule("dentist", "0 9 * * *", "alpha", "call the dentist",
+                                assignee_profile="owner", one_shot=True, db_path=db)
+    _arm(db, sid)
+    res = store.fire_due(db_path=db)
+    assert [k for _s, k, _t in res] == ["fired"]
+    ns = _notifs(db)
+    assert len(ns) == 1 and ns[0]["kind"] == "needs_you"
+    assert "dentist" in ns[0]["title"] and ns[0]["href"].startswith("/tasks/")
+    # a repeat for the SAME due window is the same notification, inserted once
+    store.add_notification("needs_you", "Reminder: dentist",
+                           source_key=ns[0]["source_key"], db_path=db)
+    assert len(_notifs(db)) == 1
+
+
+def test_an_agent_schedule_does_not_notify(env):
+    """The librarian ingest fires every 30 minutes; it is not a reminder."""
+    _c, store, _sch = env
+    db = store.DEFAULT_DB_PATH
+    sid = store.create_schedule("Librarian ingest", "*/30 * * * *", "alpha",
+                                "triage", assignee_profile="librarian", db_path=db)
+    _arm(db, sid)
+    store.fire_due(db_path=db)
+    assert _notifs(db) == []
+
+
+def test_a_skipped_firing_notifies_nothing_as_due(env):
+    """overlap=skip while the last task is open records `skipped` — nothing is
+    due, so nothing is announced."""
+    _c, store, _sch = env
+    db = store.DEFAULT_DB_PATH
+    sid = store.create_schedule("dentist", "0 9 * * *", "alpha", "call the dentist",
+                                assignee_profile="owner", overlap="skip", db_path=db)
+    _arm(db, sid)
+    store.fire_due(db_path=db)
+    assert len(_notifs(db)) == 1
+    _arm(db, sid)                                   # armed again, prev still open
+    res = store.fire_due(db_path=db)
+    assert [k for _s, k, _t in res] == ["skipped"]
+    assert len(_notifs(db)) == 1
+
+
+def test_run_now_does_not_notify(env):
+    """The owner pressed the button; they know."""
+    _c, store, _sch = env
+    db = store.DEFAULT_DB_PATH
+    sid = store.create_schedule("dentist", "0 9 * * *", "alpha", "call the dentist",
+                                assignee_profile="owner", db_path=db)
+    store.run_schedule_now(sid, db_path=db)
+    assert _notifs(db) == []
+
+
+def test_directly_added_notifications_are_pushed_too(env, monkeypatch):
+    """The push watermark covers the notifications TABLE, whatever wrote the
+    row — a librarian proposal alert and a due reminder both reach the phone.
+
+    This drives `push.sync_and_push`, NOT the store helper alone: the first
+    version of this test asserted only `unpushed_notifications()` and passed
+    even with `sync_and_push` gutted, which is exactly the shape of test that
+    proves nothing.
+    """
+    _c, store, _sch = env
+    db = store.DEFAULT_DB_PATH
+    from backend import push
+    sent = []
+    monkeypatch.setattr(push, "push_notifications",
+                        lambda ids, db_path=None, background=True: sent.append(list(ids)))
+    push.sync_and_push(db_path=db, background=False)          # sets the watermark
+    sent.clear()
+
+    a = store.add_notification("needs_you", "Librarian: file proposal on 'x'",
+                               source_key="proposal:1", db_path=db)
+    sid = store.create_schedule("dentist", "0 9 * * *", "alpha", "call the dentist",
+                                assignee_profile="owner", db_path=db)
+    _arm(db, sid)
+    store.fire_due(db_path=db)                                 # mints the reminder
+    reminder = _notifs(db)[0]["id"]
+
+    push.sync_and_push(db_path=db, background=False)
+    assert sent and a in sent[0] and reminder in sent[0]
+    sent.clear()
+    push.sync_and_push(db_path=db, background=False)
+    assert sent == [] or sent[0] == []                         # never pushed twice

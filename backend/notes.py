@@ -213,6 +213,16 @@ def note(note_id: int):
     return n
 
 
+@router.get("/note/{note_id}/revisions")
+def note_revisions(note_id: int, limit: int = 50):
+    """Edit history. `update_note` has been writing these since Phase 1 and
+    nothing has ever read them — 400+ snapshots by the time this shipped."""
+    r = store.list_note_revisions(note_id, limit=limit, db_path=_db())
+    if r is None:
+        raise HTTPException(404, "no such note")
+    return {"revisions": r}
+
+
 @router.get("/note/{note_id}/related")
 def note_related(note_id: int):
     """Related-notes card: linked / shared-tags / same-area, each capped and
