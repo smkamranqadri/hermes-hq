@@ -5475,9 +5475,23 @@ def related_notes(note_id, cap=6, db_path=None):
         conn.close()
 
 
+def count_untriaged_inbox(db_path=None):
+    """Inbox notes with no pending proposal — the size of the librarian's real
+    worklist, independent of any page limit."""
+    conn = _connect(db_path)
+    try:
+        return conn.execute(
+            "SELECT COUNT(*) AS n FROM notes n WHERE n.status='inbox' "
+            "AND NOT EXISTS (SELECT 1 FROM proposals p "
+            "WHERE p.note_id = n.id AND p.status='pending')").fetchone()["n"]
+    finally:
+        conn.close()
+
+
 def list_notes(status=None, area_id=None, project_id=None, note_type=None,
                authored_by=None, tag=None, limit=200, offset=0, owner_first=False,
-               exclude_archived=False, db_path=None):
+               exclude_archived=False, untriaged=False, oldest_first=False,
+               db_path=None):
     """Filtered note list, newest-updated first. Bodies truncated for lists.
     Filters compose (2b-ii: tag/project within an area selection).
     owner_first (Phase 3): sort owner-authored notes ahead of imported ones —
@@ -5486,7 +5500,14 @@ def list_notes(status=None, area_id=None, project_id=None, note_type=None,
     exclude_archived: everything EXCEPT the museum. `status` takes one value, so
     "not archived" (inbox + active) cannot be expressed as a status — which is
     why the Library's default view was showing archived notes mixed in with
-    live ones."""
+    live ones.
+    untriaged: drop notes that already carry a PENDING proposal. A triaged note
+    keeps `status='inbox'` until the owner decides, so the inbox fills with rows
+    the librarian must skip — and behind a LIMIT they crowd the real work off
+    the page entirely (2026-09-10: 101 pending rows filled all 100 slots of
+    `wm note inbox` and the librarian reported "0 untriaged" with 148 waiting).
+    oldest_first: flip the recency sort. The librarian's brief says work
+    oldest-first; without this the command handed it the NEWEST page."""
     sql, params = "SELECT * FROM notes WHERE 1=1", []
     if status is not None:
         if status not in NOTE_STATUSES:
@@ -5513,6 +5534,9 @@ def list_notes(status=None, area_id=None, project_id=None, note_type=None,
         sql += " AND type=?"; params.append(note_type)
     if authored_by is not None:
         sql += " AND authored_by=?"; params.append(authored_by)
+    if untriaged:
+        sql += (" AND NOT EXISTS (SELECT 1 FROM proposals p "
+                "WHERE p.note_id = notes.id AND p.status='pending')")
     sql += " ORDER BY pinned DESC"
     if owner_first:
         # Phase 3 import: a wave puts hundreds of authored_by='import' notes in
@@ -5521,7 +5545,8 @@ def list_notes(status=None, area_id=None, project_id=None, note_type=None,
         # the 2b-i capture nudge cannot help, because the heartbeat already has
         # work either way. Ordering only; nothing is hidden.
         sql += ", CASE WHEN authored_by='owner' THEN 0 ELSE 1 END"
-    sql += ", COALESCE(updated_at, created_at) DESC, id DESC"
+    sql += (", COALESCE(updated_at, created_at) ASC, id ASC" if oldest_first
+            else ", COALESCE(updated_at, created_at) DESC, id DESC")
     sql += " LIMIT ? OFFSET ?"; params += [int(limit), int(offset)]
     conn = _connect(db_path)
     try:

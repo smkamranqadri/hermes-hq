@@ -738,12 +738,31 @@ def cmd_note_propose_entry(args):
 
 
 def cmd_note_inbox(args):
-    notes = store.list_notes(status="inbox", limit=args.limit, owner_first=True)
-    if not notes:
-        _p("Inbox is empty — nothing to triage.")
-        return 0
+    """The librarian's worklist: notes that still NEED a proposal.
+
+    A triaged note keeps `status='inbox'` until the owner decides, so the inbox
+    accumulates rows the librarian is told to skip. Behind a LIMIT those rows
+    crowd out the real work: on 2026-09-10, 101 already-proposed notes filled
+    all 100 slots of this command and the librarian reported "0 untriaged" for
+    four consecutive runs while 148 notes waited. The worklist now excludes
+    them by default (`--all` restores the old view) and always prints the TRUE
+    outstanding count, so a page limit can never again read as "nothing to do".
+    Ordering is oldest-first, matching what the brief asks for.
+    """
+    outstanding = store.count_untriaged_inbox()
+    notes = store.list_notes(status="inbox", limit=args.limit, owner_first=True,
+                             untriaged=not args.all, oldest_first=True)
     pending = {p["note_id"] for p in store.list_proposals(status="pending", limit=500)}
-    _p("Inbox notes (%d):" % len(notes))
+    if not notes:
+        _p("Inbox is empty — nothing to triage." if outstanding == 0
+           else "No rows on this page, but %d note(s) still need triage — "
+                "raise --limit." % outstanding)
+        return 0
+    shown = len(notes)
+    _p("Inbox worklist: %d untriaged%s%s" % (
+        outstanding,
+        "" if shown >= outstanding else " (showing the oldest %d — re-run for the rest)" % shown,
+        "" if args.all else " · already-proposed notes hidden, use --all to see them"))
     for n in notes:
         _p(_note_line(n, pending))
         if args.full:
@@ -1405,6 +1424,8 @@ def build_parser():
     ni = note_sub.add_parser("inbox", help="untriaged captures (the ingest worklist)")
     ni.add_argument("--full", action="store_true", help="print full bodies")
     ni.add_argument("--limit", type=int, default=100)
+    ni.add_argument("--all", action="store_true",
+                    help="include notes that already have a pending proposal")
     ni.set_defaults(fn=cmd_note_inbox)
     ns = note_sub.add_parser("show", help="one note with body + entries")
     ns.add_argument("id", type=int)

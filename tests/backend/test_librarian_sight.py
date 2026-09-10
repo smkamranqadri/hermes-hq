@@ -444,3 +444,84 @@ def test_unscoped_search_is_unchanged_for_the_librarian(env):
     store.create_note("archived", body="needle", status="archived", db_path=db)
     store.create_note("inbox", body="needle", db_path=db)
     assert len(store.search_notes("needle", db_path=db)) == 3
+
+
+# ---- the worklist must never hide work behind a page limit ----------------
+#
+# 2026-09-10 deadlock: a triaged note keeps status='inbox' until the OWNER
+# decides, so already-proposed rows accumulate in the inbox. They were newest,
+# the list sorted newest-first, and `wm note inbox` caps at 100 — so 101 pending
+# rows filled every slot. Four consecutive librarian runs reported "0 untriaged"
+# while 148 notes waited, and each successful run made it worse by adding more
+# pending rows to the top. The drain could not progress at all.
+
+def _inbox_note(store, db, title):
+    return store.create_note(title, body="b", status="inbox", db_path=db)
+
+
+def test_untriaged_filter_drops_notes_that_already_have_a_pending_proposal(env):
+    _, store, db = env
+    a = _inbox_note(store, db, "waiting")
+    b = _inbox_note(store, db, "already proposed")
+    store.create_proposal("file", b, {"archive": True}, db_path=db)
+    ids = [n["id"] for n in store.list_notes(status="inbox", untriaged=True, db_path=db)]
+    assert ids == [a]
+    # and the plain list still shows both, so nothing is hidden from the owner
+    assert len(store.list_notes(status="inbox", db_path=db)) == 2
+
+
+def test_count_untriaged_inbox_is_independent_of_any_page_limit(env):
+    _, store, db = env
+    for i in range(5):
+        _inbox_note(store, db, "note %d" % i)
+    assert store.count_untriaged_inbox(db_path=db) == 5
+    assert len(store.list_notes(status="inbox", limit=2, db_path=db)) == 2
+    assert store.count_untriaged_inbox(db_path=db) == 5
+
+
+def test_oldest_first_flips_the_recency_sort(env):
+    _, store, db = env
+    first = _inbox_note(store, db, "oldest")
+    last = _inbox_note(store, db, "newest")
+    asc = [n["id"] for n in store.list_notes(status="inbox", oldest_first=True, db_path=db)]
+    desc = [n["id"] for n in store.list_notes(status="inbox", db_path=db)]
+    assert asc[0] == first and desc[0] == last
+
+
+def test_pending_rows_can_never_crowd_the_worklist_off_the_page(env, capsys):
+    """THE regression. More already-proposed notes than the page limit, and the
+    untriaged ones older (so a newest-first page shows none of them)."""
+    _, store, db = env
+    old_untriaged = [_inbox_note(store, db, "needs triage %d" % i) for i in range(3)]
+    for i in range(6):                       # newer, and all already proposed
+        nid = _inbox_note(store, db, "proposed %d" % i)
+        store.create_proposal("file", nid, {"archive": True}, db_path=db)
+
+    from core import wm_cli
+
+    class A:
+        limit = 4           # smaller than the 6 pending rows
+        full = False
+        all = False
+    assert wm_cli.cmd_note_inbox(A()) == 0
+    out = capsys.readouterr().out
+    assert "3 untriaged" in out, out
+    for nid in old_untriaged:
+        assert "#%d" % nid in out, "an untriaged note was crowded off the page"
+    assert "proposed 0" not in out, "already-proposed rows should be hidden by default"
+
+
+def test_all_flag_restores_the_full_inbox_view(env, capsys):
+    _, store, db = env
+    nid = _inbox_note(store, db, "proposed one")
+    store.create_proposal("file", nid, {"archive": True}, db_path=db)
+
+    from core import wm_cli
+
+    class A:
+        limit = 50
+        full = False
+        all = True
+    wm_cli.cmd_note_inbox(A())
+    out = capsys.readouterr().out
+    assert "proposed one" in out and "pending proposal" in out
