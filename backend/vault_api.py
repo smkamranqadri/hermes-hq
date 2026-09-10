@@ -49,6 +49,10 @@ def _guard(fn, *a, **kw):
         return fn(*a, **kw)
     except V.VaultLocked as e:
         raise HTTPException(LOCKED, str(e))
+    except V.VaultRefused as e:
+        # 409 with the store's own sentence: it names the task/reminder ids the
+        # owner has to deal with, so the UI must show it verbatim.
+        raise HTTPException(409, str(e))
     except V.VaultError as e:
         raise HTTPException(409, str(e))
 

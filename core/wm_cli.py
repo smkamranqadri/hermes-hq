@@ -787,6 +787,10 @@ def cmd_vault_init(args):
         return 1
     _p("Vault created.")
     _p("  escrow key: %s (0600, outside hq_home)" % res["escrow_key_path"])
+    if res.get("escrow_reused"):
+        _p("  WARN  that escrow key ALREADY EXISTED and was reused, not replaced.")
+        _p("        Replacing it would strand any older vault wrapped under it.")
+        _p("        Whoever can read that file can open this vault too.")
     _p("  If you forget the passphrase, `wm vault recover` opens the vault with")
     _p("  that file. Nothing on the web path can use it.")
     return 0

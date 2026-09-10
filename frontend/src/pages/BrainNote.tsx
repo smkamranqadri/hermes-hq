@@ -70,6 +70,7 @@ export function BrainNote() {
   const from = (loc.state as { from?: string } | null)?.from
   const [modal, setModal] = useState<'file' | 'task' | 'reminder' | 'archive' | 'vault' | null>(null)
   const vault = useVaultStatus()
+  const [vaultErr, setVaultErr] = useState<string | null>(null)
   const [editing, setEditing] = useState(false)
   const [bodyDraft, setBodyDraft] = useState('')
   const [entry, setEntry] = useState('')
@@ -106,11 +107,24 @@ export function BrainNote() {
                 revision snapshot are <strong>destroyed</strong> — this is the one place in hermes-hq where text is
                 really deleted, and it cannot be undone.</p>
               <p className="mt-2 text-muted">Its area, tags and project do not come with it; the vault files nothing.</p>
+              {vaultErr && <p className="mt-3 rounded-lg border border-error/40 bg-error/10 p-2 text-error">{vaultErr}</p>}
             </>}
-            onClose={() => setModal(null)}
+            onClose={() => { setModal(null); setVaultErr(null) }}
             onConfirm={async () => {
-              await act('vault', () => vaultMove(n.id), 'Sealed into the vault — the plaintext is gone')
-              setModal(null); nav('/brain/vault', { replace: true })
+              // NOT via `act`: it swallows the error, so a REFUSED move
+              // (a linked task or reminder still carrying the title) would
+              // toast an error and then navigate to the vault as though it
+              // had worked. On a refusal the modal stays put and shows the
+              // engine's own sentence, which names the ids to deal with.
+              setBusy('vault'); setVaultErr(null)
+              try {
+                await vaultMove(n.id)
+                toast('Sealed into the vault — the plaintext is gone')
+                qc.invalidateQueries()
+                setModal(null); nav('/brain/vault', { replace: true })
+              } catch (e) {
+                setVaultErr(e instanceof Error ? e.message : String(e))
+              } finally { setBusy(null) }
             }} />
         ) : (
           <ConfirmModal title="Unlock the vault first" confirmLabel="Go to the vault"

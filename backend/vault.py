@@ -218,7 +218,12 @@ def init_vault(passphrase, db_path=None):
         # reused (a second vault on the same box shares the escrow key), never
         # silently replaced, which would strand the older vault.
         path = escrow_key_path()
-        if os.path.isfile(path):
+        reused = os.path.isfile(path)
+        if reused:
+            # Reused, never replaced: replacing would strand any older vault
+            # wrapped under the previous key. The caller is TOLD, because
+            # "this box already had an escrow key" is something the owner
+            # should know at setup time rather than discover at recovery time.
             escrow = bytes.fromhex(open(path).read().strip())
         else:
             escrow = _create_escrow_key()
@@ -227,7 +232,7 @@ def init_vault(passphrase, db_path=None):
                       pass_wrap=seal(pass_key, data_key, AAD_DATA_KEY).hex(),
                       escrow_wrap=seal(escrow, data_key, AAD_DATA_KEY).hex(),
                       created_at=time.time(), **params)
-        return {"escrow_key_path": path, "created": True}
+        return {"escrow_key_path": path, "created": True, "escrow_reused": reused}
     finally:
         conn.close()
 
@@ -371,7 +376,7 @@ def _audit(conn, action, old_note_id=None, vault_note_id=None, title=None,
     as a sha256, which proves a specific note was destroyed to anyone who
     already knows the title and reveals nothing to anyone who does not."""
     counts = counts or {}
-    conn.execute(
+    cur = conn.execute(
         "INSERT INTO vault_audit(action, old_note_id, vault_note_id, title_sha256, "
         "revisions, entries, attachments, links, proposals, detail, created_at) "
         "VALUES(?,?,?,?,?,?,?,?,?,?,?)",
@@ -380,6 +385,7 @@ def _audit(conn, action, old_note_id=None, vault_note_id=None, title=None,
          counts.get("revisions", 0), counts.get("entries", 0),
          counts.get("attachments", 0), counts.get("links", 0),
          counts.get("proposals", 0), detail, time.time()))
+    return cur.lastrowid
 
 
 def list_audit(limit=100, db_path=None):
@@ -604,19 +610,75 @@ def _scrub(conn):
     knobs, all cheap: `secure_delete` zeroes freed content as it goes, the FTS5
     `optimize` merges the segments the delete marked, and a TRUNCATE checkpoint
     empties the -wal file where the pre-delete pages also live.
+
+    The checkpoint is the one that can genuinely fail: TRUNCATE needs every
+    other connection out of the WAL, and one concurrent reader — the phone
+    polling, an agent mid-query — is enough to block it. That is the ORDINARY
+    case, not an exotic one, and swallowing it left the marker sitting in the
+    -wal file while the move reported success (review finding 2026-09-10:
+    5 hits vs 0 in the control). So: retry, and RETURN the outcome so the
+    caller can put it in the audit row instead of hiding it.
     """
+    out = {"fts_optimized": False, "checkpointed": False, "checkpoint_error": None}
     try:
         conn.execute("INSERT INTO notes_fts(notes_fts) VALUES('optimize')")
         conn.commit()                      # the checkpoint below needs no open txn
-    except Exception:                      # no FTS5 in this build: nothing to merge
+        out["fts_optimized"] = True
+    except Exception as e:                 # no FTS5 in this build: nothing to merge
+        out["checkpoint_error"] = "fts optimize: %s" % e
         try:
             conn.rollback()
         except Exception:
             pass
-    try:
-        conn.execute("PRAGMA wal_checkpoint(TRUNCATE)")
-    except Exception:                      # a reader holds the WAL — never fatal
-        pass
+    last = None
+    for attempt in range(5):
+        try:
+            row = conn.execute("PRAGMA wal_checkpoint(TRUNCATE)").fetchone()
+            # sqlite returns (busy, log_pages, checkpointed_pages); busy=0 means
+            # it actually ran. A non-zero busy is a SILENT failure otherwise.
+            if row is None or row[0] == 0:
+                out["checkpointed"] = True
+                out["checkpoint_error"] = None
+                return out
+            last = "wal_checkpoint busy (%s)" % (tuple(row),)
+        except Exception as e:
+            last = str(e)
+        time.sleep(0.2 * (attempt + 1))
+    out["checkpoint_error"] = last
+    return out
+
+
+def _linked_titleholders(conn, note_id, title):
+    """Linked tasks/schedules whose OWN text carries this note's title.
+
+    `backend/notes.py` defaults a new task's title/description and a new
+    reminder's name/title to the note's title, so "create and link" routinely
+    produces objects carrying the exact text the vault is meant to seal. A
+    schedule is worse than a task: it keeps firing and minting fresh tasks
+    carrying the title forever, so no one-time scrub could hold.
+
+    We refuse rather than decide for the owner. Deleting their todo is a
+    surprise; leaking is a failure; naming the ids lets them retitle or delete
+    and come back. `note_links` already knows exactly which objects to check.
+    """
+    tasks, scheds = [], []
+    for l in conn.execute("SELECT kind, target_id FROM note_links WHERE note_id=? "
+                          "AND kind IN ('task','schedule')", (note_id,)):
+        if l["kind"] == "task":
+            r = conn.execute("SELECT id, title, description FROM tasks WHERE id=?",
+                             (l["target_id"],)).fetchone()
+            if r and (title in (r["title"] or "") or title in (r["description"] or "")):
+                tasks.append(r["id"])
+        else:
+            r = conn.execute("SELECT id, name, title FROM schedules WHERE id=?",
+                             (l["target_id"],)).fetchone()
+            if r and (title in (r["name"] or "") or title in (r["title"] or "")):
+                scheds.append(r["id"])
+    return tasks, scheds
+
+
+class VaultRefused(VaultError):
+    """The move cannot be made safe without the owner deciding something."""
 
 
 def move_note_to_vault(note_id, key, db_path=None):
@@ -639,6 +701,36 @@ def move_note_to_vault(note_id, key, db_path=None):
             if n is None:
                 raise VaultError("no such note: %r" % note_id)
             title, body = n["title"], n["body"] or ""
+            # BEFORE anything is written: does a linked task or schedule carry
+            # this title? If so the move cannot erase the plaintext, so it is
+            # refused with the ids rather than half-done.
+            bad_tasks, bad_scheds = _linked_titleholders(conn, note_id, title)
+            if bad_tasks or bad_scheds:
+                # The remedy has to name what the app can ACTUALLY do. A
+                # schedule can be renamed (`update_schedule` takes name/title,
+                # POST /api/schedules/{id}); a TASK cannot — nothing in
+                # hermes-hq edits a task title today (`edit_task` takes
+                # description/DoD/approval only), so for a task the honest
+                # instruction is "delete it", not "retitle it".
+                parts, fix = [], []
+                if bad_tasks:
+                    parts.append("task%s %s" % ("" if len(bad_tasks) == 1 else "s",
+                                                ", ".join("#%d" % t for t in bad_tasks)))
+                    fix.append("delete the task%s (hermes-hq cannot edit a task's title)"
+                               % ("" if len(bad_tasks) == 1 else "s"))
+                if bad_scheds:
+                    parts.append("reminder%s %s" % ("" if len(bad_scheds) == 1 else "s",
+                                                    ", ".join("#%d" % t for t in bad_scheds)))
+                    fix.append("rename the reminder%s on the Schedules page"
+                               % ("" if len(bad_scheds) == 1 else "s"))
+                raise VaultRefused(
+                    "this note cannot be sealed while %s still carr%s its title — "
+                    "sealing it would erase the note and leave the title in plain "
+                    "sight%s. To go ahead, %s, then move the note."
+                    % (" and ".join(parts),
+                       "ies" if len(bad_tasks) + len(bad_scheds) == 1 else "y",
+                       ", and a reminder keeps minting new tasks carrying it" if bad_scheds else "",
+                       " and ".join(fix)))
             entries = conn.execute(
                 "SELECT body, created_at FROM note_entries WHERE note_id=? ORDER BY id",
                 (note_id,)).fetchall()
@@ -663,7 +755,7 @@ def move_note_to_vault(note_id, key, db_path=None):
                               created_at=n["created_at"], _audit_action=None)
             for e in entries:
                 add_entry(vid, e["body"], key, _conn=conn, created_at=e["created_at"])
-            moved_bytes = []
+            moved_bytes = []                       # (path, plaintext bytes)
             for a in atts:
                 try:
                     path = store.attachment_path(a["note_id"], a["stored_name"])
@@ -676,56 +768,105 @@ def move_note_to_vault(note_id, key, db_path=None):
                 add_attachment(vid, data, key, kind=a["kind"], mime=a["mime"],
                                name=a["orig_name"] or a["stored_name"], _conn=conn,
                                created_at=a["created_at"])
-                moved_bytes.append(path)
+                moved_bytes.append((path, data))
 
             # READ BACK before destroying anything. This is the line that makes
             # the delete safe: it proves the ciphertext in the DB opens with
-            # this key and yields exactly what went in.
+            # this key and yields back EXACTLY what went in — every field, by
+            # value, never by count.
             check = get_note_in_conn(conn, vid, key)
-            if check["title"] != title or check["body"] != body_out:
-                raise VaultError("vault read-back mismatch — nothing was destroyed")
-            if len(check["entries"]) != len(entries):
-                raise VaultError("vault read-back lost a Thought — nothing was destroyed")
+            if check is None:
+                raise VaultError("vault read-back found no row — nothing was destroyed")
+            if check["title"] != title:
+                raise VaultError("vault read-back mismatch on the title — nothing was destroyed")
+            if check["body"] != body_out:
+                raise VaultError("vault read-back mismatch on the body — nothing was destroyed")
+            if check["entries"] != [e["body"].strip() for e in entries]:
+                raise VaultError("vault read-back mismatch on a Thought — nothing was destroyed")
+            if check["attachments"] != [d for _p, d in moved_bytes]:
+                raise VaultError("vault read-back mismatch on an attachment — nothing was "
+                                 "destroyed (the sealed bytes did not open back to the "
+                                 "file on disk)")
 
-            counts = store._destroy_note_plaintext(conn, note_id)
-            _audit(conn, "moved_in", old_note_id=note_id, vault_note_id=vid,
-                   title=title, counts=counts,
-                   detail="plaintext destroyed in notes, notes_fts, note_revisions, "
-                          "note_entries, note_links, note_attachments, proposals; "
-                          "%d activity row(s) redacted, %d notification(s) removed"
-                          % (counts.get("activity", 0), counts.get("notifications", 0)))
-        _scrub(conn)
+            counts = store._destroy_note_plaintext(conn, note_id, title=title)
+            audit_id = _audit(
+                conn, "moved_in", old_note_id=note_id, vault_note_id=vid,
+                title=title, counts=counts,
+                detail="plaintext destroyed in notes, notes_fts, note_revisions, "
+                       "note_entries, note_links, note_attachments, proposals; "
+                       "%d activity row(s) redacted, %d notification(s) removed"
+                       % (counts.get("activity", 0), counts.get("notifications", 0)))
+        scrub = _scrub(conn)
     finally:
         conn.close()
     # Files AFTER the commit: row before file on delete, so a stray file is
     # inert rather than a row pointing at nothing (the 2c rule).
-    for path in moved_bytes:
+    leftovers = []
+    for path, _data in moved_bytes:
         try:
             os.remove(path)
-        except OSError:
-            pass
+        except OSError as e:
+            # A file we could not unlink is a PLAINTEXT image that nothing
+            # points at any more and that `_backup_attachments` will copy into
+            # every future backup. Silence would hide it forever, so it is
+            # named in the audit row the owner can read.
+            leftovers.append("%s (%s)" % (path, e))
     try:
         os.rmdir(store.attachments_dir(note_id))
     except OSError:
         pass
+
+    # Amend the audit row with what only the post-commit phase can know.
+    tail = []
+    if not scrub.get("checkpointed"):
+        tail.append("WAL NOT truncated (%s) — plaintext pages may remain in "
+                    "hq.db-wal until the next checkpoint"
+                    % (scrub.get("checkpoint_error") or "unknown"))
+    if leftovers:
+        tail.append("PLAINTEXT FILE(S) LEFT ON DISK: %s" % "; ".join(leftovers))
+    if tail:
+        c2 = store._connect(db_path)
+        try:
+            with c2:
+                c2.execute("UPDATE vault_audit SET detail = detail || ?  WHERE id=?",
+                           (" | " + " | ".join(tail), audit_id))
+        finally:
+            c2.close()
+
     store.log_activity("note_vaulted",
                        detail="note #%s sealed into the vault as vault note #%s "
                               "(plaintext destroyed)" % (note_id, vid),
                        db_path=db_path)
-    return {"vault_note_id": vid, "destroyed": counts}
+    return {"vault_note_id": vid, "destroyed": counts,
+            "wal_truncated": bool(scrub.get("checkpointed")),
+            "leftover_files": leftovers}
 
 
 def get_note_in_conn(conn, note_id, key):
-    """get_note against a live connection — used by the read-back check, which
-    has to happen INSIDE the destruction transaction."""
+    """Unseal EVERYTHING about a vault note against a live connection.
+
+    This is the read-back, and it runs inside the destruction transaction. It
+    must open every sealed field — including each attachment blob — because
+    what it does not check, it silently certifies as safe to destroy.
+
+    Review finding (2026-09-10): this used to compare title, body and the
+    COUNT of Thoughts. A single corrupted byte in an attachment ciphertext
+    therefore passed, the move returned ok, the plaintext image was deleted
+    and the owner's photo became permanently unrecoverable. Counts are not
+    verification.
+    """
     r = conn.execute("SELECT * FROM vault_notes WHERE id=?", (note_id,)).fetchone()
     if r is None:
         return None
     entries = conn.execute("SELECT body_enc FROM vault_entries WHERE note_id=? ORDER BY id",
                            (note_id,)).fetchall()
+    atts = conn.execute("SELECT id, blob_enc FROM vault_attachments WHERE note_id=? ORDER BY id",
+                        (note_id,)).fetchall()
     return {"title": unseal_text(key, r["title_enc"], AAD_TITLE),
             "body": unseal_text(key, r["body_enc"], AAD_BODY),
-            "entries": [unseal_text(key, e["body_enc"], AAD_ENTRY) for e in entries]}
+            "entries": [unseal_text(key, e["body_enc"], AAD_ENTRY) for e in entries],
+            # bytes, not a count: compared against what was read from disk
+            "attachments": [unseal(key, a["blob_enc"], AAD_ATT_BLOB) for a in atts]}
 
 
 # ---------------------------------------------------------------------------

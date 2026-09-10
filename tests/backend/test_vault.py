@@ -273,6 +273,55 @@ def _sql_touching_vault(src):
     return hits
 
 
+# Which modules may name `backend.vault` at all, and why. A grep for SQL text
+# is NOT sufficient: the reviewer added a route calling
+# `V.list_notes(V.KEYS.get(token))` — no SQL string anywhere — and the SQL
+# enumeration passed it. Reaching the vault through the crypto module's own
+# API is the easier mistake to make, so the IMPORT is what gets policed.
+VAULT_IMPORTERS = {
+    "backend/vault_api.py": "the vault's own router — the only HTTP surface",
+    "backend/writes.py": "logout drops the session key (KEYS.drop) and nothing else",
+    "core/wm_cli.py": "the `wm vault` CLI group, including the escrow recovery gate",
+}
+
+
+def _imports_vault(src):
+    import re
+    # `backend.vault_api` must NOT match: \b after "vault" fails on "_".
+    return bool(re.search(r"(from\s+backend\s+import\s+vault\b"
+                          r"|from\s+backend\.vault\s+import"
+                          r"|import\s+backend\.vault\b)", src))
+
+
+def test_only_named_modules_may_import_the_crypto_module(env):
+    """The reach test the SQL grep cannot make.
+
+    Anything that can `import backend.vault` can call `V.list_notes(key)` and
+    read the whole vault without writing a line of SQL. This asserts the set of
+    modules that can do so is EXACTLY the three above — a new importer fails
+    here and has to be justified by editing the allowlist.
+    """
+    found = {}
+    for pkg in ("backend", "core"):
+        for name in sorted(os.listdir(os.path.join(ROOT, pkg))):
+            if not name.endswith(".py"):
+                continue
+            rel = "%s/%s" % (pkg, name)
+            if rel == "backend/vault.py":
+                continue                       # it IS the module
+            if _imports_vault(open(os.path.join(ROOT, pkg, name)).read()):
+                found[rel] = True
+    assert set(found) == set(VAULT_IMPORTERS), (
+        "vault importers changed: %r (allowlist: %r)" % (sorted(found), sorted(VAULT_IMPORTERS)))
+
+    # And the one non-router importer in backend/ may only drop a key.
+    import re
+    w = open(os.path.join(ROOT, "backend", "writes.py")).read()
+    uses = set(re.findall(r"\bV\.(\w+)", w))
+    assert uses == {"KEYS"}, "backend/writes.py uses more of the vault than KEYS.drop: %r" % uses
+    assert "KEYS.drop" in w
+
+
 def test_only_the_crypto_module_can_query_a_vault_table(env):
     """Walk the WHOLE backend+core tree. If any module other than
     backend/vault.py grows a SELECT/INSERT/UPDATE against a vault table, this
@@ -349,7 +398,16 @@ def test_no_non_vault_route_can_see_a_vault_note(api):
            headers=h)
     assert c.get("/api/vault/status").json()["unlocked"] is True
 
-    checked = 0
+    # Routes that raise in a test process because they need a live service.
+    # An EXPLICIT allowlist: `except Exception: continue` silently dropped
+    # every raising route, so a leaking route that happened to 500 reported
+    # green (reviewer's repro). A newly-raising route now fails this test
+    # until someone looks at it and lists it here.
+    ALLOWED_TO_RAISE = {
+        "/api/system/stats", "/api/agents", "/api/gateways", "/api/mcp/servers",
+        "/api/skills", "/api/memory", "/api/cron/jobs", "/api/push/vapid",
+    }
+    checked, skipped = 0, []
     for r in flat_routes(c.app):
         path = getattr(r, "path", "")
         if not path.startswith("/api") or path.startswith("/api/vault"):
@@ -359,10 +417,16 @@ def test_no_non_vault_route_can_see_a_vault_note(api):
         try:
             resp = c.get(path)
         except Exception:
-            continue                        # a route that needs live services
+            skipped.append(path)
+            continue
         checked += 1
         assert MARKER not in resp.text, (path, resp.text[:200])
-    assert checked > 15, "only %d routes exercised — too few to be a proof" % checked
+    assert set(skipped) <= ALLOWED_TO_RAISE, (
+        "route(s) raised and were skipped without being on the allowlist: %r" % sorted(
+            set(skipped) - ALLOWED_TO_RAISE))
+    assert checked > 40, "only %d routes exercised — too few to be a proof" % checked
+    # the skip list must not be quietly swallowing the whole surface
+    assert len(skipped) < checked / 4, (checked, skipped)
 
 
 def test_wm_note_cli_group_cannot_reach_the_vault(env, capsys):
@@ -1006,3 +1070,362 @@ def test_polling_status_does_not_keep_the_vault_awake(api):
     # an actual read DOES count as use
     c.get("/api/vault/notes")
     assert V.KEYS.idle_since(tok) > idle_before
+
+
+# ---------------------------------------------------------------------------
+# Review round 1 (2026-09-10). Every test below is a reviewer repro pinned so
+# it cannot come back. `build_secret_note` only ever filed a proposal ON the
+# note itself, which is exactly why the first suite missed all of this.
+# ---------------------------------------------------------------------------
+
+def build_entangled_note(store, db, tmp, client, headers, marker=MARKER):
+    """A note with the relationships THE APP ITSELF creates.
+
+    The shapes that matter and were missing before:
+      * a `contradiction` proposal filed on the PARTNER note, naming this one
+        through `payload.other_note_id` — its `note_id` points elsewhere;
+      * a linked task and a linked reminder created through the real routes,
+        which DEFAULT their title/name to the note's title
+        (`backend/notes.py:283-284`, `:305-306`);
+      * the activity rows those two writes produce, which carry the bare title
+        with no note id anywhere in the line.
+    """
+    work = area(store, db)
+    nid = store.create_note("%s plan" % marker, "%s body" % marker, status="active",
+                            area_id=work, project_id=1, db_path=db)
+    partner = store.create_note("partner note", "unremarkable", status="active",
+                                area_id=work, db_path=db)
+    r1 = client.post("/api/note/%d/new-task" % nid, json={}, headers=headers)
+    assert r1.status_code == 200, r1.text
+    r2 = client.post("/api/note/%d/new-reminder" % nid,
+                     json={"cron": "0 9 * * *"}, headers=headers)
+    assert r2.status_code == 200, r2.text
+    store.create_proposal("contradiction", partner,
+                          {"other_note_id": nid, "explanation": "conflicts with %s plan" % marker},
+                          summary="partner contradicts %s plan" % marker, db_path=db)
+    return nid, partner, r1.json()["id"], r2.json()["id"]
+
+
+def scan_all_tables(db, marker=MARKER):
+    """Every string/blob cell in every table. Returns {table: hits}."""
+    conn = sqlite3.connect(db)
+    try:
+        tables = [r[0] for r in conn.execute(
+            "SELECT name FROM sqlite_master WHERE type='table'")]
+        hits = {}
+        for t in tables:
+            n = 0
+            try:
+                rows = list(conn.execute("SELECT * FROM %s" % t))
+            except sqlite3.DatabaseError:
+                continue
+            for row in rows:
+                n += sum(1 for v in row if isinstance(v, (str, bytes))
+                         and (marker.encode() if isinstance(v, bytes) else marker) in v)
+            if n:
+                hits[t] = n
+        return hits
+    finally:
+        conn.close()
+
+
+def test_move_is_refused_while_a_linked_task_or_reminder_carries_the_title(api):
+    """CRITICAL 1 (reviewer repro). The app defaults a graduated task's title
+    and a reminder's name to the NOTE'S OWN title, so sealing the note while
+    they exist erases the note and leaves the title in plain sight — and the
+    reminder keeps minting fresh tasks carrying it forever."""
+    c, store, db, tmp = api
+    h = login(c)
+    c.post("/api/vault/init", json={"passphrase": PW}, headers=h)
+    from backend import vault as V
+    key = V.unlock(PW, db_path=db)
+    nid, partner, tid, sid = build_entangled_note(store, db, tmp, c, h)
+
+    with pytest.raises(V.VaultRefused) as e:
+        V.move_note_to_vault(nid, key, db_path=db)
+    msg = str(e.value)
+    assert "#%d" % tid in msg and "#%d" % sid in msg, msg     # names the ids
+    assert "task" in msg and "reminder" in msg
+    # and NOTHING happened
+    assert store.get_note(nid, db_path=db) is not None
+    assert V.count_notes(db_path=db) == 0
+    assert V.list_audit(db_path=db) == []
+
+    # over HTTP it is a 409 carrying that same sentence verbatim
+    r = c.post("/api/vault/move", json={"note_id": nid}, headers=h)
+    assert r.status_code == 409
+    assert "#%d" % tid in r.text and "#%d" % sid in r.text
+
+    # the owner does what the message asks
+    # The owner does what the message asks. A reminder can be renamed through
+    # the real store call; a task cannot be retitled anywhere in hermes-hq, so
+    # the only remedy the message offers for it is removal.
+    store.update_schedule(sid, name="dentist", title="call the dentist", db_path=db)
+    assert "cannot edit a task's title" in msg
+    conn = sqlite3.connect(db)
+    with conn:
+        conn.execute("DELETE FROM note_links WHERE kind='task' AND target_id=?", (tid,))
+        conn.execute("DELETE FROM tasks WHERE id=?", (tid,))
+    conn.close()
+    res = V.move_note_to_vault(nid, key, db_path=db)
+    assert res["vault_note_id"]
+
+
+def test_the_move_leaves_zero_copies_across_every_table(api):
+    """CRITICAL 1, the whole scenario, measured the way the reviewer measured
+    it: sweep EVERY string cell in EVERY table, not the handful the fixture
+    happens to know about."""
+    c, store, db, tmp = api
+    h = login(c)
+    c.post("/api/vault/init", json={"passphrase": PW}, headers=h)
+    from backend import vault as V
+    key = V.unlock(PW, db_path=db)
+    nid, partner, tid, sid = build_entangled_note(store, db, tmp, c, h)
+
+    before = scan_all_tables(db)
+    assert sum(before.values()) >= 10, before
+    assert "proposals" in before and "tasks" in before and "schedules" in before
+
+    # retitle so the refusal does not fire; the proposal/activity/notification
+    # copies are what this test is about
+    store.update_schedule(sid, name="d", title="d", db_path=db)
+    conn = sqlite3.connect(db)
+    with conn:
+        conn.execute("DELETE FROM note_links WHERE kind='task' AND target_id=?", (tid,))
+        conn.execute("DELETE FROM tasks WHERE id=?", (tid,))
+    conn.close()
+    # NOTE: the task_create / schedule_create ACTIVITY rows still carry the
+    # bare title with no note id — they are exactly what the content-reach
+    # scrub has to catch, so they are deliberately left in place here.
+    remaining = scan_all_tables(db)
+    assert sum(remaining.values()) >= 6, remaining
+
+    V.move_note_to_vault(nid, key, db_path=db)
+
+    after = scan_all_tables(db)
+    assert after == {}, "surviving plaintext copies: %r" % after
+    assert db_bytes(db).count(MARKER.encode()) == 0
+    # the partner's contradiction proposal — reached through payload, not note_id
+    conn = sqlite3.connect(db)
+    try:
+        assert conn.execute("SELECT COUNT(*) FROM proposals").fetchone()[0] == 0
+    finally:
+        conn.close()
+    # the partner note itself survives: it is not the one being sealed
+    assert store.get_note(partner, db_path=db) is not None
+
+
+def test_a_proposal_on_the_partner_note_is_reached_by_payload(env):
+    """The narrow half of CRITICAL 1: `WHERE note_id=?` walks straight past a
+    proposal whose payload names this note."""
+    store, db, tmp = env
+    from backend import vault as V
+    V.init_vault(PW, db_path=db)
+    key = V.unlock(PW, db_path=db)
+    work = area(store, db)
+    nid = store.create_note("%s plan" % MARKER, "body", status="active", area_id=work, db_path=db)
+    partner = store.create_note("partner", "x", status="active", area_id=work, db_path=db)
+    pid = store.create_proposal("contradiction", partner,
+                                {"other_note_id": nid, "explanation": "vs %s plan" % MARKER},
+                                summary="conflicts with %s plan" % MARKER, db_path=db)
+    # a proposal that mentions NEITHER must survive untouched
+    innocent = store.create_proposal("file", partner, {"area_id": work, "tags": []},
+                                     summary="file the partner", db_path=db)
+
+    V.move_note_to_vault(nid, key, db_path=db)
+    conn = sqlite3.connect(db)
+    try:
+        assert conn.execute("SELECT COUNT(*) FROM proposals WHERE id=?", (pid,)).fetchone()[0] == 0
+        assert conn.execute("SELECT COUNT(*) FROM proposals WHERE id=?", (innocent,)).fetchone()[0] == 1
+    finally:
+        conn.close()
+    assert scan_all_tables(db) == {}
+
+
+def test_a_corrupted_attachment_ciphertext_destroys_nothing(env, monkeypatch):
+    """CRITICAL 2 (reviewer repro). The read-back used to compare title, body
+    and a COUNT of Thoughts, so a single bad byte in an attachment blob passed,
+    the move returned ok, the plaintext image was deleted and the owner's photo
+    became permanently unrecoverable."""
+    store, db, tmp = env
+    from backend import vault as V
+    V.init_vault(PW, db_path=db)
+    key = V.unlock(PW, db_path=db)
+    nid = store.create_note("photo note", "body", db_path=db)
+    blob = b"IRREPLACEABLE-PHOTO-BYTES" * 40
+    att = store.add_attachment(nid, blob, kind="photo", mime="image/png",
+                               orig_name="wedding.png", db_path=db)
+    path = store.attachment_path(nid, att["stored_name"])
+
+    real_seal = V.seal
+    corrupt = [True]
+
+    def bad_seal(k, pt, aad=b""):
+        out = bytearray(real_seal(k, pt, aad))
+        if aad == V.AAD_ATT_BLOB and corrupt[0]:
+            out[-1] ^= 0x01                      # one byte, one failed tag
+        return bytes(out)
+
+    # A toggle, NOT monkeypatch.undo(): pytest gives the `env` fixture and this
+    # test the SAME monkeypatch instance, so undo() would also roll back
+    # HERMES_HQ_HOME and silently move the attachment out from under us.
+    monkeypatch.setattr(V, "seal", bad_seal)
+    with pytest.raises(V.VaultError):
+        V.move_note_to_vault(nid, key, db_path=db)
+    corrupt[0] = False
+
+    # the whole move rolled back and the bytes are still on disk
+    assert os.path.isfile(path) and open(path, "rb").read() == blob
+    assert store.get_note(nid, db_path=db) is not None
+    conn = sqlite3.connect(db)
+    try:
+        assert conn.execute("SELECT COUNT(*) FROM vault_notes").fetchone()[0] == 0
+        assert conn.execute("SELECT COUNT(*) FROM vault_attachments").fetchone()[0] == 0
+        assert conn.execute("SELECT COUNT(*) FROM vault_audit WHERE action='moved_in'"
+                            ).fetchone()[0] == 0
+    finally:
+        conn.close()
+
+    # and the honest path still works, byte for byte
+    res = V.move_note_to_vault(nid, key, db_path=db)
+    n = V.get_note(res["vault_note_id"], key, db_path=db)
+    data, _mime, _name = V.read_attachment(n["attachments"][0]["id"], key, db_path=db)
+    assert data == blob
+    assert not os.path.exists(path)
+
+
+def test_a_truncated_thought_ciphertext_destroys_nothing(env, monkeypatch):
+    """The same hole one field over: Thoughts were compared by COUNT."""
+    store, db, tmp = env
+    from backend import vault as V
+    V.init_vault(PW, db_path=db)
+    key = V.unlock(PW, db_path=db)
+    nid = store.create_note("note", "body", db_path=db)
+    store.add_note_entry(nid, "%s thought" % MARKER, db_path=db)
+
+    real_seal = V.seal
+    monkeypatch.setattr(V, "seal", lambda k, pt, aad=b"": (
+        real_seal(k, b"a different thought entirely", aad) if aad == V.AAD_ENTRY
+        else real_seal(k, pt, aad)))
+    with pytest.raises(V.VaultError) as e:
+        V.move_note_to_vault(nid, key, db_path=db)
+    assert "nothing was destroyed" in str(e.value)
+    assert store.get_note(nid, db_path=db) is not None
+
+
+def test_the_read_back_runs_before_the_destroy(env, monkeypatch):
+    """MINOR (reviewer): the old version of this test passed even with the
+    destroy moved BEFORE the read-back, because the transaction rollback was
+    doing the work. Ordering is now asserted directly — when the read-back
+    fails, the destroy must never have been CALLED."""
+    store, db, tmp = env
+    from core import wm_store
+    from backend import vault as V
+    V.init_vault(PW, db_path=db)
+    key = V.unlock(PW, db_path=db)
+    nid = build_secret_note(store, db)
+
+    called = []
+    real = wm_store._destroy_note_plaintext
+    monkeypatch.setattr(wm_store, "_destroy_note_plaintext",
+                        lambda *a, **k: (called.append(a[1]), real(*a, **k))[1])
+    monkeypatch.setattr(V, "get_note_in_conn",
+                        lambda conn, nid_, k: {"title": "corrupted", "body": "",
+                                               "entries": [], "attachments": []})
+    with pytest.raises(V.VaultError):
+        V.move_note_to_vault(nid, key, db_path=db)
+    assert called == [], "the destroy ran before/despite the failed read-back"
+
+
+def test_a_blocked_wal_checkpoint_is_reported_not_swallowed(env):
+    """IMPORTANT (reviewer): one concurrent reader — the phone polling, an
+    agent mid-query — blocks TRUNCATE, and swallowing that left the marker in
+    hq.db-wal while the move reported success. The move still commits; it must
+    SAY the WAL was not truncated, in the return value and in the audit row."""
+    store, db, tmp = env
+    from backend import vault as V
+    V.init_vault(PW, db_path=db)
+    key = V.unlock(PW, db_path=db)
+    nid = build_secret_note(store, db)
+
+    reader = sqlite3.connect(db)
+    reader.execute("PRAGMA journal_mode=WAL")
+    reader.execute("BEGIN")
+    reader.execute("SELECT COUNT(*) FROM notes").fetchone()   # holds a read txn
+    try:
+        res = V.move_note_to_vault(nid, key, db_path=db)
+    finally:
+        reader.rollback(); reader.close()
+
+    assert res["wal_truncated"] is False
+    audit = [a for a in V.list_audit(db_path=db) if a["action"] == "moved_in"][0]
+    assert "WAL NOT truncated" in (audit["detail"] or "")
+    # the row itself is still gone from the b-tree
+    assert store.get_note(nid, db_path=db) is None
+
+
+def test_a_leftover_plaintext_file_is_named_in_the_audit(env, monkeypatch):
+    """IMPORTANT (reviewer): a failed unlink orphans a plaintext image that
+    nothing points at and that rides into every backup. Silence would hide it
+    forever."""
+    store, db, tmp = env
+    from backend import vault as V
+    V.init_vault(PW, db_path=db)
+    key = V.unlock(PW, db_path=db)
+    nid = store.create_note("photo note", "body", db_path=db)
+    att = store.add_attachment(nid, b"bytes" * 50, kind="photo", mime="image/png",
+                               orig_name="x.png", db_path=db)
+    path = store.attachment_path(nid, att["stored_name"])
+
+    real_remove = os.remove
+    monkeypatch.setattr(V.os, "remove",
+                        lambda p: (_ for _ in ()).throw(OSError("read-only fs"))
+                        if p == path else real_remove(p))
+    res = V.move_note_to_vault(nid, key, db_path=db)
+
+    assert res["leftover_files"] and path in res["leftover_files"][0]
+    audit = [a for a in V.list_audit(db_path=db) if a["action"] == "moved_in"][0]
+    assert "PLAINTEXT FILE(S) LEFT ON DISK" in (audit["detail"] or "")
+    assert path in audit["detail"]
+    assert os.path.isfile(path)                   # it really is still there
+
+
+def test_init_vault_says_when_it_reused_an_escrow_key(env):
+    """MINOR (reviewer): a pre-existing escrow key is reused, never replaced
+    (replacing would strand an older vault). The owner is told, because
+    "someone else's key can open this vault" belongs at setup time."""
+    store, db, tmp = env
+    from backend import vault as V
+    open(V.escrow_key_path(), "w").write("ab" * 32 + "\n")
+    os.chmod(V.escrow_key_path(), 0o600)
+    res = V.init_vault(PW, db_path=db)
+    assert res["escrow_reused"] is True
+
+    from core import wm_cli
+    import io, contextlib as cl
+    buf = io.StringIO()
+    with cl.redirect_stdout(buf):
+        wm_cli.main(["vault", "status"])
+    assert "escrow key" in buf.getvalue()
+
+
+def test_an_attachment_sealed_from_the_wrong_bytes_destroys_nothing(env, monkeypatch):
+    """The half of the read-back that UNSEALING alone cannot catch: a blob
+    that opens perfectly but yields bytes that are not what was on disk. Only
+    comparing the plaintext catches a swapped or misread file."""
+    store, db, tmp = env
+    from backend import vault as V
+    V.init_vault(PW, db_path=db)
+    key = V.unlock(PW, db_path=db)
+    nid = store.create_note("photo note", "body", db_path=db)
+    blob = b"REAL-PHOTO" * 60
+    store.add_attachment(nid, blob, kind="photo", mime="image/png",
+                         orig_name="wedding.png", db_path=db)
+    real_seal = V.seal
+    monkeypatch.setattr(V, "seal", lambda k, pt, aad=b"": (
+        real_seal(k, b"SOMEONE ELSES PHOTO", aad) if aad == V.AAD_ATT_BLOB
+        else real_seal(k, pt, aad)))
+    with pytest.raises(V.VaultError) as e:
+        V.move_note_to_vault(nid, key, db_path=db)
+    assert "nothing was destroyed" in str(e.value)
+    assert store.get_note(nid, db_path=db) is not None

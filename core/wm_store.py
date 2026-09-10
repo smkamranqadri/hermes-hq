@@ -4725,7 +4725,7 @@ def _fts_sync(conn, note_id):
 # ---------------------------------------------------------------------------
 # Phase 4 slice B: the ONE carve-out from archive-only.
 # ---------------------------------------------------------------------------
-def _destroy_note_plaintext(conn, note_id):
+def _destroy_note_plaintext(conn, note_id, title=None):
     """Erase every plaintext trace of one note, inside the CALLER's transaction.
 
     Deliberately private and connection-taking: this is not a command anyone
@@ -4741,12 +4741,21 @@ def _destroy_note_plaintext(conn, note_id):
 
     Returns the counts of what was destroyed, for the vault_audit row.
 
-    NOT touched, deliberately: a task or schedule the owner graduated FROM this
-    note. Those are separate objects the owner created on purpose ("create and
-    link, never convert"), and deleting someone's todo because its source note
-    was vaulted would be a surprise. The `note_links` rows pointing at them go;
-    whatever text the owner typed into the task stays theirs. `note_tag_taxonomy`
-    is untouched too — a tag is library vocabulary, not this note's text.
+    NOT touched: a task or schedule the owner graduated FROM this note. Those
+    are separate objects created on purpose ("create and link, never convert")
+    and deleting someone's todo would be a surprise. But they are NOT safe to
+    ignore either — `backend/notes.py` DEFAULTS a new task's title and a new
+    reminder's name to the note's own title, so they routinely carry the very
+    text this function exists to erase, and a schedule keeps minting fresh
+    tasks carrying it forever. `vault.move_note_to_vault` therefore REFUSES
+    the move when a linked task or schedule carries the title, naming the ids,
+    and the owner decides. By the time this function runs, that check has
+    passed. (Review finding 2026-09-10: 4 of 10 surviving copies were here,
+    and the original note claiming "whatever the owner typed stays theirs" was
+    wrong on the facts — the default is the note's title, not owner-typed text.)
+
+    `note_tag_taxonomy` is untouched — a tag is library vocabulary, not this
+    note's text.
     """
     counts = {}
     def _n(sql, *params):
@@ -4763,8 +4772,22 @@ def _destroy_note_plaintext(conn, note_id):
     # A proposal's `payload` restates the note and its `summary` is librarian
     # prose ABOUT it that routinely quotes the title, so a proposal is
     # plaintext too — it goes with the note.
-    prop_ids = [r[0] for r in conn.execute(
-        "SELECT id FROM proposals WHERE note_id=?", (note_id,))]
+    # Reach by CONTENT, not only by note_id. A `contradiction` proposal filed
+    # on the PARTNER note names this one in `payload.other_note_id`, and an
+    # `append_entry` proposal names it in `target_note_id` — both carry this
+    # note's text in their summary and payload while their own `note_id`
+    # points elsewhere, so a `WHERE note_id=?` delete walks straight past
+    # them. (Review finding 2026-09-10: 2 of 10 surviving copies were here.)
+    prop_ids = {r[0] for r in conn.execute(
+        "SELECT id FROM proposals WHERE note_id=?", (note_id,))}
+    for pid, payload in conn.execute("SELECT id, payload FROM proposals"):
+        try:
+            p = json.loads(payload or "{}")
+        except ValueError:
+            continue
+        if any(p.get(k) == note_id for k in ("other_note_id", "target_note_id")):
+            prop_ids.add(pid)
+    prop_ids = sorted(prop_ids)
     counts["proposals"] = len(prop_ids)
 
     # The two plaintext holders the plan's "three places" did not name, both
@@ -4780,28 +4803,50 @@ def _destroy_note_plaintext(conn, note_id):
     # note #12 can never match note #120.
     like = ["note #%d: %%" % note_id, "note #%d by %%" % note_id,
             "%%on note #%d: %%" % note_id, "%%on note #%d" % note_id]
-    where = " OR ".join(["detail LIKE ?"] * len(like))
+    # The proposals reached above also wrote activity rows naming their OWN
+    # note, not this one ("proposal #7 (contradiction) on note #<partner>: ...
+    # <this title>"), so those ids join the patterns.
+    like += ["proposal #%d %%" % p for p in prop_ids]
+    # Finally reach by the TITLE ITSELF. `create_task` and `create_schedule`
+    # log the bare title with NO note id anywhere in the line, so no id-shaped
+    # pattern can ever match them. A distinctive title is the only handle
+    # those rows offer. Accepted cost: a very generic title may redact an
+    # unrelated row's text — the row itself, its action and its timestamp
+    # survive, and losing a line of audit prose beats leaving a secret.
+    if title:
+        like.append("%%%s%%" % title.replace("%", r"\%").replace("_", r"\_"))
+    where = " OR ".join(["detail LIKE ? ESCAPE '\\'"] * len(like))
     counts["activity"] = _n("SELECT COUNT(*) FROM activity WHERE " + where, *like)
     # Redacted, not deleted: the activity log is the tamper audit `wm check`
     # reads, and a hole in it is itself a finding. The row stays, its text goes.
     conn.execute(
         "UPDATE activity SET detail=? WHERE " + where,
         ["note #%d: (moved to the vault)" % note_id] + like)
-    counts["notifications"] = 0
+
+    # Notifications are derived UI, not an audit trail, so these go entirely.
+    # Reached three ways: the proposals above (source_key), anything still
+    # pointing at the note's page, and — again — the title itself.
+    nwhere = ["href = ?"]
+    nparams = ["/brain/note/%d" % note_id]
     if prop_ids:
-        keys = ["proposal:%d" % p for p in prop_ids]
-        counts["notifications"] = _n(
-            "SELECT COUNT(*) FROM notifications WHERE source_key IN (%s)"
-            % ",".join("?" * len(keys)), *keys)
-        conn.execute("DELETE FROM notifications WHERE source_key IN (%s)"
-                     % ",".join("?" * len(keys)), keys)
+        nwhere.append("source_key IN (%s)" % ",".join("?" * len(prop_ids)))
+        nparams += ["proposal:%d" % p for p in prop_ids]
+    if title:
+        esc = "%%%s%%" % title.replace("%", r"\%").replace("_", r"\_")
+        nwhere.append("title LIKE ? ESCAPE '\\'"); nparams.append(esc)
+        nwhere.append("body LIKE ? ESCAPE '\\'"); nparams.append(esc)
+    nsql = " OR ".join(nwhere)
+    counts["notifications"] = _n("SELECT COUNT(*) FROM notifications WHERE " + nsql, *nparams)
+    conn.execute("DELETE FROM notifications WHERE " + nsql, nparams)
 
     conn.execute("DELETE FROM note_revisions WHERE note_id=?", (note_id,))
     conn.execute("DELETE FROM note_entries WHERE note_id=?", (note_id,))
     conn.execute("DELETE FROM note_attachments WHERE note_id=?", (note_id,))
     conn.execute("DELETE FROM note_links WHERE note_id=? OR (kind='note' AND target_id=?)",
                  (note_id, note_id))
-    conn.execute("DELETE FROM proposals WHERE note_id=?", (note_id,))
+    if prop_ids:
+        conn.execute("DELETE FROM proposals WHERE id IN (%s)"
+                     % ",".join("?" * len(prop_ids)), prop_ids)
     if NOTES_FTS:
         conn.execute("DELETE FROM notes_fts WHERE rowid=?", (note_id,))
     conn.execute("DELETE FROM notes WHERE id=?", (note_id,))
