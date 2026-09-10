@@ -483,7 +483,8 @@ def cmd_task_close(args):
 
 def cmd_task_edit(args):
     try:
-        changed = store.edit_task(args.id, description=args.description,
+        changed = store.edit_task(args.id, title=args.title,
+                                  description=args.description,
                                   definition_of_done=args.dod,
                                   owner_approval=args.owner_approval)
     except ValueError as e:
@@ -1374,6 +1375,9 @@ def build_parser():
                              help="audited edit of description/definition-of-"
                                   "done (refused while running or done)")
     te.add_argument("id", type=int)
+    te.add_argument("--title", dest="title", default=None,
+                    help="rename the task (audited; the old title is kept in "
+                         "the activity row)")
     te.add_argument("--description", dest="description", default=None)
     te.add_argument("--dod", dest="dod", default=None,
                     help="new definition of done")

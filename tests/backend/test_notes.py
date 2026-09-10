@@ -223,3 +223,69 @@ def test_project_notes(env):
     rows = c.get("/api/project/alpha/notes").json()["notes"]
     assert [n["title"] for n in rows] == ["alpha note"]
     assert c.get("/api/project/nope/notes").status_code == 404
+
+
+# ---- task titles are editable, and the description no longer copies one ----
+#
+# Added 2026-09-10 after the Phase 4 vault review: `new_task` from a note
+# prefills the task title with the NOTE's title, and NOTHING in hermes-hq could
+# retitle a task afterwards — so a note that later turned out to be sensitive
+# left its title in `tasks` with deletion as the only remedy.
+
+def test_task_from_note_does_not_copy_the_title_into_the_description(env):
+    c, store, db = env
+    h = login(c)
+    nid = c.post("/api/notes", json={"title": "AWS root creds for prod",
+                                     "body": "x"}, headers=h).json()["id"]
+    tid = c.post("/api/note/%d/new-task" % nid,
+                 json={"project": "alpha"}, headers=h).json()["id"]
+    t = store.get_task(tid, db_path=db)
+    # the title is still prefilled (good default, and the modal lets it be
+    # changed before create) but the description carries only the link
+    assert t["title"] == "AWS root creds for prod"
+    assert t["description"] == "From note #%d" % nid
+    assert "AWS root creds" not in t["description"]
+
+
+def test_a_task_can_be_retitled_through_the_audited_edit_path(env):
+    c, store, db = env
+    h = login(c)
+    nid = c.post("/api/notes", json={"title": "AWS root creds for prod",
+                                     "body": "x"}, headers=h).json()["id"]
+    tid = c.post("/api/note/%d/new-task" % nid,
+                 json={"project": "alpha"}, headers=h).json()["id"]
+    r = c.post("/api/task/%d/edit" % tid, json={"title": "Rotate the prod keys"},
+               headers=h)
+    assert r.status_code == 200
+    assert store.get_task(tid, db_path=db)["title"] == "Rotate the prod keys"
+    # audited: the OLD title survives in the activity row, same contract as
+    # every other edited field
+    import sqlite3
+    conn = sqlite3.connect(db); conn.row_factory = sqlite3.Row
+    rows = [dict(r) for r in conn.execute(
+        "SELECT detail FROM activity WHERE action='task_edited'")]
+    conn.close()
+    assert rows and "title was: AWS root creds for prod" in rows[0]["detail"]
+
+
+def test_retitling_is_refused_when_empty_and_when_the_task_is_running(env):
+    c, store, db = env
+    h = login(c)
+    tid = store.create_task("alpha", "original", db_path=db)
+    # "   " satisfies the model's min_length and is refused by the STORE, which
+    # is the layer that owns the rule — 409 with its own message, same contract
+    # as every other invalid edit
+    assert c.post("/api/task/%d/edit" % tid, json={"title": "   "},
+                  headers=h).status_code == 409
+    assert c.post("/api/task/%d/edit" % tid, json={"title": ""},
+                  headers=h).status_code == 422        # min_length on the model
+    import pytest
+    with pytest.raises(ValueError, match="cannot be empty"):
+        store.edit_task(tid, title="   ", db_path=db)
+    with pytest.raises(ValueError, match="nothing to edit"):
+        store.edit_task(tid, db_path=db)
+    store.mark_ready(tid, db_path=db)
+    assert store.claim_task(tid, db_path=db) is True   # -> running
+    with pytest.raises(ValueError, match="edits are refused while running"):
+        store.edit_task(tid, title="too late", db_path=db)
+    assert store.get_task(tid, db_path=db)["title"] == "original"

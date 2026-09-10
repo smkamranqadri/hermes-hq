@@ -3068,17 +3068,25 @@ def mark_manual(task_id, note=None, db_path=None):
 
 
 def edit_task(task_id, description=None, definition_of_done=None,
-              owner_approval=None, db_path=None):
+              owner_approval=None, title=None, db_path=None):
     """Audited owner edit of the fields that shape the agent's brief/gating.
 
     Refused while 'running' (the brief was already rendered at claim) and on
     'done' (historical record). No status change — the audit trail is a
     `task_edited` activity row carrying each changed field's OLD value.
-    Returns the list of field names actually changed."""
+    Returns the list of field names actually changed.
+
+    `title` was added 2026-09-10. Until then NOTHING in hermes-hq could retitle
+    a task, which made a title a permanent decision — and `new_task` from a
+    note defaults it to the NOTE's title, so a note that later turned out to be
+    sensitive left its title in `tasks` with deletion as the only remedy.
+    """
     if description is None and definition_of_done is None \
-            and owner_approval is None:
-        raise ValueError("nothing to edit: pass description, "
+            and owner_approval is None and title is None:
+        raise ValueError("nothing to edit: pass title, description, "
                          "definition_of_done and/or owner_approval")
+    if title is not None and not str(title).strip():
+        raise ValueError("task title cannot be empty")
     t = get_task(task_id, db_path=db_path)
     if t is None:
         raise ValueError("no task with id %s" % task_id)
@@ -3087,7 +3095,8 @@ def edit_task(task_id, description=None, definition_of_done=None,
                          "(brief already rendered) and on done tasks (history)"
                          % (task_id, t["status"]))
     updates, params, changed, audit = [], [], [], []
-    for field, new in (("description", description),
+    for field, new in (("title", None if title is None else str(title).strip()),
+                       ("description", description),
                        ("definition_of_done", definition_of_done)):
         if new is None or (t[field] or "") == new:
             continue

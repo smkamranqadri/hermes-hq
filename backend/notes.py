@@ -281,7 +281,12 @@ def new_task(note_id: int, body: NoteTaskIn):
         raise HTTPException(404, "no such note")
     slug = _note_project_slug(n, body.project)
     title = (body.title or n["title"]).strip()
-    desc = body.description or ("From note #%d: %s" % (note_id, n["title"]))
+    # The description does NOT copy the note's title (2026-09-10). The link
+    # already resolves the note and renders its current title, so the copy
+    # added nothing and quietly duplicated the text into a second table — and
+    # a task description could be edited while its TITLE could not, which is
+    # what made a note that later turned out to be sensitive unfixable.
+    desc = body.description or ("From note #%d" % note_id)
     tid = _engine(store.create_task, slug, title, desc, "",
                   assignee_profile=body.assignee or store.OWNER_ASSIGNEE)
     if body.ready:

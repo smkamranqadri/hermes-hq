@@ -6,7 +6,7 @@ import { Markdown } from '../components/chat/Markdown'
 import { GlassCard } from '../components/GlassCard'
 import { StatusBadge } from '../components/StatusBadge'
 import { Empty, Loading, Chip, Crumbs, Label, Agent } from '../components/ui'
-import { Btn, TextArea } from '../components/Modal'
+import { Btn, TextArea, TextInput } from '../components/Modal'
 import { useToast } from '../components/Toast'
 import { usePageTitle } from '../usePageTitle'
 import { useState } from 'react'
@@ -21,7 +21,7 @@ function Block({ title, children }: { title: string; children: React.ReactNode }
 }
 
 /** Description / definition-of-done with an audited owner edit (refused by the engine while running/done). */
-function EditBlock({ title, value, field, taskId, canEdit }: { title: string; value: string; field: 'description' | 'definition_of_done'; taskId: number; canEdit: boolean }) {
+function EditBlock({ title, value, field, taskId, canEdit }: { title: string; value: string; field: 'title' | 'description' | 'definition_of_done'; taskId: number; canEdit: boolean }) {
   const toast = useToast()
   const [editing, setEditing] = useState(false)
   const [text, setText] = useState('')
@@ -35,15 +35,53 @@ function EditBlock({ title, value, field, taskId, canEdit }: { title: string; va
       </div>
       {editing ? (
         <div className="mt-1 flex flex-col gap-2">
-          <TextArea autoFocus rows={Math.min(12, Math.max(4, text.split('\n').length + 1))} value={text} onChange={e => setText(e.target.value)} />
+          {/* A title is one line and has a hard 300-char cap in the API; a
+            * textarea here would invite newlines the store would strip. */}
+          {field === 'title'
+            ? <TextInput autoFocus value={text} maxLength={300} onChange={e => setText(e.target.value)} />
+            : <TextArea autoFocus rows={Math.min(12, Math.max(4, text.split('\n').length + 1))} value={text} onChange={e => setText(e.target.value)} />}
           <div className="flex gap-2">
-            <Btn busy={m.isPending} disabled={text.trim() === (value || '').trim()} onClick={() => m.mutate({ [field]: text }, { onError: x => toast(x instanceof ApiError ? x.message : String(x), 'err') })}>Save</Btn>
+            <Btn busy={m.isPending} disabled={text.trim() === (value || '').trim() || (field === 'title' && !text.trim())} onClick={() => m.mutate({ [field]: text }, { onError: x => toast(x instanceof ApiError ? x.message : String(x), 'err') })}>Save</Btn>
             <Btn kind="ghost" onClick={() => setEditing(false)}>Cancel</Btn>
           </div>
         </div>
       ) : (
         <div className="mt-1 whitespace-pre-wrap break-words text-sm">{value || <span className="text-muted">—</span>}</div>
       )}
+    </div>
+  )
+}
+
+/** The task title, renameable in place.
+ *
+ * Added 2026-09-10: until then nothing in hermes-hq could retitle a task, so a
+ * title was a permanent decision — and `new_task` from a note prefills it with
+ * the NOTE's title, which left a note that later turned out to be sensitive
+ * with deletion as its only remedy. */
+function TitleEditor({ taskId, value, canEdit }: { taskId: number; value: string; canEdit: boolean }) {
+  const toast = useToast()
+  const [editing, setEditing] = useState(false)
+  const [text, setText] = useState('')
+  const m = useWrite(`/api/task/${taskId}/edit`, { onSuccess: () => { toast('Title updated — audited; the old title is kept in the activity row'); setEditing(false) } })
+  if (editing) {
+    return (
+      <div className="flex min-w-0 flex-col gap-2" data-title-editor>
+        <TextInput autoFocus value={text} maxLength={300} onChange={e => setText(e.target.value)}
+                   onKeyDown={e => { if (e.key === 'Escape') setEditing(false) }} />
+        <div className="flex gap-2">
+          <Btn busy={m.isPending} disabled={!text.trim() || text.trim() === value.trim()}
+               onClick={() => m.mutate({ title: text.trim() }, { onError: x => toast(x instanceof ApiError ? x.message : String(x), 'err') })}>Save</Btn>
+          <Btn kind="ghost" onClick={() => setEditing(false)}>Cancel</Btn>
+        </div>
+      </div>
+    )
+  }
+  return (
+    <div className="flex min-w-0 items-start gap-2">
+      <h1 className="break-words text-lg font-semibold tracking-tight sm:text-xl">{value}</h1>
+      {canEdit && <button type="button" aria-label="Rename task" title="Rename this task (audited)"
+                          className="mt-1.5 shrink-0 text-xs leading-none text-muted hover:text-accent-2"
+                          onClick={() => { setText(value); setEditing(true) }}>✎</button>}
     </div>
   )
 }
@@ -160,7 +198,7 @@ export function TaskDetail() {
       <Crumbs items={[['Projects', '/projects'], [t.project_slug, `/projects/${t.project_slug}`], [`Task #${t.id}`]]} />
       <div className="mb-5 flex flex-wrap items-start justify-between gap-3">
         <div className="min-w-0">
-          <h1 className="break-words text-lg font-semibold tracking-tight sm:text-xl">{t.title}</h1>
+          <TitleEditor taskId={t.id} value={t.title} canEdit={canEdit} />
           <div className="mt-2 flex flex-wrap items-center gap-2 text-xs text-muted">
             <StatusBadge human={{ state: t.human.state, reason: t.human.reason?.split(':')[0], label: t.human.label }} live={st === 'running'} /><span className="font-mono">engine: {t.status}</span>{sys.data && (st === 'running' || st === 'ready') && <span className={`font-mono ${st === 'ready' && sys.data.running >= sys.data.cap ? 'text-needsyou' : ''}`}>· slots {sys.data.running}/{sys.data.cap} busy{st === 'ready' && !sys.data.paused && sys.data.running >= sys.data.cap ? ' — waiting for a free slot' : ''}{st === 'ready' && sys.data.paused ? ' — dispatcher paused' : ''}</span>}
             <Agent name={t.assignee_profile} />{!!t.is_code && <Chip>code</Chip>}<Chip>review {t.review_policy}</Chip>

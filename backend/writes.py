@@ -293,6 +293,9 @@ def approve_plan(tid: int, body: Note | None = None):
 
 
 class TaskEdit(BaseModel):
+    # `title` is optional like the rest: a PATCH-shaped body that names none of
+    # them is refused by the store rather than silently no-op'ing.
+    title: str | None = Field(default=None, min_length=1, max_length=300)
     description: str | None = None
     definition_of_done: str | None = None
     owner_approval: bool | None = None
@@ -300,7 +303,8 @@ class TaskEdit(BaseModel):
 
 @router.post("/task/{tid}/edit")
 def task_edit(tid: int, body: TaskEdit):
-    _engine(store.edit_task, tid, description=body.description,
+    _engine(store.edit_task, tid, title=body.title,
+            description=body.description,
             definition_of_done=body.definition_of_done,
             owner_approval=body.owner_approval)
     return _after(tid)
