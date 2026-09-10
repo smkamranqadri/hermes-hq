@@ -115,6 +115,16 @@ The original entry deferred wave 5 "until librarian judgment quality is observab
 - **Living-vs-museum calls will be weaker here than in waves 3–4**, because there are no folders and no dates. DoD 4c forbids inventing a year to justify archiving, so expect era judgements worded as judgements.
 - **Titles will read badly in lists** — 92 are sentence fragments. `plainExcerpt` keeps the row previews readable, but the titles themselves are the source's, and renaming 296 notes is not in scope.
 
+### W5 — import MET 2026-09-10
+
+Backup `wm-20260910-094812`. Dry run and apply both reconciled to the committed baseline exactly: **391 created (296 inbox + 95 auto-archived), 11 duplicates, 0 held back = 402**. Library **545 → 936 notes**; tasks **238 before and after**; **885 imported notes carry 885 distinct `content_hash`es**; re-run reports `already there 391, created 0`; `wm check` Integrity OK, health 200, 0 homeless active notes; `analyze_notes_dump.py --check` green.
+
+**The whole corpus now reconciles end to end: 885 of 969 dump units are in the library, and the 84 absent are exactly the provable drops — 4 empty + 76 duplicate + 4 secret.** All five waves are imported.
+
+**The deadlock fix proved itself at scale here.** With 249 proposals already pending, `wm note inbox` reported **"296 untriaged"** — before the fix those 249 rows would have filled the page and hidden every new note, exactly as they did on 2026-09-10 when four consecutive runs reported "0 untriaged" with 148 waiting.
+
+**Owner decision 2026-09-10:** the plan gated wave 5 behind him clearing the wave-4 queue; he chose to **import and triage straight away** instead. The gate's technical reason was gone (the worklist no longer hides work), and the remaining cost was accepted after being named: the librarian reads `wm note proposals --status rejected` before each run, so triaging Keep before any of the 249 are decided means **it cannot apply a single correction from wave 4** — on the source least able to afford it (296 untagged, undated fragments, median body 129 chars).
+
 ### Acceptance
 
 - Dry run and apply both reconcile to the committed baseline (402 = 296 + 95 + 11); `--check` green before and after.
