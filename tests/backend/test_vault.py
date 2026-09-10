@@ -986,3 +986,23 @@ def test_a_short_passphrase_is_refused(api):
     r = c.post("/api/vault/init", json={"passphrase": "short"}, headers=h)
     assert r.status_code == 409
     assert "at least 8" in r.text
+
+
+def test_polling_status_does_not_keep_the_vault_awake(api):
+    """The open page polls /api/vault/status every 60s. If that counted as
+    use, the idle timeout would be defeated by the very UI that displays it —
+    a vault left open on the phone would never re-seal."""
+    c, store, db, tmp = api
+    h = login(c)
+    c.post("/api/vault/init", json={"passphrase": PW}, headers=h)
+    from backend import vault as V
+    tok = list(V.KEYS._keys)[0]
+
+    idle_before = V.KEYS.idle_since(tok)
+    for _ in range(5):
+        assert c.get("/api/vault/status").json()["unlocked"] is True
+    assert V.KEYS.idle_since(tok) == idle_before, "status refreshed the idle timer"
+
+    # an actual read DOES count as use
+    c.get("/api/vault/notes")
+    assert V.KEYS.idle_since(tok) > idle_before

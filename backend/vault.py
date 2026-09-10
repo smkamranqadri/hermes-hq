@@ -307,10 +307,13 @@ class KeyStore:
     def put(self, token, key):
         if not token:
             raise VaultError("no session")
+        now = time.time()
         with self._lock:
-            self._keys[token] = [key, time.time()]
+            self._keys[token] = [key, now, now]      # key, last_used, unlocked_at
 
     def get(self, token):
+        """A real read: it refreshes the idle timer, because using the vault
+        is what "still active" means."""
         with self._lock:
             row = self._keys.get(token or "")
             if row is None:
@@ -321,6 +324,22 @@ class KeyStore:
             row[1] = time.time()
             return row[0]
 
+    def peek(self, token):
+        """Is it unlocked, WITHOUT counting as use.
+
+        `status` is polled by the open page every 60s. If that refreshed the
+        timer, a vault left open on the phone would never idle-lock — the
+        timeout would be defeated by the very UI that displays it.
+        """
+        with self._lock:
+            row = self._keys.get(token or "")
+            if row is None:
+                return False
+            if time.time() - row[1] > self.idle:
+                self._keys.pop(token, None)
+                return False
+            return True
+
     def drop(self, token):
         with self._lock:
             self._keys.pop(token or "", None)
@@ -330,6 +349,11 @@ class KeyStore:
             self._keys.clear()
 
     def unlocked_at(self, token):
+        with self._lock:
+            row = self._keys.get(token or "")
+            return row[2] if row else None
+
+    def idle_since(self, token):
         with self._lock:
             row = self._keys.get(token or "")
             return row[1] if row else None
@@ -776,7 +800,8 @@ def drain_quarantine(key, db_path=None, apply=False):
 def status(token=None, db_path=None):
     return {
         "initialized": is_initialized(db_path=db_path),
-        "unlocked": KEYS.get(token) is not None,
+        # peek, not get: polling status must not keep the vault awake.
+        "unlocked": KEYS.peek(token),
         "notes": count_notes(db_path=db_path),
         "idle_seconds": KEYS.idle,
         "unlocked_at": KEYS.unlocked_at(token),
