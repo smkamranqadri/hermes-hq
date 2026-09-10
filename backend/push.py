@@ -100,6 +100,38 @@ def _unread_count(db_path=None):
         return None
 
 
+def collapse_for_push(rows):
+    """One buzz per task per batch, and never buzz for a row that is already stale.
+
+    Task #176 produced **59** notifications for a single task — a needs_you plus
+    an info per build↔review cycle. The bell was always fine, because
+    `sync_notifications` marks a task's earlier unread attention rows read the
+    moment it transitions again; what was missing was anything between that
+    history and the phone. Since the push watermark started delivering every
+    directly-added row (2026-09-10), a repeat would have been 59 buzzes.
+
+    Two rules, both conservative — nothing is deleted and the bell is untouched:
+
+    1. **Skip rows already marked read.** A later transition in the same batch
+       superseded them; buzzing about a state the task has already left is worse
+       than silence.
+    2. **Keep only the newest row per task.** The owner needs to know a task
+       wants them, not the six intermediate states it passed through to get
+       there. Rows arrive ordered by id, so the last one wins.
+
+    Notifications with no task (a reminder, a librarian proposal, a schedule
+    error) are never collapsed together — they are distinct events that happen
+    to share a batch.
+    """
+    keep = {}
+    for n in rows:
+        if n.get("read_at"):
+            continue
+        key = ("task", n["task_id"]) if n.get("task_id") else ("row", n["id"])
+        keep[key] = n
+    return [keep[k] for k in keep]
+
+
 def push_notifications(ids, db_path=None, background=True):
     """Push the given notification ids to every subscription (in a thread by default)."""
     ids = [int(i) for i in ids or [] if i]
@@ -108,7 +140,9 @@ def push_notifications(ids, db_path=None, background=True):
     subs = store.list_push_subscriptions(db_path=db_path)
     if not subs:
         return 0
-    rows = store.get_notifications(ids, db_path=db_path)
+    rows = collapse_for_push(store.get_notifications(ids, db_path=db_path))
+    if not rows:
+        return 0
 
     def work():
         unread = _unread_count(db_path=db_path)

@@ -96,3 +96,103 @@ def test_payload_carries_unread_for_badge(env, monkeypatch):
     assert expected >= 2 and [p["unread"] for p in sent] == [expected, expected]
     # without a count the key is absent (send_test passes None only if the store read fails)
     assert "unread" not in push.payload_for({"id": 1, "kind": "info", "title": "t"})
+
+
+# ---- per-cycle notification spam (2026-09-10) ---------------------------
+#
+# Task #176 produced 59 notifications for ONE task — a needs_you plus an info
+# per build↔review cycle. The bell was always fine (`sync_notifications` marks
+# a task's earlier unread attention rows read when it transitions again), but
+# once the push watermark started delivering every row, a repeat would have
+# been 59 buzzes on the owner's phone.
+
+def test_a_cycling_task_delivers_one_real_push_not_sixty(env):
+    """Drives the REAL push path and counts HTTP deliveries to a fake push
+    service — not `collapse_for_push` in isolation. The first version of this
+    test called the helper directly and stayed green with the collapse removed
+    from `push_notifications` entirely, which is a test that proves nothing."""
+    c, store, gw, root = env
+    h = login(c)
+    db = store.DEFAULT_DB_PATH
+    srv = HTTPServer(("127.0.0.1", 0), FakePushService); port = srv.server_address[1]
+    threading.Thread(target=srv.serve_forever, daemon=True).start()
+    FakePushService.received.clear(); FakePushService.status = 201
+    try:
+        from backend import push
+        c.post("/api/push/subscribe",
+               json={"endpoint": "http://127.0.0.1:%d/send/abc" % port,
+                     "keys": _browser_keys()}, headers=h)
+        ids = []
+        for cycle in range(30):
+            ids.append(store.add_notification("needs_you", "Task #176 needs you — needs review",
+                                              task_id=176, source_key="c%d:a" % cycle, db_path=db))
+            ids.append(store.add_notification("info", "Task #176 sent back for rework",
+                                              task_id=176, source_key="c%d:b" % cycle, db_path=db))
+        assert len(ids) == 60
+        delivered = push.push_notifications(ids, db_path=db, background=False)
+        assert delivered == 1, "60 notifications for one task must be ONE buzz"
+        assert len(FakePushService.received) == 1
+    finally:
+        srv.shutdown()
+
+
+def test_a_cycling_task_produces_one_push_not_fifty_nine(env):
+    _c, store, _gw, _root = env
+    db = store.DEFAULT_DB_PATH
+    from backend import push
+    ids = []
+    for cycle in range(30):
+        a = store.add_notification("needs_you", "Task #176 needs you — needs review",
+                                   task_id=176, source_key="t:%d:a" % cycle, db_path=db)
+        b = store.add_notification("info", "Task #176 sent back for rework",
+                                   task_id=176, source_key="t:%d:b" % cycle, db_path=db)
+        ids += [a, b]
+    assert len(ids) == 60
+    rows = store.get_notifications(ids, db_path=db)
+    collapsed = push.collapse_for_push(rows)
+    assert len(collapsed) == 1
+    assert collapsed[0]["id"] == ids[-1]        # the newest state, not the first
+
+
+def test_a_superseded_row_is_never_pushed(env):
+    """A later transition marks the earlier attention rows read. Buzzing about a
+    state the task has already left is worse than silence."""
+    _c, store, _gw, _root = env
+    db = store.DEFAULT_DB_PATH
+    from backend import push
+    import sqlite3, time as _t
+    old = store.add_notification("needs_you", "Task #9 needs you — blocked",
+                                 task_id=9, source_key="old", db_path=db)
+    new = store.add_notification("done", "Task #9 is done", task_id=9,
+                                 source_key="new", db_path=db)
+    conn = sqlite3.connect(db)
+    with conn:
+        conn.execute("UPDATE notifications SET read_at=? WHERE id=?", (_t.time(), old))
+    conn.close()
+    collapsed = push.collapse_for_push(store.get_notifications([old, new], db_path=db))
+    assert [n["id"] for n in collapsed] == [new]
+
+
+def test_different_tasks_each_get_their_own_push(env):
+    _c, store, _gw, _root = env
+    db = store.DEFAULT_DB_PATH
+    from backend import push
+    a = store.add_notification("needs_you", "Task #1 needs you", task_id=1,
+                               source_key="a", db_path=db)
+    b = store.add_notification("needs_you", "Task #2 needs you", task_id=2,
+                               source_key="b", db_path=db)
+    collapsed = push.collapse_for_push(store.get_notifications([a, b], db_path=db))
+    assert sorted(n["id"] for n in collapsed) == sorted([a, b])
+
+
+def test_taskless_notifications_are_never_collapsed_together(env):
+    """A due reminder, a librarian proposal and a schedule error are distinct
+    events that merely share a batch."""
+    _c, store, _gw, _root = env
+    db = store.DEFAULT_DB_PATH
+    from backend import push
+    ids = [store.add_notification("needs_you", "Reminder: dentist", source_key="r1", db_path=db),
+           store.add_notification("needs_you", "Librarian: file proposal on 'x'", source_key="p1", db_path=db),
+           store.add_notification("needs_you", "Schedule 'lint' failed", source_key="e1", db_path=db)]
+    collapsed = push.collapse_for_push(store.get_notifications(ids, db_path=db))
+    assert len(collapsed) == 3
