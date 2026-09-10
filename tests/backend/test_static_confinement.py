@@ -32,9 +32,17 @@ def client(tmp_path, monkeypatch):
     secret = tmp_path / "hq" / "password"
     secret.write_text("s3cr3t-live-password\n")
     import backend.app as appmod
-    os.makedirs(os.path.join(appmod.STATIC_DIR, "assets"), exist_ok=True)
-    with open(os.path.join(appmod.STATIC_DIR, "index.html"), "w") as fh:
-        fh.write("<!doctype html><title>hq</title>")
+    # STATIC_DIR is derived from backend/app.py's OWN path, NOT from
+    # HERMES_HQ_HOME — so writing a fixture index.html into it CLOBBERS THE
+    # PRODUCTION BUILD. This test did exactly that on 2026-09-10: it replaced
+    # the owner's live 1053-byte index.html with a 32-byte stub carrying no
+    # script tag, and the running app served a white page until the frontend
+    # was rebuilt. Point it at a temp dir instead, and never write to the real
+    # one from a test.
+    static = tmp_path / "static"
+    os.makedirs(static / "assets", exist_ok=True)
+    (static / "index.html").write_text("<!doctype html><title>hq</title>")
+    monkeypatch.setattr(appmod, "STATIC_DIR", str(static))
     from fastapi.testclient import TestClient
     with TestClient(appmod.create_app(dispatcher_enabled=False)) as c:
         yield c, str(secret)
