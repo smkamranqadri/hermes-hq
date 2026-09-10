@@ -1,6 +1,6 @@
 # Phase 4 Plan — Vault, Export, Reminders, Revisions
 
-**Status:** PLANNED 2026-09-10 (owner-interviewed in session; the eight decisions below are locked — do not relitigate in build tasks). Nothing built yet.
+**Status:** IN PROGRESS — **slice A (Export) SHIPPED 2026-09-10** (`d4b742a`, suite 423 → 437; proof in `state/current.md`). Slice B (Vault) is next. Planned 2026-09-10 (owner-interviewed in session; the eight decisions below are locked — do not relitigate in build tasks).
 **Parent:** `intent/SecondBrainPlan.md` → Phase 4.
 **Work mode:** Phase — four slices in a fixed order, each shipping something the owner reviews before the next starts.
 **Build route:** slices A, C, D direct in-session; **slice B (Vault) is built by an implementer subagent and reviewed by an independent reviewer subagent**, plus a `security-review` pass over the crypto and the destruction transaction before deploy (owner's call — it is the first irreversible delete path this system has ever had).
@@ -46,12 +46,14 @@ Close the Second Brain with the two pieces that carry Phase 4's DoD — a **priv
 
 ## Slices
 
-### Slice A — Export (direct in-session) — FIRST
+### Slice A — Export (direct in-session) — **SHIPPED 2026-09-10** ✅ (`d4b742a`)
 Ships before the vault deliberately: no schema change, no crypto, no deletion — and it puts a real backup of 945 notes in the owner's hands **before** slice B introduces the first hard-delete path. If the destruction step ever misfires, the zip is what saves the corpus.
 
 Scope: `GET /api/brain/export.zip`, owner-only (agent session refused). Folders `Areas/<Area>/`, `Projects/<Project>/`, `Inbox/`, `Archive/`. Per-note YAML frontmatter: `id`, `type`, `area`, `project`, `tags`, `created`, `updated`, `authored_by`, `links`, Thought dates. Attachments written beside their note. **Filenames disambiguated by note id** — 128 same-title groups exist, and `Areas/Work/Server Setup.md` written twice is one file. New `export` source parser in `backend/notes_import.py` (the module the analyzer and importer already share, so the baseline cannot drift).
 
-**DoD:** zip opens in Obsidian as a sane PARA vault; **945 notes present**; **86 attachment files byte-identical** to disk; **0 filename collisions** across the 128 same-title groups; agent session refused (test); **round trip** through `wm brain-import --source export` into a scratch DB reconciles 945 notes / 59 tags / 17 areas / 86 attachments and a **re-run reports `created 0`**; zip size and wall time **measured and reported** (it becomes a background job if it stalls the single-process service); suite green above 423 with the new count in the SAME commit; 390×844 `scrollWidth` 390, 0 page errors.
+**DoD — every line met** (measured, see State → Proof; the mechanics moved to Knowledge → technical.md → Second Brain): zip opens in Obsidian as a sane PARA vault; **945 notes present**; **86 attachment files byte-identical** to disk; **0 filename collisions** across the 128 same-title groups; agent session refused (test); **round trip** through `wm brain-import --source export` into a scratch DB reconciles 945 notes / 59 tags / 17 areas / 86 attachments and a **re-run reports `created 0`**; zip size and wall time **measured and reported** (it becomes a background job if it stalls the single-process service); suite green above 423 with the new count in the SAME commit; 390×844 `scrollWidth` 390, 0 page errors.
+
+**What slice A found that the plan did not predict:** (1) the export is **fast** — 0.95 s for 945 notes and 31.4 MB — so the "becomes a background job" contingency is dead, and the route builds synchronously; (2) the restore surfaced a **live data anomaly**, notes #11/#13 carrying `zzz-deep`, a tag the closed taxonomy has never held (State → Known debt); (3) two active notes homed only to a **project** cannot restore onto a box without that project, and four task/schedule links cannot survive a bare restore — both are warned per row rather than dropped silently, and both are now accepted limits in Knowledge.
 
 ### Slice B — Vault (implementer + independent reviewer + security-review)
 Scope: `vault_notes`, `vault_meta` (wrapped keys), `vault_audit`. A random data key wrapped **twice** — `scrypt(passphrase)` for the read path, escrow key for root-only recovery. AES-GCM over title/body/Thoughts/attachment bytes. Session unlock; locked list = lock + date; unlocked session decrypts titles. `backend/vault.py` owns all crypto. `wm vault` CLI including the root-only `recover`. Move-to-vault per decision 6. **Drain the 4 quarantined secrets** into the vault, mark the quarantine rows drained, remove the 0600 files. Declare `cryptography` in `pyproject.toml`.
