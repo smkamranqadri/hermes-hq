@@ -1,6 +1,6 @@
 # Phase 4 Plan — Vault, Export, Reminders, Revisions
 
-**Status:** IN PROGRESS — **slice A (Export) SHIPPED 2026-09-10** (`d4b742a`, suite 423 → 437; proof in `state/current.md`). Slice B (Vault) is next. Planned 2026-09-10 (owner-interviewed in session; the eight decisions below are locked — do not relitigate in build tasks).
+**Status:** **COMPLETE 2026-09-10** — all four slices shipped and live: **A Export** (`d4b742a`), **B Vault** (`125ad58`, two review rounds + a security pass), **C reminders push-on-due** and **D revision history**. Suite 423 → 520. Proof for each in `state/current.md`. Planned 2026-09-10 (owner-interviewed in session; the eight decisions below are locked — do not relitigate in build tasks).
 **Parent:** `intent/SecondBrainPlan.md` → Phase 4.
 **Work mode:** Phase — four slices in a fixed order, each shipping something the owner reviews before the next starts.
 **Build route:** slices A, C, D direct in-session; **slice B (Vault) is built by an implementer subagent and reviewed by an independent reviewer subagent**, plus a `security-review` pass over the crypto and the destruction transaction before deploy (owner's call — it is the first irreversible delete path this system has ever had).
@@ -57,17 +57,17 @@ Scope: `GET /api/brain/export.zip`, owner-only (agent session refused). Folders 
 
 **What slice A found that the plan did not predict:** (1) the export is **fast** — 0.95 s for 945 notes and 31.4 MB — so the "becomes a background job" contingency is dead, and the route builds synchronously; (2) the restore surfaced a **live data anomaly**, notes #11/#13 carrying `zzz-deep`, a tag the closed taxonomy has never held (State → Known debt); (3) two active notes homed only to a **project** cannot restore onto a box without that project, and four task/schedule links cannot survive a bare restore — both are warned per row rather than dropped silently, and both are now accepted limits in Knowledge.
 
-### Slice B — Vault (implementer + independent reviewer + security-review)
+### Slice B — Vault (implementer + independent reviewer + security-review) — **SHIPPED 2026-09-10** ✅ (`125ad58`)
 Scope: `vault_notes`, `vault_meta` (wrapped keys), `vault_audit`. A random data key wrapped **twice** — `scrypt(passphrase)` for the read path, escrow key for root-only recovery. AES-GCM over title/body/Thoughts/attachment bytes. Session unlock; locked list = lock + date; unlocked session decrypts titles. `backend/vault.py` owns all crypto. `wm vault` CLI including the root-only `recover`. Move-to-vault per decision 6. **Drain the 4 quarantined secrets** into the vault, mark the quarantine rows drained, remove the 0600 files. Declare `cryptography` in `pyproject.toml`.
 
 **DoD:** vault note round-trips through lock/unlock; **wrong passphrase refused**; locked list shows no title; **agent denial proven by enumerating every route and every `wm note` command against `vault_notes`**; **escrow key absent from a fresh `wm backup`** (test); the root `recover` CLI opens the vault with the passphrase unknown; move-to-vault leaves **0 rows in `notes`, 0 in FTS, 0 in `note_revisions`** with the audit row present; **grep of `hq.db` AND of a fresh REAL backup finds 0 hits** for `PRIVATE KEY` and `aws_access_key_id` while all 4 secrets stay readable in the vault; an **export taken while locked contains 0 vault files**; suite green; 390×844 unlock + create + move, 0 page errors; `wm check` Integrity OK, health 200. **Take a `wm backup` before this slice touches the live DB.**
 
-### Slice C — Reminders push on due (direct)
+### Slice C — Reminders push on due (direct) — **SHIPPED 2026-09-10** ✅
 Scope: a fired reminder adds a notification so the dispatcher's existing `push.sync_and_push()` delivers it. Today `_spawn_from_schedule` mints the task and records the firing and that is all.
 
 **DoD:** a one-shot reminder firing produces **exactly one** notification and one push; a `late` catch-up firing does **not** double-notify (`source_key` dedupe, the pattern the schedule-error notification already uses); **skipped and error firings notify nothing as due**; test + live proof with a real one-shot reminder.
 
-### Slice D — Revision history UI (direct)
+### Slice D — Revision history UI (direct) — **SHIPPED 2026-09-10** ✅
 Scope: store read fn + `GET /api/brain/note/{id}/revisions` + a drawer listing edits (who/when) with a diff against current, over the **942 rows already written** (400 at plan time; the 2026-09-10 queue drain added the rest).
 
 **DoD:** a librarian-edited note lists its snapshots with `edited_by` and timestamps and a readable diff; vault notes have no revision path at all (structural — they are not in `notes`); suite green; 390×844, 0 page errors.
