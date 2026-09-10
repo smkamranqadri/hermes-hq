@@ -92,6 +92,22 @@ Multi-area membership / any join table. Renaming, merging or re-parenting the 7 
 
 Wave 2 per `intent/ImportPlan.md` (old-hermes, 1 unit — exercises `split` on a structured doc), then obsidian 121 as the real test of whether the descriptions work.
 
+## Home was RESTORED 2026-09-10 — right on the evidence available, wrong on the evidence that arrived
+
+Decision 2 retired Home because it held **0 active notes** and its only archived ones were three copies of a Work/payments item the source had misfiled. That was true of the library **as it stood on 2026-09-08** — focus, old-hermes and obsidian: three developer-shaped sources with almost no personal-life content in them.
+
+**Wave 4 (apple-notes, 250 notes) then imported the personal half of his life, and the gap showed immediately.** The audit of proposals #316–435 found the librarian archiving real material with no area at all, correctly refusing to stretch it into a nearly-right one: `City Trip Plan` (a 1,241-char itinerary), `Ride Booking` (cab-app research), `Camera` (lens and shutter settings), `CEWS`. None of the 17 areas covered trips, the car, the house or hobby gear. This was the **second** time the retirement stranded content — the first was wave 2's personal-context split, which the owner hand-filed into Career / AI Workflow / Health / Finance.
+
+**The lesson for future taxonomy calls: an area with no notes is not the same as an area with no purpose.** The evidence for retiring Home came from a corpus that had not yet received the source most likely to fill it. Where an empty area names a real part of life, prefer describing it over retiring it until every wave has landed.
+
+Restored with a description carrying its exclusions, and **Family's description was corrected in the same change** — it had absorbed "and household matters generally" only because Home was gone, which would now hand the librarian two defensible answers for one note:
+- **Home** — "Personal life logistics — trips and itineraries, the car, the house and its appliances, hobby gear and how to use it. Things I'm buying go to Shopping; things I make with my hands go to DIY; the people at home go to Family."
+- **Family** — "The people at home — Amna, Alina, Anabia: school and admissions, plans and follow-ups for them. Household and trip logistics go to Home; things to buy go to Shopping."
+
+Journal and Space stay retired: nothing in waves 3 or 4 has landed homeless for want of either. Live areas 16 → **17**.
+
+**Four pending proposals now have a better answer than the one they carry** — #386 (`CEWS`), #388 (`Camera`), #390 (`Ride Booking`), #407 (`City Trip Plan`) all propose archive-with-no-area on the reasoning that no description covers them, which is no longer true. Left in the queue for the owner to approve-with-edits into Home; not rejected on his behalf.
+
 ## What shipped (2026-09-08)
 
 **Step 1 — mechanism.** `areas.description` + migration (idempotent, applied to the live DB on service restart); `update_area(name/description/archived)` and `get_area` on the audited store path with an audit row per edit; the retire guard refusing while live notes or live sub-areas remain, with the count in the message; `PATCH /api/areas/{id}` and `GET /api/areas?include_archived=1`; `wm note areas` printing each description under its name; `areaLabel`/`AreaChip`/`areaRetired` so a retired area renders muted as `Name · retired` instead of vanishing; the Library area header showing the description and the refile modal showing it at the moment of filing; librarian `SKILL.md` updated for both the descriptions and the ambiguity rule.
