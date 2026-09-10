@@ -233,3 +233,23 @@ def test_directly_added_notifications_are_pushed_too(env, monkeypatch):
     sent.clear()
     push.sync_and_push(db_path=db, background=False)
     assert sent == [] or sent[0] == []                         # never pushed twice
+
+
+# ---- `wm dispatch` -----------------------------------------------------
+
+def test_wm_dispatch_runs(env):
+    """It raised ModuleNotFoundError from 2026-08 until 2026-09-10 — `import
+    wm_dispatch` instead of `from core import wm_dispatch` — because nothing
+    ever ran it. The documented manual-tick escape hatch was dead the whole
+    time. This test is here so the next import mistake is caught by CI rather
+    than by someone needing the escape hatch in an emergency."""
+    import io
+    from core import wm_cli
+    buf, real = io.StringIO(), sys.stdout
+    sys.stdout = buf
+    try:
+        rc = wm_cli.main(["dispatch"])
+    finally:
+        sys.stdout = real
+    assert rc == 0
+    assert "dispatch" in buf.getvalue().lower() or "ready" in buf.getvalue().lower()

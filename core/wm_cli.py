@@ -511,7 +511,10 @@ def cmd_goal_delete(args):
 def cmd_dispatch(args):
     # T2: manual trigger runs the SAME dispatcher the cron auto-tick uses
     # (single-flight lock prevents overlap — see wm_dispatch.run_dispatch).
-    import wm_dispatch
+    # `import wm_dispatch` raised ModuleNotFoundError from 2026-08 until
+    # 2026-09-10: the module is `core.wm_dispatch` and every other importer in
+    # the repo says so. The command had simply never been run.
+    from core import wm_dispatch
     summary = wm_dispatch.run_dispatch()
     if summary.get("skipped"):
         _p("wm dispatch: another tick is already running (single-flight lock) — "
