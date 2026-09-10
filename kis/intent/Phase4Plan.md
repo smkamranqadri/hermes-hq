@@ -9,7 +9,9 @@
 
 Close the Second Brain with the two pieces that carry Phase 4's DoD — a **private vault** the librarian structurally cannot reach, and an **export** that is real portability rather than a readable souvenir — plus two measured gaps that are cheap to close (reminders that fire without telling anyone; a revision table with no read path).
 
-## Measured starting facts (verified 2026-09-10, not remembered)
+## Measured starting facts (verified 2026-09-10 at plan time, not remembered)
+
+**Stale after the 2026-09-10 queue drain — this table is the plan-time baseline, not current reality.** The library is now 1037 notes (461 active / 576 archived / 0 inbox) and `note_revisions` holds 942 rows. Live counts live in State → Now.
 
 | fact | value | how it was checked |
 |---|---|---|
@@ -66,7 +68,7 @@ Scope: a fired reminder adds a notification so the dispatcher's existing `push.s
 **DoD:** a one-shot reminder firing produces **exactly one** notification and one push; a `late` catch-up firing does **not** double-notify (`source_key` dedupe, the pattern the schedule-error notification already uses); **skipped and error firings notify nothing as due**; test + live proof with a real one-shot reminder.
 
 ### Slice D — Revision history UI (direct)
-Scope: store read fn + `GET /api/brain/note/{id}/revisions` + a drawer listing edits (who/when) with a diff against current, over the **400 rows already written**.
+Scope: store read fn + `GET /api/brain/note/{id}/revisions` + a drawer listing edits (who/when) with a diff against current, over the **942 rows already written** (400 at plan time; the 2026-09-10 queue drain added the rest).
 
 **DoD:** a librarian-edited note lists its snapshots with `edited_by` and timestamps and a readable diff; vault notes have no revision path at all (structural — they are not in `notes`); suite green; 390×844, 0 page errors.
 
@@ -84,4 +86,4 @@ Wiki compile and the `wiki-update` proposal kind (own plan later — **and the `
 Suite + live Playwright at 390×844 on the REAL library + **DB-level greps of `hq.db` and of a FRESH real backup** (the discipline that proved import quarantine) + a scratch-DB round trip for export. Backup before slice B. No vault work touches the live DB before the export ships.
 
 ## Sequencing note
-The **515 pending proposals remain the owner's** and are Phase 3's last DoD clause. They do not block this phase — no slice here touches the proposal path.
+The 515 pending proposals were Phase 3's last DoD clause and **the owner cleared them on 2026-09-10 — 0 pending, Phase 3 fully COMPLETE**. They never blocked this phase; no slice here touches the proposal path.
