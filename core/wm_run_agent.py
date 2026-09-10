@@ -179,6 +179,18 @@ _PROVIDER_RES = [
     re.compile(r"(?i)\b(?:status|code|http)\W{0,3}(?:4\d\d|5\d\d)\b"),
     re.compile(r"(?i)\b(?:4\d\d|5\d\d)\b[^\n]{0,24}"
                r"\b(?:error|limit|exceeded|denied|unavailable|timed? ?out)\b"),
+    # Transport failures that never say the word "error". Run 493 died on
+    # "API call failed after 3 retries: Hermes can't reach the model provider.
+    # You may be offline." and every pattern above missed it, because they all
+    # want `api error` / `connection error` adjacency — so the operator was
+    # handed a bare "missing completion file" for what was a provider outage.
+    re.compile(r"(?i)\bafter \d+ retr(?:y|ies)\b"),
+    re.compile(r"(?i)\b(?:can(?:not|[’']?t)|could ?n(?:ot|[’']?t)"
+               r"|unable to|failed to) "
+               r"(?:reach|connect(?: to)?)\b"),
+    re.compile(r"(?i)\bconnection (?:refused|reset|closed|aborted|failed)\b"),
+    re.compile(r"(?i)\byou may be offline\b"),
+    re.compile(r"(?i)\b(?:api|provider|model|request) call failed\b"),
 ]
 
 # Tier 2 — a generic crash/abort. Real, but less specific: used only when no
@@ -191,6 +203,15 @@ _GENERIC_RES = [
     re.compile(r"(?i)\b(?:command not found|no such file or directory"
                r"|permission denied|out of memory|killed)\b"),
     re.compile(r"(?i)\btimed out\b"),
+    # The agent's OWN admission that it did not honour the contract. Run 487
+    # exited 0 having said "I couldn't complete the required final
+    # completion-file write in this run" -- the truest possible cause, and
+    # nothing here matched it. Deliberately narrow: it needs a negated verb AND
+    # the word completion, so the success line "Completion recorded at: ..."
+    # can never trip it.
+    re.compile(r"(?i)\b(?:can(?:not|[’']?t)|could ?n(?:ot|[’']?t)"
+               r"|did ?n(?:ot|[’']?t)|unable to|failed to)\b"
+               r"[^\n]{0,60}\bcompletion[ -]?(?:file|json)?\b"),
 ]
 
 
