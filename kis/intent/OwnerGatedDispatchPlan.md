@@ -67,7 +67,7 @@ Coder #179 should inspect and update the smallest shared predicates/helpers rath
 
 Use the existing test launcher seam and a scratch project, not the production `hq.db`. Assert from the database and dispatcher summary that:
 
-- before approval: `wm dispatch` reports no dispatched run for the gated task, and no run/worktree is created;
+- before approval: `wm dispatch` reports no dispatched run for the gated task, and no run/worktree is created; **(read this as `run_dispatch()` through the test seam — the `wm dispatch` CLI raised `ModuleNotFoundError` from ~2026-08 until 2026-09-10, so it cannot have been the thing that ran here. The assertions were made through the seam this same section prescribes; only the wording is loose.)**
 - after approval: the next tick reports exactly one dispatched run and the task is `running`;
 - a repeated tick while that run is active reports no duplicate dispatch;
 - the same sequence for a non-gated task still dispatches normally.
