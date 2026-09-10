@@ -1,6 +1,6 @@
 # Import Plan — Second Brain Phase 3
 
-**Status:** PLANNED 2026-09-08. Owner-interviewed in session; every decision below is locked — do not relitigate in build tasks.
+**Status:** **COMPLETE 2026-09-10.** All five waves imported and triaged: 885 of 969 dump units are in the library and the 84 absent are exactly the provable drops (4 empty + 76 duplicate + 4 secret). 545 proposals await the owner's review — the only step left is his. Originally planned 2026-09-08. Owner-interviewed in session; every decision below is locked — do not relitigate in build tasks.
 **Parent:** `intent/SecondBrainPlan.md` → Phase 3 — Import.
 **Work mode:** Phase — wave 0 (capability) then five source waves, each shipping something the owner reviews before the next starts.
 **Built direct in-session** (SecondBrainPlan's established mode for the Second Brain — not through the pipeline).
