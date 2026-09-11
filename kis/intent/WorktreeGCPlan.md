@@ -1,6 +1,6 @@
 # Worktree GC Plan
 
-**Status:** PLANNED 2026-09-11 (owner-interviewed; the four decisions below are locked — do not relitigate in build tasks). Nothing built yet.
+**Status:** **Slice A SHIPPED 2026-09-11** (`62bd010`) — 49 worktrees → 4, 75 MB → 6.5 MB, 38 branches pruned, 54 artifact links rescued. **Slice B (the standing policy) is NOT built**, so worktrees will accumulate again until it is. Owner-interviewed; the four decisions below are locked — do not relitigate in build tasks.
 **Parent:** the long-standing Known-debt item "Worktree GC policy is still unowned", open since 2026-09-02.
 **Work mode:** Standard — two slices, built direct in-session.
 
@@ -45,7 +45,7 @@ These are the reason the slice is worth doing carefully rather than quickly. Eac
 
 ## Slices
 
-### Slice A — the one-off sweep (direct in-session)
+### Slice A — the one-off sweep (direct in-session) — **SHIPPED 2026-09-11** ✅ (`62bd010`)
 `tools/worktree_gc.py`, **dry run by default**. Walks the worktrees root, resolves each directory's owning repo from its `.git` file, classifies clean / dirty / unreadable, and prints the table for the owner to read BEFORE anything is deleted. On `--apply`: tar the distinct untracked drafts to the parachute, `git worktree remove` each directory in its owning repo, `git worktree prune` there, then `git branch -d` each `wm/*` branch — **keeping whatever git refuses**, because lowercase `-d` refusing an unmerged branch is the safety net, not an error to suppress.
 
 **DoD:** dry run lists exactly 47 with owning repo and verdict; the parachute holds **18 distinct files** and opens; after apply — **0 directories**, `git worktree list` clean in both repos, **6 branches survive and are exactly the unmerged ones**, `wm check` Integrity OK, health 200. A `wm backup` is taken before `--apply` touches anything.
@@ -56,6 +56,13 @@ These are the reason the slice is worth doing carefully rather than quickly. Eac
 - **`result_paths` rewrite** per decision 2, one audited transaction per task.
 
 **DoD:** a clean + terminal + >24 h worktree is reaped on a tick; a <24 h one is not; a RUNNING task's is not, proven with a live pid; a dirty one is never auto-removed; a path outside the root is refused; an unreadable `.git` counts as dirty; the rewrite moves a link to the main checkout and leaves a failed task's link broken; `wm gc` dry-run writes nothing — **proven by spying on the remove call, not by counting rows afterwards**. Suite green from the 526 baseline.
+
+## What slice A found that the plan did not predict
+
+1. **The tool had a silent undercount that would have destroyed work while reporting success.** Plain `git status --porcelain` **collapses an untracked directory to a single line**, so run-407 reported 7 untracked paths while holding **63 files**. The parachute would have archived 18 files and dropped 60-odd. `-uall` is mandatory anywhere a decision is made from untracked paths.
+2. **The live-run guard belonged in slice A, not slice B.** It was specced as part of the standing policy; the owner flagged an agent mid-run on personal-brand and it was added before applying. It then held back **run-411 and run-412** — whose runs are `blocked`, not finished — which this very plan had written off as dead reorg leftovers. Judgement from a stale note would have deleted them.
+3. **The numbers move while you plan.** 47 worktrees when the plan was written, 48 at the first dry run, 49 at apply; unmerged branches 6 → 8. **Re-measure at apply time; a plan's figures are a snapshot, never the target.**
+4. **Applying A before B cost 43 artifact links.** Decision 2's rescue is slice B logic, so the sweep broke links it was meant to repoint (239 → 282 broken). Applied retroactively the same day: 54 repointed, 228 broken, better than the starting point — but the ordering was wrong and a future sweep must carry the rescue with it.
 
 ## Out of scope
 A general artifact store. Reaping worktrees belonging to non-`wm/*` branches. Touching the 6 unmerged branches. Anything inside `/opt/data/projects/*` checkouts themselves.
