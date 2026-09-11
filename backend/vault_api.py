@@ -66,8 +66,15 @@ class Passphrase(BaseModel):
 
 
 class NewPassphrase(BaseModel):
+    # The STORE owns the length floor, deliberately — not this model. Enforcing
+    # 12 here would reject with a generic 422 and throw away the store's
+    # explanation ("hq.db can be read by anything running on this box, so the
+    # passphrase is the only thing protecting the contents against an offline
+    # attack"), which is the reason the rule exists. One source of truth, and
+    # the owner gets told why. (Tried the other way on 2026-09-11; it broke the
+    # test that pins that message, and the test was right.)
     passphrase: str = Field(min_length=1, max_length=400)
-    new_passphrase: str = Field(min_length=8, max_length=400)
+    new_passphrase: str = Field(min_length=1, max_length=400)
 
 
 class VaultNoteIn(BaseModel):

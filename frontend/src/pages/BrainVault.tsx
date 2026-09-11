@@ -14,7 +14,7 @@
  */
 import { useState } from 'react'
 import { useQueryClient } from '@tanstack/react-query'
-import { ago, useVaultAudit, useVaultNote, useVaultNotes, useVaultStatus, vaultAttachmentUrl, vaultCreate, vaultInit, vaultLock, vaultUnlock, when, type VaultNoteRow } from '../api'
+import { ago, useVaultAudit, useVaultNote, useVaultNotes, useVaultStatus, vaultAttachmentUrl, vaultCreate, vaultInit, vaultLock, vaultSetPassphrase, vaultUnlock, when, type VaultNoteRow } from '../api'
 import { GlassCard, PageHeader } from '../components/GlassCard'
 import { BrainSubNav, useBrainCounts } from '../components/brain'
 import { Markdown } from '../components/chat/Markdown'
@@ -168,6 +168,65 @@ function UnlockedRow({ n, onOpen, open }: { n: VaultNoteRow; onOpen: () => void;
   )
 }
 
+/** Change the vault passphrase.
+ *
+ * Added 2026-09-11. The route had existed since the vault shipped and NOTHING
+ * called it, so the only way to rotate was to put the new passphrase on a
+ * command line — which is exactly what you are rotating away from after one
+ * has leaked. Re-wrapping keeps the same data key: nothing sealed is
+ * re-encrypted and the recovery code stays valid. */
+function ChangePassphrase({ onClose }: { onClose: () => void }) {
+  const toast = useToast()
+  const [cur, setCur] = useState('')
+  const [next, setNext] = useState('')
+  const [again, setAgain] = useState('')
+  const [busy, setBusy] = useState(false)
+  const short = next.length > 0 && next.length < 12
+  const mismatch = again.length > 0 && next !== again
+  const save = async () => {
+    setBusy(true)
+    try {
+      await vaultSetPassphrase(cur, next)
+      toast('Passphrase changed — your recovery code still works')
+      onClose()
+    } catch (e) {
+      toast(e instanceof Error ? e.message : String(e), 'err')
+    } finally {
+      // never leave a passphrase sitting in a controlled input, even on failure
+      setBusy(false); setCur(''); setNext(''); setAgain('')
+    }
+  }
+  return (
+    <Modal title="Change the vault passphrase" onClose={onClose}>
+      <div className="flex flex-col gap-3" data-change-passphrase>
+        <Field label="Current passphrase">
+          <TextInput type="password" autoComplete="current-password" autoFocus
+                     value={cur} onChange={e => setCur(e.target.value)} />
+        </Field>
+        <Field label="New passphrase" hint="At least 12 characters. hq.db can be read by anything running on this box, so this is the only thing protecting the contents against an offline attack.">
+          <TextInput type="password" autoComplete="new-password"
+                     value={next} onChange={e => setNext(e.target.value)} />
+        </Field>
+        <Field label="Confirm new passphrase">
+          <TextInput type="password" autoComplete="new-password"
+                     value={again} onChange={e => setAgain(e.target.value)} />
+        </Field>
+        {short && <p className="text-[11px] text-error">At least 12 characters.</p>}
+        {mismatch && <p className="text-[11px] text-error">The two new passphrases do not match.</p>}
+        <p className="text-[11px] text-muted">
+          The same data key is re-wrapped, so nothing sealed is re-encrypted and your
+          one-time recovery code keeps working.
+        </p>
+        <div className="flex justify-end gap-2">
+          <Btn kind="ghost" onClick={onClose} disabled={busy}>Cancel</Btn>
+          <Btn busy={busy} disabled={!cur || next.length < 12 || next !== again}
+               onClick={() => void save()}>Change it</Btn>
+        </div>
+      </div>
+    </Modal>
+  )
+}
+
 function VaultNotePanel({ id, onClose }: { id: number; onClose: () => void }) {
   const q = useVaultNote(id)
   const n = q.data
@@ -245,6 +304,7 @@ export function BrainVault() {
   // that component's state and so rendered for exactly one frame.
   const [newCode, setNewCode] = useState<{ code: string; note: string } | null>(null)
   const qc = useQueryClient(); const toast = useToast()
+  const [changing, setChanging] = useState(false)
   const unlocked = st.data?.unlocked === true
   const rows = notes.data?.notes ?? []
   const lock = async () => {
@@ -256,11 +316,13 @@ export function BrainVault() {
   return (
     <section className="mx-auto max-w-6xl p-4 sm:p-6">
       {creating && <NewVaultNote onClose={() => setCreating(false)} />}
+      {changing && <ChangePassphrase onClose={() => setChanging(false)} />}
       {newCode && <RecoveryCodeModal code={newCode.code} note={newCode.note}
         onDone={() => { setNewCode(null); qc.invalidateQueries({ queryKey: ['vault-status'] }) }} />}
       <PageHeader crumb="second-brain // vault" title="Vault" right={
         <div className="flex flex-wrap items-center gap-2">
           <BrainSubNav inbox={inbox} review={review} />
+          {unlocked && <Btn kind="ghost" onClick={() => setChanging(true)} data-vault-passphrase>Change passphrase</Btn>}
           {unlocked && <Btn kind="ghost" onClick={() => void lock()} data-vault-lock>Lock</Btn>}
           {unlocked && <Btn onClick={() => setCreating(true)} data-vault-new>+ Note</Btn>}
         </div>} />

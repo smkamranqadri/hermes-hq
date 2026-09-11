@@ -397,6 +397,10 @@ export type VaultMoveImpact = {
 export const useVaultMoveImpact = (noteId: number | null, enabled: boolean) =>
   useQuery({ queryKey: ['vault-move-impact', noteId], queryFn: () => get<VaultMoveImpact>(`/api/vault/move-impact/${noteId}`), enabled: enabled && noteId != null, retry: false })
 export const vaultLock = () => post<VaultStatus>('/api/vault/lock')
+// Changing the passphrase re-wraps the SAME data key: nothing sealed is
+// re-encrypted and the recovery code keeps working untouched.
+export const vaultSetPassphrase = (passphrase: string, new_passphrase: string) =>
+  post<{ ok: boolean }>('/api/vault/passphrase', { passphrase, new_passphrase })
 export const vaultCreate = (title: string, body: string) => post<{ id: number }>('/api/vault/notes', { title, body })
 export const vaultMove = (note_id: number) => post<{ ok: true; vault_note_id: number }>('/api/vault/move', { note_id })
 export const vaultAttachmentUrl = (id: number) => `/api/vault/attachment/${id}`

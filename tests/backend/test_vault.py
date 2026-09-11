@@ -2041,3 +2041,75 @@ def test_an_explicit_passphrase_still_wins(monkeypatch):
     from core import wm_cli
     args = type("A", (), {"passphrase": "explicit"})()
     assert wm_cli._ask_passphrase(args) == "explicit"
+
+
+# ---- changing the passphrase (2026-09-11) -------------------------------
+#
+# The route shipped with the vault and NOTHING called it, so the only way to
+# rotate was to put the new passphrase on a command line — exactly what you are
+# rotating away from after one has leaked.
+
+def test_changing_the_passphrase_keeps_everything_sealed_readable(api):
+    c, store, db, tmp = api
+    h = login(c)
+    from backend import vault as V
+    c.post("/api/vault/init", json={"passphrase": PW}, headers=h)
+    nid = c.post("/api/vault/notes", json={"title": "Bank", "body": MARKER},
+                 headers=h).json()["note"]["id"]
+    NEW = "a-completely-different-one"
+    r = c.post("/api/vault/passphrase",
+               json={"passphrase": PW, "new_passphrase": NEW}, headers=h)
+    assert r.status_code == 200
+    # the same DATA key is re-wrapped: the sealed note is still readable
+    assert c.get("/api/vault/note/%d" % nid, headers=h).json()["body"] == MARKER
+    # the old passphrase is dead, the new one works
+    c.post("/api/vault/lock", headers=h)
+    assert c.post("/api/vault/unlock", json={"passphrase": PW},
+                  headers=h).status_code == 401
+    assert c.post("/api/vault/unlock", json={"passphrase": NEW},
+                  headers=h).status_code == 200
+    assert V.unlock(NEW, db_path=db) is not None
+
+
+def test_the_recovery_code_survives_a_passphrase_change(api):
+    """Rotating must not strand the one-time code — it wraps the data key
+    independently, and the data key does not change."""
+    c, store, db, tmp = api
+    h = login(c)
+    from backend import vault as V
+    code = c.post("/api/vault/init", json={"passphrase": PW},
+                  headers=h).json()["recovery_code"]
+    c.post("/api/vault/passphrase",
+           json={"passphrase": PW, "new_passphrase": "another-long-passphrase"},
+           headers=h)
+    assert V.unwrap_recovery(code, db_path=db) is not None
+
+
+def test_a_wrong_current_passphrase_changes_nothing(api):
+    c, store, db, tmp = api
+    h = login(c)
+    from backend import vault as V
+    c.post("/api/vault/init", json={"passphrase": PW}, headers=h)
+    r = c.post("/api/vault/passphrase",
+               json={"passphrase": PW + "x", "new_passphrase": "a-new-long-one"},
+               headers=h)
+    assert r.status_code == 401
+    assert V.unlock(PW, db_path=db) is not None          # untouched
+    with pytest.raises(V.VaultError):
+        V.unlock("a-new-long-one", db_path=db)
+
+
+def test_a_short_new_passphrase_is_refused_WITH_THE_REASON(api):
+    """409 from the store, not a generic 422 from the model.
+
+    The floor lives in exactly one place on purpose. Moving it to the pydantic
+    model was tried on 2026-09-11 and reverted: it rejects a character earlier
+    but discards the store's explanation, and the reason IS the useful part.
+    """
+    c, store, db, tmp = api
+    h = login(c)
+    c.post("/api/vault/init", json={"passphrase": PW}, headers=h)
+    r = c.post("/api/vault/passphrase",
+               json={"passphrase": PW, "new_passphrase": "short"}, headers=h)
+    assert r.status_code == 409
+    assert "at least 12" in r.text and "offline attack" in r.text
