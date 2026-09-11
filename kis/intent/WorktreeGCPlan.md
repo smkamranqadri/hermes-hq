@@ -1,6 +1,6 @@
 # Worktree GC Plan
 
-**Status:** **Slice A SHIPPED 2026-09-11** (`62bd010`) — 49 worktrees → 4, 75 MB → 6.5 MB, 38 branches pruned, 54 artifact links rescued. **Slice B (the standing policy) is NOT built**, so worktrees will accumulate again until it is. Owner-interviewed; the four decisions below are locked — do not relitigate in build tasks.
+**Status:** **COMPLETE 2026-09-11.** Slice A (`62bd010`) cleared the backlog — 49 worktrees → 4, 75 MB → 6.5 MB, 38 branches pruned, 54 artifact links rescued. Slice B (`f4b0b5d`) shipped the standing policy: `core/worktree_gc.py` behind both the hourly dispatcher sweep and `wm gc`, with the link rescue carried INTO the reap. Suite 423 → 537. Owner-interviewed; the four decisions below are locked — do not relitigate in build tasks.
 **Parent:** the long-standing Known-debt item "Worktree GC policy is still unowned", open since 2026-09-02.
 **Work mode:** Standard — two slices, built direct in-session.
 
@@ -50,7 +50,7 @@ These are the reason the slice is worth doing carefully rather than quickly. Eac
 
 **DoD:** dry run lists exactly 47 with owning repo and verdict; the parachute holds **18 distinct files** and opens; after apply — **0 directories**, `git worktree list` clean in both repos, **6 branches survive and are exactly the unmerged ones**, `wm check` Integrity OK, health 200. A `wm backup` is taken before `--apply` touches anything.
 
-### Slice B — the standing policy (direct in-session)
+### Slice B — the standing policy (direct in-session) — **SHIPPED 2026-09-11** ✅ (`f4b0b5d`)
 - **Dispatcher-tick sweep:** reap when the task is terminal, the run has no live pid, the tree is clean, and it terminated > 24 h ago.
 - **`wm gc`:** owner-only, dry-run by default, `--apply` to act, parachutes dirty content before removing.
 - **`result_paths` rewrite** per decision 2, one audited transaction per task.
