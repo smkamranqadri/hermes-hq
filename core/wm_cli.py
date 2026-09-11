@@ -706,6 +706,45 @@ def _print_import_result(res, args):
     return 1 if res["errors"] else 0
 
 
+def cmd_gc(args):
+    """OWNER-ONLY. Reap spent run worktrees. Dry run unless --apply.
+
+    Outside the `wm note` group on purpose: that group is the librarian's
+    read-only surface, and removing directories is not the librarian's job.
+    """
+    from core import worktree_gc as gc
+    plan = gc.plan_sweep(store)
+    if plan.get("root_missing"):
+        _p("no worktrees root at %s — nothing to do" % plan["root"])
+        return 0
+    dirty = [r for r in plan["keep"] if r["why"].endswith("wait for `wm gc`")]
+    held = [r for r in plan["keep"] if r not in dirty]
+    _p("%s %s" % ("APPLYING —" if args.apply else "DRY RUN — nothing touched:",
+                  plan["root"]))
+    _p("  %-18s %d" % ("safe to reap", len(plan["reap"])))
+    _p("  %-18s %d   (parachuted first, then removed with --all)"
+       % ("dirty", len(dirty)))
+    _p("  %-18s %d   (live or unfinished — never touched)" % ("held", len(held)))
+    for r in held:
+        _p("      %-12s %s" % (r["name"], r["why"]))
+    for r in dirty:
+        _p("      %-12s dirty: %d untracked file(s)" % (r["name"], len(r["untracked"])))
+    if not args.apply:
+        _p("\nNothing was touched. Re-run with --apply (add --all for the dirty ones).")
+        return 0
+    res = gc.sweep(store, dry_run=False, include_dirty=bool(args.all))
+    if res["parachute"] and res["parachute"]["path"]:
+        _p("  parachute: %s (%d file(s))"
+           % (res["parachute"]["path"], res["parachute"]["files"]))
+    _p("  removed %d, failed %d" % (len(res["removed"]), len(res["failed"])))
+    for name, why in res["failed"][:5]:
+        _p("    FAILED %s: %s" % (name, why))
+    if res["links"]:
+        _p("  repointed %d artifact link(s) across %d task(s)"
+           % (res["links"], res["link_tasks"]))
+    return 0
+
+
 def cmd_brain_export(args):
     """OWNER-ONLY. Write the whole library to a markdown zip."""
     from backend import notes_export as nx
@@ -1661,6 +1700,16 @@ def build_parser():
     bex.add_argument("--no-attachments", dest="no_attachments", action="store_true",
                      help="notes only — skip the attachment bytes")
     bex.set_defaults(fn=cmd_brain_export)
+
+    # Same reasoning as brain-import/brain-export: NOT under `wm note`.
+    gcp = sub.add_parser("gc", help="OWNER-ONLY: reap spent run worktrees "
+                                    "(dry run unless --apply)")
+    gcp.add_argument("--apply", action="store_true",
+                     help="actually remove; without it nothing is touched")
+    gcp.add_argument("--all", action="store_true",
+                     help="also remove DIRTY worktrees, parachuting their "
+                          "untracked content first")
+    gcp.set_defaults(fn=cmd_gc)
 
     # Phase 4 slice B. OWNER-ONLY and passphrase-gated; deliberately NOT under
     # `wm note` (that group is the librarian's, and its test asserts it has no

@@ -335,6 +335,28 @@ def run_dispatch(db_path=None):
                         store.set_review_status(run["review_id"], "failed",
                                                 db_path=db_path)
 
+            # 5. reap spent run worktrees (intent/WorktreeGCPlan.md slice B).
+            # Hourly, not every 20-second tick — a sweep shells out to git once
+            # per worktree. Never touches a dirty tree; that is `wm gc`'s job.
+            # Failure here must never break a dispatch tick: the engine's job is
+            # to run work, and garbage collection is strictly secondary.
+            try:
+                from core import worktree_gc as gc
+                if gc.sweep_due(store, db_path=db_path):
+                    res = gc.sweep(store, db_path=db_path, dry_run=False)
+                    gc.mark_swept(store, db_path=db_path)
+                    if res["removed"]:
+                        summary["reaped"] = res["removed"]
+                        store.log_activity(
+                            action="worktrees_reaped",
+                            detail="reaped %d spent worktree(s): %s%s"
+                                   % (len(res["removed"]), ", ".join(res["removed"][:5]),
+                                      " (+%d links repointed)" % res["links"]
+                                      if res["links"] else ""),
+                            db_path=db_path)
+            except Exception as e:      # noqa: BLE001 - GC never breaks dispatch
+                summary["errors"].append("worktree gc: %s" % e)
+
             return summary
         finally:
             try:
