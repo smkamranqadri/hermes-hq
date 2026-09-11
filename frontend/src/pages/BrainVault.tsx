@@ -181,9 +181,12 @@ function ChangePassphrase({ onClose }: { onClose: () => void }) {
   const [next, setNext] = useState('')
   const [again, setAgain] = useState('')
   const [busy, setBusy] = useState(false)
-  const short = next.length > 0 && next.length < 12
-  const mismatch = again.length > 0 && next !== again
+  const blocked = !cur ? 'Enter your current passphrase.'
+    : next.length < 12 ? 'The new passphrase must be at least 12 characters.'
+    : next !== again ? 'The two new passphrases do not match.'
+    : null
   const save = async () => {
+    if (blocked) { toast(blocked, 'err'); return }
     setBusy(true)
     try {
       await vaultSetPassphrase(cur, next)
@@ -211,16 +214,18 @@ function ChangePassphrase({ onClose }: { onClose: () => void }) {
           <TextInput type="password" autoComplete="new-password"
                      value={again} onChange={e => setAgain(e.target.value)} />
         </Field>
-        {short && <p className="text-[11px] text-error">At least 12 characters.</p>}
-        {mismatch && <p className="text-[11px] text-error">The two new passphrases do not match.</p>}
+        {/* The button stays clickable and says WHY it cannot proceed. A disabled
+          * button under a small red line reads as "done" rather than "blocked":
+          * the owner changed his passphrase, saw nothing happen, and reported it
+          * as changed — no request had been sent at all (2026-09-11). */}
+        {blocked && <p className="text-[11px] text-error" data-change-blocked>{blocked}</p>}
         <p className="text-[11px] text-muted">
           The same data key is re-wrapped, so nothing sealed is re-encrypted and your
           one-time recovery code keeps working.
         </p>
         <div className="flex justify-end gap-2">
           <Btn kind="ghost" onClick={onClose} disabled={busy}>Cancel</Btn>
-          <Btn busy={busy} disabled={!cur || next.length < 12 || next !== again}
-               onClick={() => void save()}>Change it</Btn>
+          <Btn busy={busy} onClick={() => void save()} data-change-submit>Change it</Btn>
         </div>
       </div>
     </Modal>
