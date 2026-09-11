@@ -785,10 +785,28 @@ def _vault():
 
 def _ask_passphrase(args, prompt="Vault passphrase: "):
     """--passphrase for scripts and tests; getpass otherwise, so the secret
-    never lands in the shell history or a process listing."""
+    never lands in the shell history or a process listing.
+
+    Without a TTY, `getpass` raises EOFError behind a `termios` error and a
+    GetPassWarning — a stack trace that says nothing about what to do. That is
+    not hypothetical: every `wm vault` command was unusable from a
+    non-interactive shell until 2026-09-11, and the owner ran the quarantine
+    drain four times against that traceback. Read stdin when it is piped, and
+    otherwise say plainly what the three options are.
+    """
     if getattr(args, "passphrase", None):
         return args.passphrase
     import getpass
+    if not sys.stdin.isatty():
+        line = sys.stdin.readline()
+        if line:
+            return line.rstrip("\n")
+        raise SystemExit(
+            "error: no terminal to prompt on, and nothing on stdin.\n"
+            "  Either run this from a real terminal, or pipe the passphrase:\n"
+            "    printf '%s\\n' \"$VAULT_PASS\" | wm vault ... \n"
+            "  or pass --passphrase (which lands in your shell history and in "
+            "`ps`, so prefer the pipe).")
     return getpass.getpass(prompt)
 
 

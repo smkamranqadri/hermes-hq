@@ -2005,3 +2005,39 @@ def test_a_non_latin1_attachment_name_does_not_500(api):
     got = c.get("/api/vault/attachment/%d" % _last_vault_attachment_id(db))
     assert got.status_code == 200 and got.content == b"\x89PNG-bytes"
     assert "filename*=UTF-8''" in got.headers["content-disposition"]
+
+
+# ---- the passphrase prompt without a TTY (2026-09-11) -------------------
+#
+# `getpass` raises EOFError behind a termios error when there is no terminal,
+# which is every non-interactive shell. Every `wm vault` command was unusable
+# that way until this fix, and the owner ran the quarantine drain FOUR times
+# against a stack trace that said nothing about what to do.
+
+def test_a_piped_passphrase_is_read_when_there_is_no_tty(monkeypatch):
+    import io
+    from core import wm_cli
+    monkeypatch.setattr(wm_cli.sys, "stdin", io.StringIO("piped-passphrase\n"))
+    monkeypatch.setattr(wm_cli.sys.stdin, "isatty", lambda: False, raising=False)
+    args = type("A", (), {"passphrase": None})()
+    assert wm_cli._ask_passphrase(args) == "piped-passphrase"
+
+
+def test_no_tty_and_no_stdin_explains_itself_instead_of_a_traceback(monkeypatch):
+    import io
+    import pytest as _pytest
+    from core import wm_cli
+    monkeypatch.setattr(wm_cli.sys, "stdin", io.StringIO(""))
+    monkeypatch.setattr(wm_cli.sys.stdin, "isatty", lambda: False, raising=False)
+    args = type("A", (), {"passphrase": None})()
+    with _pytest.raises(SystemExit) as e:
+        wm_cli._ask_passphrase(args)
+    msg = str(e.value)
+    assert "no terminal" in msg and "stdin" in msg          # says what happened
+    assert "--passphrase" in msg                            # and what to do
+
+
+def test_an_explicit_passphrase_still_wins(monkeypatch):
+    from core import wm_cli
+    args = type("A", (), {"passphrase": "explicit"})()
+    assert wm_cli._ask_passphrase(args) == "explicit"
