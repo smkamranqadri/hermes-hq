@@ -50,6 +50,87 @@ def _resolve():
     }
 
 
+def resolve_start_point(task, run_id, db_path=None):
+    """Which branch a new isolated run's worktree should be cut FROM.
+
+    Returns (branch_or_None, reason). None means the primary repo's HEAD —
+    the fallback, and what every run did before WorktreeStartPointPlan.
+
+    The defect this replaces: `git worktree add -b <branch> <path>` with no
+    start-point branches from the primary HEAD, so a BUILD run and the REVIEW
+    run that is supposed to check it both started at `main` and landed as
+    SIBLINGS. Measured on project 7 (2026-09-11): build `1d6642b` and review
+    `dcd2d19` both parented on `d678fb7`, 9 files apart, and the reviewer
+    approved a tree the coder never produced.
+
+    Precedence, by RUN RECENCY rather than task status:
+
+      1. both a parent build branch and this task's own earlier branch exist
+         -> whichever run is NEWER wins.
+      2. only a parent's        -> the parent's (a review finally sees its build)
+      3. only this task's own   -> resume it (a rework amends its own work
+                                   instead of restarting from main)
+      4. neither                -> None (primary HEAD)
+
+    Recency, not `task["status"] == 'rework'`, for two reasons. The status is
+    already gone by the time this runs — `claim_task()` flips ready/rework to
+    'running' BEFORE the dispatcher reaches here, so the row we hold carries a
+    stale pre-claim value. And a plain "rework resumes its own branch" rule is
+    wrong in a real case: when the parent BUILD rebuilds while a REVIEW is
+    pending (exactly the #280/#281 shape), the review must re-base on the NEW
+    build, not resume its own now-stale branch. Comparing run ids gets both.
+
+    Multiple completed parents with branches REFUSE rather than guess: there is
+    no defensible pick, so fall back to the primary HEAD and say so, loudly, in
+    the brief — a reviewer is entitled to know it is not looking at a build.
+    """
+    own = store.get_task_last_branched_run(task["id"], exclude_run_id=run_id,
+                                           db_path=db_path)
+    parents = []
+    for d in store.list_task_deps(task["id"], db_path=db_path):
+        pt = store.get_task(d["depends_on_task_id"], db_path=db_path)
+        if pt is None or pt["status"] != "done":
+            continue
+        pr = store.get_task_last_branched_run(pt["id"], db_path=db_path)
+        if pr is not None:
+            parents.append((pt, pr))
+    if len(parents) > 1:
+        names = ", ".join("#%s" % pt["id"] for pt, _ in parents)
+        if own is not None:
+            return own["branch"], (
+                "resumed this task's own previous run %d (%s); %d completed "
+                "parents (%s) carry branches and there is no defensible pick "
+                "between them" % (own["id"], own["branch"], len(parents), names))
+        return None, (
+            "branched from the primary HEAD because %d completed parents (%s) "
+            "carry branches and there is no defensible pick between them — "
+            "THIS TREE IS NOT A PARENT'S BUILD, do not review it as one"
+            % (len(parents), names))
+    parent = parents[0] if parents else None
+    if parent is not None and own is not None:
+        pt, pr = parent
+        if pr["id"] > own["id"]:
+            return pr["branch"], (
+                "branched from parent task #%s's run %d (%s) — newer than this "
+                "task's own last run %d, so the parent produced fresh work to "
+                "build on" % (pt["id"], pr["id"], pr["branch"], own["id"]))
+        return own["branch"], (
+            "resumed this task's own previous run %d (%s) — newer than parent "
+            "task #%s's run %d, so your earlier work is the base to amend"
+            % (own["id"], own["branch"], pt["id"], pr["id"]))
+    if parent is not None:
+        pt, pr = parent
+        return pr["branch"], (
+            "branched from parent task #%s's run %d (%s) — this tree CONTAINS "
+            "that work" % (pt["id"], pr["id"], pr["branch"]))
+    if own is not None:
+        return own["branch"], (
+            "resumed this task's own previous run %d (%s) — your earlier work "
+            "is the base to amend, not a clean slate" % (own["id"], own["branch"]))
+    return None, ("branched from the primary HEAD — this task has no completed "
+                  "parent with a branch and no earlier run of its own")
+
+
 def run_workdir(task, project, run_id, db_path=None):
     """Determine the run's EFFECTIVE working directory + (optional) branch.
 
@@ -59,8 +140,8 @@ def run_workdir(task, project, run_id, db_path=None):
     tasks keep working in the project's primary_path (worktrees are NOT forced
     on non-code work).
 
-    Returns (workdir, branch). When isolated, the worktree is created now and
-    the run row is tagged with workdir+branch by the caller.
+    Returns (workdir, branch, base_branch, base_reason). When isolated, the
+    worktree is created now and the run row is tagged by the caller.
     """
     primary = (project["primary_path"] if project and project["primary_path"]
                else os.getcwd())
@@ -69,13 +150,13 @@ def run_workdir(task, project, run_id, db_path=None):
         and (store.get_meta("code_worktree", db_path=db_path) or "1") == "1"
     )
     if not use_worktree:
-        return primary, None
+        return primary, None, None, None
     # Only isolate when the project is actually a git working tree.
     try:
         subprocess.run(["git", "-C", primary, "rev-parse", "--is-inside-work-tree"],
                        check=True, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
     except Exception:
-        return primary, None
+        return primary, None, None, None
     wt_root = os.path.join(store.resolve_runs_dir(), "worktrees")
     os.makedirs(wt_root, exist_ok=True)
     wt = os.path.join(wt_root, "run-%d" % run_id)
@@ -85,18 +166,39 @@ def run_workdir(task, project, run_id, db_path=None):
                        stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
     except Exception:
         pass
-    r = subprocess.run(["git", "-C", primary, "worktree", "add", "-b", branch,
-                        wt], stdout=subprocess.DEVNULL,
+    # WorktreeStartPointPlan slice A: cut the branch from the parent BUILD (or
+    # from this task's own earlier work) instead of always from the primary
+    # HEAD. Passing a start-point is the whole fix — without it git uses HEAD.
+    base_branch, base_reason = resolve_start_point(task, run_id, db_path=db_path)
+    add = ["git", "-C", primary, "worktree", "add", "-b", branch, wt]
+    if base_branch:
+        add.append(base_branch)
+    r = subprocess.run(add, stdout=subprocess.DEVNULL,
                        stderr=subprocess.PIPE, text=True)
+    if r.returncode != 0 and base_branch:
+        # The start-point is a best effort, never a reason to refuse the run:
+        # a branch can have been pruned by worktree GC between runs. Fall back
+        # to the primary HEAD and RECORD that we did, so a review is never
+        # silently handed a tree it believes contains a build.
+        r = subprocess.run(["git", "-C", primary, "worktree", "add", "-b",
+                            branch, wt], stdout=subprocess.DEVNULL,
+                           stderr=subprocess.PIPE, text=True)
+        if r.returncode == 0:
+            base_reason = ("branched from the primary HEAD: intended "
+                           "start-point %r is unusable (%s) — %s"
+                           % (base_branch,
+                              (r.stderr or "").strip().splitlines()[-1:] or "no detail",
+                              base_reason))
+            base_branch = None
     if r.returncode == 0:
-        return wt, branch
+        return wt, branch, base_branch, base_reason
     # Worktree/branch collision (e.g. branch already exists): use the branch by
     # checking it out into a fresh path; last resort is the primary path.
     r2 = subprocess.run(["git", "-C", primary, "worktree", "add", wt, branch],
                         stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
     if r2.returncode == 0:
-        return wt, branch
-    return primary, None
+        return wt, branch, base_branch, base_reason
+    return primary, None, None, None
 
 
 def _process_alive(pid):
@@ -263,8 +365,10 @@ def run_dispatch(db_path=None):
                 run_id = store.start_run(t["id"], agent, db_path=db_path)
                 # Per-run work-dir isolation for CODE tasks (fix #6): a worktree +
                 # branch per run so retries never clobber another run's files.
-                wd, branch = run_workdir(t, project, run_id, db_path=db_path)
-                store.set_run_workdir(run_id, wd, branch, db_path=db_path)
+                wd, branch, base_b, base_r = run_workdir(
+                    t, project, run_id, db_path=db_path)
+                store.set_run_workdir(run_id, wd, branch, db_path=db_path,
+                                      base_branch=base_b, base_reason=base_r)
                 brief_text = store.render_brief(run_id, db_path=db_path)
                 if not _launch(run_id, agent, brief_text, wd, cfg, db_path,
                                "run_dispatched"):

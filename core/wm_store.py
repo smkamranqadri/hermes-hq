@@ -16,6 +16,7 @@ import os
 import re
 import shutil
 import sqlite3
+import subprocess
 import sys
 import time
 import uuid
@@ -374,7 +375,9 @@ CREATE TABLE IF NOT EXISTS runs (
     branch        TEXT,
     pid           INTEGER,
     brief_path    TEXT,
-    review_id     INTEGER
+    review_id     INTEGER,
+    base_branch   TEXT,
+    base_reason   TEXT
 );
 
 CREATE TABLE IF NOT EXISTS reviews (
@@ -721,6 +724,21 @@ def _table_columns(conn, table):
     return {r["name"] for r in conn.execute("PRAGMA table_info(%s)" % table)}
 
 
+def _run_col(row, name, default=None):
+    """Read a column that may not exist on this row.
+
+    A sqlite3.Row raises IndexError for an absent key, and a brief can be
+    rendered from a row selected before a migration added the column (or by a
+    caller that did not SELECT *). Returning the default keeps rendering a
+    brief a read-only operation that cannot fail on schema drift.
+    """
+    try:
+        value = row[name]
+    except (IndexError, KeyError, TypeError):
+        return default
+    return default if value is None else value
+
+
 def _migrate(conn):
     """Idempotent in-place migrations for pre-existing stores.
 
@@ -753,6 +771,15 @@ def _migrate(conn):
         conn.execute("ALTER TABLE runs ADD COLUMN workdir TEXT")
     if "branch" not in _table_columns(conn, "runs"):
         conn.execute("ALTER TABLE runs ADD COLUMN branch TEXT")
+    # WorktreeStartPointPlan slice A: which commit a run's worktree was branched
+    # FROM, and why. Before this, every isolated run branched from the primary
+    # repo's HEAD, so a REVIEW run could not see the BUILD it was reviewing —
+    # the two landed as siblings. NULL base_branch means "the primary HEAD",
+    # which is both the pre-plan behaviour and the documented fallback.
+    if "base_branch" not in _table_columns(conn, "runs"):
+        conn.execute("ALTER TABLE runs ADD COLUMN base_branch TEXT")
+    if "base_reason" not in _table_columns(conn, "runs"):
+        conn.execute("ALTER TABLE runs ADD COLUMN base_reason TEXT")
     # Phase 6 (CU-5): goals become editable, so they need the same
     # last-touched stamp tasks already carry. Existing rows keep NULL until
     # their first edit — a NULL updated_at means "never edited since create".
@@ -2071,10 +2098,16 @@ def set_run_result_paths(run_id, result_paths, db_path=None, _conn=None):
         conn.close()
 
 
-def set_run_workdir(run_id, workdir, branch=None, db_path=None):
+def set_run_workdir(run_id, workdir, branch=None, db_path=None,
+                    base_branch=None, base_reason=None):
     """Record a run's effective work directory + (for isolated code runs) the
     git branch/worktree it executed in, so retries never write into the same
-    tree unknowingly."""
+    tree unknowingly.
+
+    `base_branch`/`base_reason` record what that branch was cut FROM and why
+    (WorktreeStartPointPlan slice A). A NULL base_branch means the primary
+    repo's HEAD — the fallback, and what every run did before the plan.
+    """
     conn = _connect(db_path)
     try:
         with conn:
@@ -2084,6 +2117,34 @@ def set_run_workdir(run_id, workdir, branch=None, db_path=None):
             else:
                 conn.execute("UPDATE runs SET workdir=? WHERE id=?",
                              (workdir, run_id))
+            if base_reason is not None:
+                conn.execute(
+                    "UPDATE runs SET base_branch=?, base_reason=? WHERE id=?",
+                    (base_branch, base_reason, run_id))
+    finally:
+        conn.close()
+
+
+def get_task_last_branched_run(task_id, exclude_run_id=None, db_path=None):
+    """This task's most recent run that actually got an isolated git branch.
+
+    NOT `get_task_last_run()`. A task's latest run is frequently a REVIEW run,
+    which carries `branch=NULL` — task #280's latest run on 2026-09-11 was run
+    567 with no branch, while its build lived on run 565's `wm/run-565`. Asking
+    for "the latest run" therefore finds no branch, silently falls back to the
+    primary HEAD, and reintroduces the exact defect this plan removes. Ordering
+    by id DESC is deterministic per task (id is monotonic), not a newest-row
+    guess.
+    """
+    conn = _connect(db_path)
+    try:
+        sql = ("SELECT * FROM runs WHERE task_id=? AND branch IS NOT NULL "
+               "AND branch != ''")
+        args = [task_id]
+        if exclude_run_id is not None:
+            sql += " AND id != ?"
+            args.append(exclude_run_id)
+        return conn.execute(sql + " ORDER BY id DESC LIMIT 1", args).fetchone()
     finally:
         conn.close()
 
@@ -2754,6 +2815,127 @@ def _review_task_id(review_id, db_path=None):
     return r["task_id"] if r else None
 
 
+def land_approved_run(task_id, db_path=None):
+    """Fast-forward the project's primary repo onto an approved task's branch.
+
+    WorktreeStartPointPlan slices B+C. Nothing in this engine ever merged a
+    `wm/*` branch back, and the brief forbids agents from doing it, so approved
+    work sat on an orphan branch forever and `main` only advanced when a human
+    moved it. On 2026-09-11 that gap meant an INTEGRATE task had nothing
+    correct to push: review 179 approved #280 at 11:37, and a person
+    fast-forwarded `main` by hand at 13:17.
+
+    ff-only, ALWAYS. Never force, never a merge commit, never a rebase. An
+    automatic merge or rebase produces a tree nobody reviewed — the exact
+    failure class this plan exists to remove — and a rebase additionally
+    rewrites the approved SHA, voiding the ancestry proof the design rests on.
+
+    Returns a dict describing what happened; `landed` is True only when the
+    primary repo actually moved. Never raises: a land is a convenience on top
+    of an approval that has already been recorded, so a git problem must not
+    unwind the verdict.
+    """
+    result = {"landed": False, "reason": None, "branch": None,
+              "before": None, "after": None}
+    if (get_meta("code_land", db_path=db_path) or "1") != "1":
+        result["reason"] = "code_land is off"
+        return result
+    t = get_task(task_id, db_path=db_path)
+    if t is None:
+        result["reason"] = "no such task"
+        return result
+    if not t["is_code"]:
+        result["reason"] = "not a code task"
+        return result
+    run = get_task_last_branched_run(task_id, db_path=db_path)
+    if run is None:
+        result["reason"] = "task has no run with a branch"
+        return result
+    branch = run["branch"]
+    result["branch"] = branch
+    project = get_project(t["project_id"], db_path=db_path)
+    primary = project["primary_path"] if project else None
+    if not primary or not os.path.isdir(primary):
+        result["reason"] = "project has no usable primary_path"
+        return result
+
+    def _git(*args):
+        return subprocess.run(["git", "-C", primary] + list(args),
+                              capture_output=True, text=True)
+
+    if _git("rev-parse", "--is-inside-work-tree").returncode != 0:
+        result["reason"] = "primary_path is not a git work tree"
+        return result
+    result["before"] = _git("rev-parse", "HEAD").stdout.strip()[:12] or None
+    # A dirty primary tree is refused rather than stashed: the checkout belongs
+    # to the owner, and a fast-forward that silently moved files under an
+    # editing session would be worse than a refused land.
+    dirty = _git("status", "--porcelain", "-uall").stdout.strip()
+    if dirty:
+        result["reason"] = ("primary working tree is dirty (%d entries) — "
+                            "refusing to move it under you"
+                            % len(dirty.splitlines()))
+        return result
+    ff = _git("merge", "--ff-only", branch)
+    if ff.returncode != 0:
+        detail = (ff.stderr or ff.stdout or "").strip().splitlines()
+        result["reason"] = ("not a fast-forward from %s: %s"
+                            % (branch, detail[-1] if detail else "git refused"))
+        return result
+    result["after"] = _git("rev-parse", "HEAD").stdout.strip()[:12] or None
+    result["landed"] = True
+    result["reason"] = ("fast-forwarded %s %s..%s"
+                        % (primary, result["before"], result["after"]))
+    return result
+
+
+_LAND_NOTHING_TO_DO = (
+    "code_land is off", "not a code task", "task has no run with a branch",
+    "project has no usable primary_path", "primary_path is not a git work tree",
+    "no such task",
+)
+
+
+def _land_and_report(task_id, db_path=None):
+    """Land an approved task and make the outcome visible either way.
+
+    A refusal is not silent: the task goes to `blocked` with the reason and the
+    owner gets a notification, because an approval that did not reach `main`
+    looks identical to one that did from every other surface.
+
+    `blocked`, not an invented status — `needs_attention` is a PROPOSAL
+    classification, and a task status outside TASK_STATUSES is exactly what
+    `wm check`'s integrity audit is built to catch.
+    """
+    outcome = land_approved_run(task_id, db_path=db_path)
+    if outcome["landed"]:
+        log_activity(action="task_landed", task_id=task_id,
+                     detail=outcome["reason"], db_path=db_path)
+        return outcome
+    if outcome["reason"] in _LAND_NOTHING_TO_DO:
+        # Nothing to land — not a failure, and not worth waking the owner.
+        return outcome
+    conn = _connect(db_path)
+    try:
+        with conn:
+            conn.execute("UPDATE tasks SET status='blocked', "
+                         "updated_at=? WHERE id=?", (time.time(), task_id))
+            _record_transition_conn(
+                conn, task_id, "blocked", from_status="done",
+                detail="land refused: %s" % outcome["reason"])
+    finally:
+        conn.close()
+    add_notification(
+        "needs_you", "Task #%d approved but NOT landed" % task_id,
+        body=("The review approved it, but the work is still only on %s. %s"
+              % (outcome["branch"], outcome["reason"])),
+        href="/tasks/%d" % task_id, task_id=task_id,
+        source_key="land:%d" % task_id, db_path=db_path)
+    log_activity(action="task_land_refused", task_id=task_id,
+                 detail=outcome["reason"], db_path=db_path)
+    return outcome
+
+
 def review_verdict(task_id, verdict, comment=None, db_path=None):
     """Record a Reviewer verdict on an auto-created review for `task_id`.
 
@@ -2823,9 +3005,17 @@ def review_verdict(task_id, verdict, comment=None, db_path=None):
     finally:
         conn.close()
     review_status = reviews_status
+    landed = None
     if verdict == "approved" and not t["owner_approval"]:
-        # Gated tasks promote nothing yet — close_by_owner does, on approval.
-        promoted = promote_dependents(task_id, db_path=db_path)
+        # WorktreeStartPointPlan B+C: land BEFORE promoting. A dependent
+        # INTEGRATE task's whole job is to push `main`, so releasing it while
+        # the approved work is still stranded on a branch hands it the wrong
+        # tree — which is precisely the failure this plan removes. An owner_
+        # approval task lands from close_by_owner instead: the owner still gates.
+        landed = _land_and_report(task_id, db_path=db_path)
+        if landed["landed"] or landed["reason"] in _LAND_NOTHING_TO_DO:
+            # Gated tasks promote nothing yet — close_by_owner does, on approval.
+            promoted = promote_dependents(task_id, db_path=db_path)
     log_activity(action="review_%s" % review_status, task_id=task_id,
                  agent_profile="reviewer",
                  detail="review #%d %s: %s" % (review["id"], verdict, comment or ""),
@@ -2838,6 +3028,9 @@ def review_verdict(task_id, verdict, comment=None, db_path=None):
             href="/tasks/%d" % task_id, task_id=task_id,
             source_key="reworkcap:%d" % task_id, db_path=db_path)
     if verdict == "approved":
+        if landed is not None and not landed["landed"] \
+                and landed["reason"] not in _LAND_NOTHING_TO_DO:
+            return "blocked", review_status, promoted
         return ("manual" if t["owner_approval"] else "done"), review_status, promoted
     return ("manual" if capped else "rework"), review_status, promoted
 
@@ -3255,6 +3448,12 @@ def close_by_owner(task_id, note=None, db_path=None):
         conn.close()
     log_activity(action="task_closed_by_owner", task_id=task_id,
                  detail=note or "", db_path=db_path)
+    # WorktreeStartPointPlan B+C: an owner_approval task's review stops at
+    # `manual` without landing — the owner is the gate — so the land happens
+    # here, on the close, and still gates promotion for the same reason.
+    landed = _land_and_report(task_id, db_path=db_path)
+    if not landed["landed"] and landed["reason"] not in _LAND_NOTHING_TO_DO:
+        return []
     return promote_dependents(task_id, db_path=db_path)
 
 
@@ -3794,10 +3993,24 @@ def render_brief(run_id, db_path=None):
     if run["branch"]:
         lines.append("Git branch/worktree: %s (isolated code run — do not "
                      "touch other branches)" % run["branch"])
+        base_reason = _run_col(run, "base_reason")
+        if base_reason:
+            base_branch = _run_col(run, "base_branch")
+            lines.append("Branched FROM: %s — %s"
+                         % (base_branch or "the primary HEAD", base_reason))
+            if base_branch:
+                lines.append(
+                    "So the work described above is ALREADY IN your tree. If "
+                    "you are reviewing, verify it: the parent's commit must be "
+                    "an ANCESTOR of your HEAD (`git merge-base --is-ancestor "
+                    "<commit> HEAD`). If it is not, say so and do not approve "
+                    "— on 2026-09-11 a review approved a SIBLING of the build "
+                    "and nearly published a tree the coder never produced.")
         lines.append("COMMIT CONTRACT: commit your work on THIS branch before "
                      "you finish. The engine checks `git status --porcelain` "
                      "when you report done and returns the task to rework if "
-                     "the tree is dirty. Do not merge to main.")
+                     "the tree is dirty. Do not merge to main — when your work "
+                     "is approved the ENGINE fast-forwards main to it.")
     lines.append("")
     lines.append("AUTHORIZATION")
     lines.append("-" * 40)

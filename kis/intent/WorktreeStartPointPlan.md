@@ -1,6 +1,8 @@
 # Worktree Start-Point + Land Plan
 
-**Status:** **PLANNED 2026-09-11.** Owner-interviewed; the three decisions below are locked — do not relitigate in build tasks. Nothing implemented.
+**Status:** **COMPLETE 2026-09-11.** Both slices shipped and proven. Suite **544 → 565** (+21, all new tests green, zero regressions). Slice A: `resolve_start_point()` + a real start-point on `git worktree add`. Slices B+C: `land_approved_run()` / `_land_and_report()` behind `code_land`, wired into `review_verdict()` and `close_by_owner()`, gating promotion. Owner-interviewed; the three decisions below were locked and held.
+
+**One deliberate deviation from the precedence written below, made during build:** the rule keys off RUN RECENCY, not `task["status"] == 'rework'`. Two reasons, both found in the code rather than guessed. `claim_task()` flips ready/rework to 'running' BEFORE the dispatcher reaches `run_workdir`, so the status is already gone. And a plain "rework resumes its own branch" rule is wrong when the parent BUILD rebuilds while a REVIEW is pending — exactly the #280/#281 shape — where the review must re-base on the NEW build instead of resuming its own stale branch. Comparing run ids handles both; `test_parent_rebuild_wins_over_this_tasks_own_stale_branch` pins it.
 **Parent:** the Known-debt item "Every isolated run's worktree is branched from `main`, so a REVIEW run structurally cannot see the BUILD it is reviewing", opened 2026-09-11 after it nearly pushed the wrong tree to a public repo.
 **Work mode:** Standard — two slices (A start-point, B+C land).
 
@@ -69,6 +71,30 @@ The push itself (agents run as uid 10000 with no git credentials — separate op
 | `tests/core/test_t7.py` | existing worktree isolation checks (9) must still pass |
 | `tests/backend/` | new: start-point precedence, land, land refusal |
 
+## Proof (2026-09-11)
+
+**End-to-end replay of the chain shape that broke**, on a scratch repo — BUILD v1 → `changes_requested` → BUILD v2 → approve → REVIEW:
+
+```
+BUILD v1 on wm/run-1
+verdict -> task rework | main still 6ddb033          (a rejected review never lands)
+BUILD v2 branched from wm/run-1 <- resumes its own work
+  v2 sees v1's content: True                          (Trap 2 fixed)
+approved -> task done | main now 2de594e == build 2de594e
+REVIEW branched from wm/run-2
+  review contains the build commit: True              (THE FIX)
+  review sees: 'v2 final'
+RESULT main==build: True | review has build: True
+```
+
+**Suite:** `tests/backend` 544 → **565**, 0 failures (`pytest tests/backend -q`). `tests/core`: 9 of 10 scripts pass; `test_run_wrapper_orchestrator.py` fails **identically at HEAD** (33 passed / 2 failed before and after — the installed Hermes CLI exposes an `orchestrator` profile), so it is environmental and pre-existing, not a regression.
+
+**`wm check`:** `Integrity OK — no anomalies`, exit 0. This mattered: the first cut set a refused land to `needs_attention`, which is a PROPOSAL classification and NOT in `TASK_STATUSES` — precisely what the integrity audit exists to catch. It uses `blocked`.
+
+**GC compatibility (Challenge 4):** verified empirically after a land — `git branch -d` still refuses a branch in use by a worktree, and still refuses an unmerged branch. Landing only makes already-safe branches eligible once their worktree is gone. No safety property weakened.
+
+**A real accident, recorded because it nearly reached the owner's data:** the first run of `test_worktree_start_point.py` created `run-1`..`run-4` in the LIVE `/opt/data/hermes-hq/runs/worktrees/`, pointing at pytest tmp repos. `resolve_runs_dir()` falls back to a module-level `RUNS_DIR` computed at IMPORT time, so a fixture setting `HERMES_HQ_HOME` moves the database and nothing else — the same hazard `conftest.py` documents for `WM_DB`. The strays were removed (live worktrees back to the 13 real ones, no stray branches in any real repo) and the fixture now sets `WM_RUNS_DIR`, with the reason written into its docstring.
+
 ## Acceptance checks
 
 1. A REVIEW task whose parent BUILD has a branch gets a worktree whose HEAD has the **build commit** as an ancestor. (Today: sibling. This is the fix.)
@@ -98,8 +124,15 @@ Then a live end-to-end replay of today's chain shape on a scratch repo: BUILD �
 
 Opus builder + Opus reviewer, per the standing subagent build cycle.
 
-## KIS writes this plan implies
+## Shipped
 
-- **Knowledge:** the start-point precedence rule and the ff-only land contract, once shipped.
-- **Intent:** this file.
-- **State:** on ship, one Proof line; close the dispatcher debt entry. The "agents cannot push to any remote" debt stays open — this plan does not touch it.
+| file | what |
+|---|---|
+| `core/wm_dispatch.py` | `resolve_start_point()`; `run_workdir()` passes a start-point and returns `(workdir, branch, base_branch, base_reason)`; falls back to the primary HEAD and RECORDS it when a start-point is unusable (GC may have pruned the branch) |
+| `core/wm_store.py` | `runs.base_branch` + `runs.base_reason` (schema + idempotent migration); `get_task_last_branched_run()`; `_run_col()`; `land_approved_run()` + `_land_and_report()`; land wired into `review_verdict()` and `close_by_owner()`, gating promotion; brief names the base and demands an ancestry check |
+| `tests/backend/test_worktree_start_point.py` | 10 tests, 2 negative controls |
+| `tests/backend/test_land_on_approval.py` | 11 tests, 1 negative control |
+
+## Still open after this
+
+**Agents still cannot push to any remote** (uid 10000, no credentials), so an INTEGRATE task still ends `blocked` at the push itself. Untouched by this plan, still on the Known-debt list. What changed is that `main` now CONTAINS the reviewed work when it gets there, so the push is a one-line owner action rather than a manual fast-forward plus a push.
