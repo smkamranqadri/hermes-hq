@@ -41,7 +41,7 @@ Commands only fire when someone types one. Drift happens when a long session bur
 
 `scripts/install-anchor.sh` installs three counterweights:
 
-- A Claude `SessionStart` hook running `hooks/session-anchor.sh` on startup, resume, clear, and compact. It prints the KIS rules, the command list, and the current State file, so every session and every post-compaction context starts from current operational reality.
+- A Claude `SessionStart` hook running `hooks/session-anchor.sh` on startup, resume, clear, and compact. It prints the KIS rules, the command list, and a short State summary: Branch, Task, Blocker and Next, with indented continuation lines joined and the value cut at `KIS_ANCHOR_MAX_FIELD_CHARS` (default 200), beside a pointer to the file, all within the `KIS_ANCHOR_MAX_LINES` line budget (default 20). Blocker and Next fall back to the first `## Open` and `## Next` item when their bullet labels are absent, so every session and every post-compaction context starts from current operational reality without re-reading the whole file.
 - An Antigravity `PreInvocation` hook in `.agents/hooks.json` running `hooks/antigravity-anchor.sh`, which wraps the same anchor text in an `ephemeralMessage`. Antigravity has no session-start event, so the hook fires before every model call and a marker keyed on `conversationId` holds the injection to once per conversation. Antigravity runs lifecycle hooks in an interactive session only, not under `agy --print`.
 - A marked KIS block in `AGENTS.md` and `CLAUDE.md`, between `<!-- kis:anchor:start -->` and `<!-- kis:anchor:end -->`. Pi, OpenCode, Codex, and Antigravity all load these files automatically.
 
