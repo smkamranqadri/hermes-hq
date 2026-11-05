@@ -101,7 +101,7 @@ def s6_log_script() -> str:
 
 def _kept_env(flags: dict | None = None) -> dict:
     keep = {}
-    for k in ("HERMES_HQ_HOME", "HERMES_HOME", "WM_PROFILES_DIR", "WM_PROJECTS_ROOT", "HERMES_HQ_PASSWORD_FILE"):
+    for k in ("HERMES_HQ_HOME", "HERMES_HOME", "WM_PROFILES_DIR", "WM_PROJECTS_ROOT", "HERMES_HQ_PASSWORD_FILE", "HERMES_HQ_TZ"):
         if os.environ.get(k):
             keep[k] = os.environ[k]
     if flags:          # bake the port so the updater's health check and children agree with ExecStart
@@ -243,7 +243,7 @@ def start_update_job(reason: str):
 
 AUTO_KEY = "auto_update_cron"
 NEXT_KEY = "auto_update_next"
-DEFAULT_AUTO_CRON = "0 5 * * *"        # 05:00 Asia/Karachi
+DEFAULT_AUTO_CRON = "0 5 * * *"        # 05:00 in sch.DEFAULT_ZONE
 
 
 def auto_update_cron(db_path=None) -> str:
@@ -353,12 +353,13 @@ def cli(argv, out=print) -> int:
                            env=dict(os.environ, HERMES_HQ_REPO=repo_root()))
         return r.returncode
     if a.op == "auto-update":
+        from core import schedule as sch
         if a.off:
             set_auto_update(""); out("auto-update off")
         elif a.cron:
-            out("auto-update: %s (Asia/Karachi)" % set_auto_update(a.cron))
+            out("auto-update: %s (%s)" % (set_auto_update(a.cron), sch.DEFAULT_ZONE))
         else:
             cur = auto_update_cron()
-            out("auto-update: %s" % (("%s (Asia/Karachi)" % cur) if cur else "off"))
+            out("auto-update: %s" % (("%s (%s)" % (cur, sch.DEFAULT_ZONE)) if cur else "off"))
         return 0
     return 2

@@ -44,6 +44,9 @@ export function useWrite<TBody = unknown>(url: string | ((b: TBody) => string), 
 }
 export const useSession = () => useQuery({ queryKey: ['session'], queryFn: () => get<{ authenticated: boolean; csrf: string }>('/api/session'), retry: false })
 export const useRoster = () => useQuery({ queryKey: ['roster'], queryFn: () => get<{ assignees: string[]; review_policies: string[] }>('/api/system/roster'), staleTime: Infinity })
+// The server's schedule zone (HERMES_HQ_TZ, else UTC) — every cron preset is
+// entered and shown in it.
+export const useScheduleZone = () => useQuery({ queryKey: ['schedule-zone'], queryFn: () => get<{ zone: string }>('/api/schedules/presets'), staleTime: Infinity }).data?.zone ?? 'UTC'
 export const useGoals = (project?: string) => useQuery({ queryKey: ['goals', project], queryFn: () => get<{ goals: Goal[] }>(`/api/goals${project ? `?project=${project}` : ''}`) })
 
 export type Project = {
@@ -366,7 +369,7 @@ export async function streamChat(profile: string, sessionId: string, message: st
 }
 
 // ---- private vault (Phase 4 slice B) -----------------------------------
-// The vault re-seals on every restart (including the 05:00 PKT auto-update)
+// The vault re-seals on every restart (including the daily auto-update)
 // and on logout, so every surface here treats "locked" as the normal state
 // rather than an error. The passphrase is NEVER persisted client-side — no
 // localStorage, no sessionStorage, not even a ref that outlives the submit.

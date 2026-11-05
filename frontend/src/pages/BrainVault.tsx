@@ -4,7 +4,7 @@
  * you cannot read is a row you cannot file (owner decision 2026-09-10).
  *
  * Locked is the NORMAL state, not an error: the vault re-seals on logout, on
- * an idle timeout and on every restart, including the 05:00 PKT auto-update.
+ * an idle timeout and on every restart, including the daily auto-update.
  * A locked row renders as a lock icon and a date. Unlocking decrypts titles
  * for this session, so an unlocked vault reads like an ordinary list rather
  * than a wall of dates.
@@ -216,7 +216,7 @@ function ChangePassphrase({ onClose }: { onClose: () => void }) {
         </Field>
         {/* The button stays clickable and says WHY it cannot proceed. A disabled
           * button under a small red line reads as "done" rather than "blocked":
-          * the owner changed his passphrase, saw nothing happen, and reported it
+          * the owner changed the passphrase, saw nothing happen, and reported it
           * as changed — no request had been sent at all (2026-09-11). */}
         {blocked && <p className="text-[11px] text-error" data-change-blocked>{blocked}</p>}
         <p className="text-[11px] text-muted">

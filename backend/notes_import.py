@@ -519,7 +519,7 @@ def folder_tags(unit, area_names=()):
     """Topic tags derived from where the note sat in its source tree.
 
     The dump's folders WERE the organization -- `Tutorials/NestJs/` is a course,
-    `BrightLane/Feedback/` is one note per person -- and the first waves imported
+    `Acme/Feedback/` is one note per person -- and the first waves imported
     that structure as nothing at all, leaving 58% of notes untagged and the
     Library unnavigable (owner, 2026-09-09).
 

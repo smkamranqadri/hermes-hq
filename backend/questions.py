@@ -252,7 +252,7 @@ def awaiting_answer(con, run_ids):
 
     Why this exists (2026-09-07): a run parked on the owner's answer classified
     as plain "Working", identical to a run making progress — the owner had no
-    way to know he was being asked anything except the Inbox ping. That breaks
+    way to know they were being asked anything except the Inbox ping. That breaks
     the standing rule that anything awaiting the owner must show on the list
     row, the detail page AND the queue.
     """

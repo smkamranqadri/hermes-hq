@@ -1,0 +1,32 @@
+name: test
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: astral-sh/setup-uv@v6
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: frontend/package-lock.json
+      - name: Install
+        run: |
+          uv venv --python 3.12 .venv
+          uv pip install --python .venv/bin/python -e . pytest httpx
+          npm ci --prefix frontend --no-audit --no-fund
+      - name: Build the UI
+        run: npm run build --prefix frontend
+      - name: Backend tests
+        run: .venv/bin/python -m pytest tests/backend -q
+        env:
+          HERMES_HQ_HOME: ${{ runner.temp }}/hq-test

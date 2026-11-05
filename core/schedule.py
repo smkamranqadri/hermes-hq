@@ -1,19 +1,20 @@
 """Recurrence engine for task schedules (Group 7-1).
 
-A schedule stores a five-field cron expression plus an IANA zone (owner default
-Asia/Karachi); firing decisions happen in the dispatcher tick. croniter does the
+A schedule stores a five-field cron expression plus an IANA zone (default
+$HERMES_HQ_TZ, else UTC); firing decisions happen in the dispatcher tick. croniter does the
 math in the schedule's zone, timestamps are stored as epoch seconds (UTC).
 Presets exist so the UI can offer human choices that compile to cron.
 """
 from __future__ import annotations
 
+import os
 import re
 from datetime import datetime
 from zoneinfo import ZoneInfo
 
 from croniter import croniter
 
-DEFAULT_ZONE = "Asia/Karachi"
+DEFAULT_ZONE = os.environ.get("HERMES_HQ_TZ") or "UTC"
 DOW = ("mon", "tue", "wed", "thu", "fri", "sat", "sun")
 DOW_NUM = {d: i for i, d in enumerate(("sun", "mon", "tue", "wed", "thu", "fri", "sat"))}
 

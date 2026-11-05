@@ -1,0 +1,123 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 960 400" width="960" height="400" role="img" aria-labelledby="t d">
+  <title id="t">hermes-hq: one control plane for a Hermes Agent team</title>
+  <desc id="d">You give hermes-hq a goal. It turns it into tasks, runs each one as a real Hermes agent session, moves it through queued, working, review and done, and brings back only the tasks that need you.</desc>
+  <style>
+    .bg { fill: #f6f8fa; }
+    .card { fill: #ffffff; stroke: #d0d7de; stroke-width: 1.5; }
+    .head { fill: #1f2328; font: 600 17px ui-sans-serif, system-ui, -apple-system, "Segoe UI", sans-serif; }
+    .text { fill: #1f2328; font: 14px ui-sans-serif, system-ui, -apple-system, "Segoe UI", sans-serif; }
+    .muted { fill: #59636e; font: 12.5px ui-sans-serif, system-ui, -apple-system, "Segoe UI", sans-serif; }
+    .mono { fill: #1f2328; font: 13px ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; }
+    .agent { fill: #8250df; font: 13px ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; }
+    .bubble { fill: #ddf4ff; stroke: #54aeff; stroke-width: 1.2; }
+    .core { fill: #8250df; }
+    .coretext { fill: #ffffff; font: 700 24px ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; }
+    .coresub { fill: #eee6ff; font: 12px ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; }
+    .tag { fill: #1f2328; font: 600 19px ui-sans-serif, system-ui, -apple-system, "Segoe UI", sans-serif; }
+    .row { fill: #f6f8fa; stroke: #d0d7de; stroke-width: 1; }
+    .pill text { font: 600 12px ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; }
+    .q rect { fill: #ddf4ff; stroke: #0969da; } .q text { fill: #0969da; }
+    .w rect { fill: #dafbe1; stroke: #1a7f37; } .w text { fill: #1a7f37; }
+    .r rect { fill: #dafbe1; stroke: #1a7f37; } .r text { fill: #1a7f37; }
+    .ok rect { fill: #fbefff; stroke: #8250df; } .ok text { fill: #8250df; }
+    .nu rect { fill: #fff8c5; stroke: #bf8700; } .nu text { fill: #9a6700; }
+    .flow { stroke: #8250df; stroke-width: 2.5; fill: none; stroke-dasharray: 8 7; animation: flow 1.2s linear infinite; }
+    .back { stroke: #bf8700; stroke-width: 2.5; fill: none; stroke-dasharray: 8 7; animation: flowback 1.2s linear infinite, nuwin 8s linear infinite; }
+    .phase { opacity: 0; animation: phase 8s linear infinite both; }
+    .d0 { animation-delay: 0s; } .d1 { animation-delay: 2s; } .d2 { animation-delay: 4s; } .d3 { animation-delay: 6s; }
+    .e0 { animation-delay: -4s; } .e1 { animation-delay: -2s; } .e2 { animation-delay: 0s; } .e3 { animation-delay: 2s; }
+    .half { opacity: 0; animation: half 8s linear infinite both; }
+    .h0 { animation-delay: 0s; } .h1 { animation-delay: 4s; }
+    .nuwin { animation: nuwin 8s linear infinite; }
+    .pulse { animation: pulse 1.6s ease-in-out infinite; transform-origin: 154px 276px; }
+    @keyframes flow { to { stroke-dashoffset: -30; } }
+    @keyframes flowback { to { stroke-dashoffset: 30; } }
+    @keyframes phase { 0% { opacity: 0; } 2%, 23% { opacity: 1; } 25%, 100% { opacity: 0; } }
+    @keyframes half { 0% { opacity: 0; } 2%, 48% { opacity: 1; } 50%, 100% { opacity: 0; } }
+    @keyframes nuwin { 0%, 50% { opacity: 0; } 52%, 98% { opacity: 1; } 100% { opacity: 0; } }
+    @keyframes pulse { 0%, 100% { transform: scale(1); } 50% { transform: scale(1.05); } }
+    @media (prefers-color-scheme: dark) {
+      .bg { fill: #0d1117; }
+      .card { fill: #161b22; stroke: #30363d; }
+      .row { fill: #0d1117; stroke: #30363d; }
+      .head, .text, .mono, .tag { fill: #e6edf3; }
+      .muted { fill: #9198a1; }
+      .agent { fill: #bc8cff; }
+      .bubble { fill: #0c2d6b; stroke: #388bfd; }
+      .q rect { fill: #0c2d6b; stroke: #388bfd; } .q text { fill: #79c0ff; }
+      .w rect, .r rect { fill: #0f2d1a; stroke: #3fb950; } .w text, .r text { fill: #56d364; }
+      .ok rect { fill: #271052; stroke: #a371f7; } .ok text { fill: #d2a8ff; }
+      .nu rect { fill: #341a00; stroke: #d29922; } .nu text { fill: #e3b341; }
+      .back { stroke: #d29922; }
+    }
+    @media (prefers-reduced-motion: reduce) {
+      .flow, .back, .pulse { animation: none; }
+      .phase, .half, .nuwin { animation: none; }
+      .d0, .e1, .h1 { opacity: 1; }
+      .back, .nuwin { opacity: 1; }
+    }
+  </style>
+
+  <rect class="bg" x="0" y="0" width="960" height="400" rx="18"/>
+
+  <!-- You -->
+  <rect class="card" x="32" y="56" width="244" height="268" rx="12"/>
+  <text class="head" x="52" y="88">You</text>
+  <text class="muted" x="52" y="109">set the goal, answer when asked</text>
+  <rect class="bubble" x="52" y="126" width="204" height="62" rx="10"/>
+  <text class="text" x="66" y="152">Launch the café site</text>
+  <text class="muted" x="66" y="173">with a booking form</text>
+  <g class="nuwin">
+    <g class="pulse">
+      <g class="pill nu"><rect x="52" y="256" width="204" height="40" rx="20" stroke-width="1.4"/>
+      <text x="154" y="281" text-anchor="middle">● Needs you · 1</text></g>
+    </g>
+    <text class="muted" x="154" y="314" text-anchor="middle">one answer, the run resumes</text>
+  </g>
+
+  <!-- goal flows in -->
+  <path class="flow" d="M 276 156 L 340 156"/>
+
+  <!-- core -->
+  <rect class="core" x="340" y="100" width="190" height="112" rx="16"/>
+  <text class="coretext" x="435" y="148" text-anchor="middle">hermes-hq</text>
+  <text class="coresub" x="435" y="172" text-anchor="middle">projects → tasks</text>
+  <text class="coresub" x="435" y="190" text-anchor="middle">→ agent sessions</text>
+
+  <!-- dispatch out -->
+  <path class="flow" d="M 530 156 L 590 156"/>
+  <!-- needs-you back to the owner -->
+  <path class="back" d="M 590 278 C 470 278, 420 278, 256 276"/>
+
+  <!-- team -->
+  <rect class="card" x="590" y="56" width="338" height="268" rx="12"/>
+  <text class="head" x="610" y="88">Your agent team</text>
+  <text class="muted" x="610" y="109">each task is a real Hermes session</text>
+
+  <!-- row 1: coder -->
+  <rect class="row" x="606" y="124" width="306" height="56" rx="9"/>
+  <text class="mono" x="620" y="148">Build booking form</text>
+  <text class="agent" x="620" y="168">coder</text>
+  <g class="pill q phase d0"><rect x="806" y="138" width="92" height="28" rx="14"/><text x="852" y="157" text-anchor="middle">Queued</text></g>
+  <g class="pill w phase d1"><rect x="806" y="138" width="92" height="28" rx="14"/><text x="852" y="157" text-anchor="middle">Working</text></g>
+  <g class="pill r phase d2"><rect x="806" y="138" width="92" height="28" rx="14"/><text x="852" y="157" text-anchor="middle">Review</text></g>
+  <g class="pill ok phase d3"><rect x="806" y="138" width="92" height="28" rx="14"/><text x="852" y="157" text-anchor="middle">Done ✓</text></g>
+
+  <!-- row 2: writer, two steps ahead -->
+  <rect class="row" x="606" y="188" width="306" height="56" rx="9"/>
+  <text class="mono" x="620" y="212">Write the menu copy</text>
+  <text class="agent" x="620" y="232">writer</text>
+  <g class="pill q phase e0"><rect x="806" y="202" width="92" height="28" rx="14"/><text x="852" y="221" text-anchor="middle">Queued</text></g>
+  <g class="pill w phase e1"><rect x="806" y="202" width="92" height="28" rx="14"/><text x="852" y="221" text-anchor="middle">Working</text></g>
+  <g class="pill r phase e2"><rect x="806" y="202" width="92" height="28" rx="14"/><text x="852" y="221" text-anchor="middle">Review</text></g>
+  <g class="pill ok phase e3"><rect x="806" y="202" width="92" height="28" rx="14"/><text x="852" y="221" text-anchor="middle">Done ✓</text></g>
+
+  <!-- row 3: blocked, comes back to you -->
+  <rect class="row" x="606" y="252" width="306" height="56" rx="9"/>
+  <text class="mono" x="620" y="276">Connect the calendar</text>
+  <text class="agent" x="620" y="296">coder</text>
+  <g class="pill w half h0"><rect x="806" y="266" width="92" height="28" rx="14"/><text x="852" y="285" text-anchor="middle">Working</text></g>
+  <g class="pill nu half h1"><rect x="806" y="266" width="92" height="28" rx="14"/><text x="852" y="285" text-anchor="middle">Needs you</text></g>
+
+  <text class="tag" x="480" y="366" text-anchor="middle">Agents do the work. You only see what needs you.</text>
+</svg>

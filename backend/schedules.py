@@ -1,6 +1,6 @@
 """Task schedules API (Group 7-1): recurring WM tasks. Storage + firing live in core
 (`wm_store` schedules tables, `core/schedule.py` recurrence); the dispatcher fires due
-rows every tick. Times are entered/shown in the schedule's IANA zone (default Asia/Karachi)."""
+rows every tick. Times are entered/shown in the schedule's IANA zone (default $HERMES_HQ_TZ, else UTC)."""
 from __future__ import annotations
 
 from fastapi import APIRouter, HTTPException, Query

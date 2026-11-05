@@ -446,7 +446,7 @@ CREATE TABLE IF NOT EXISTS schedules (
     id                 INTEGER PRIMARY KEY,
     name               TEXT NOT NULL,
     cron               TEXT NOT NULL,
-    zone               TEXT NOT NULL DEFAULT 'Asia/Karachi',
+    zone               TEXT NOT NULL DEFAULT 'UTC',
     project_id         INTEGER NOT NULL REFERENCES projects(id),
     title              TEXT NOT NULL,
     description        TEXT DEFAULT '',
@@ -896,8 +896,8 @@ def init_db(db_path=None):
         conn.close()
 
 
-# Life areas seeded once (empty table only) from the owner's focus
-# domains — the interviewed starting taxonomy (intent/SecondBrainPlan.md).
+# Life areas seeded once (empty table only): a general starting taxonomy
+# the owner edits from the Library (intent/SecondBrainPlan.md).
 SEED_AREAS = ("AI Workflow", "Career", "Content", "Family", "Finance",
               "Health", "Home", "Journal", "Side Project", "Study", "Work")
 
@@ -3105,7 +3105,7 @@ def close_orphan_review(task_id, comment=None, db_path=None):
 # ---------------------------------------------------------------------------
 # The Reviewer's `changes_requested` verdict is an AGENT decision. Owner
 # feedback is the human equivalent: the owner looks at a finished (or under-review)
-# task, says what is wrong in his own words, and the task goes back to `rework`
+# task, says what is wrong in their own words, and the task goes back to `rework`
 # with those words threaded into the next run's brief.
 #
 # It carries NO schema change. The durable record is a `state_transitions` row
@@ -3115,7 +3115,7 @@ OWNER_FEEDBACK_MARKER = "owner feedback: "
 
 # Statuses a task may receive owner feedback from. All three mean "the assignee
 # has produced something to react to": it is awaiting review, it is already
-# being reworked, or it was accepted and the owner changed his mind. A task that
+# being reworked, or it was accepted and the owner changed their mind. A task that
 # has not produced anything yet (planned/waiting_approval/ready/running/...) has
 # nothing to give feedback ON — sending it to `rework` would either kill a live
 # run's bookkeeping or fabricate a rework state for work that never happened.
@@ -6613,7 +6613,7 @@ def _rewrite_note_tags(conn, fn):
     """Apply `fn(list[str]) -> list[str]` to every note's tag list.
 
     Touches `notes.tags` and the FTS row (tags are indexed) but deliberately
-    NOT `updated_at` -- a vocabulary fix is not the owner editing his note, and
+    NOT `updated_at` -- a vocabulary fix is not the owner editing a note, and
     bumping the stamp would reorder every list in the Library. Returns the
     number of notes actually changed.
     """

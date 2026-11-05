@@ -5,7 +5,7 @@ import { useEffect, useRef, useState } from 'react'
 import { Link, NavLink, useLocation } from 'react-router-dom'
 import { useQuery, useQueryClient } from '@tanstack/react-query'
 import clsx from 'clsx'
-import { NOTES_REFETCH, ago, attachmentUrl, del, get, post, postForm, useAreas, useNoteTags, useNotesTree, useProjects, useRoster, type Area, type Note, type NoteAttachment, type NoteFull, type Proposal, type ProposalPayload, type SplitPart } from '../api'
+import { NOTES_REFETCH, ago, attachmentUrl, del, get, post, postForm, useAreas, useNoteTags, useNotesTree, useProjects, useRoster, useScheduleZone, type Area, type Note, type NoteAttachment, type NoteFull, type Proposal, type ProposalPayload, type SplitPart } from '../api'
 import { Btn, Field, Modal, SelectInput, TextArea, TextInput } from './Modal'
 import { Chip, Label } from './ui'
 import { useToast } from './Toast'
@@ -273,7 +273,7 @@ export function NoteRow({ n, areas, showBody = true }: { n: Note; areas?: Area[]
 /** `authored_by` is provenance, not a tag: who wrote the note's original text.
  *  The owner's own notes show nothing (the default); the other two read as a
  *  muted word with a hover hint, never as a chip in the tag row — the owner
- *  read the bare "import"/"owner" chips as tags he had not set. */
+ *  read the bare "import"/"owner" chips as tags they had not set. */
 export const PROVENANCE: Record<string, string> = { import: 'imported', librarian: 'by the librarian' }
 export const PROVENANCE_HINT: Record<string, string> = {
   import: 'Brought in by an import wave — the text is from the source, not typed here.',
@@ -516,6 +516,7 @@ export function NewReminderFromNoteModal({ n, onClose }: { n: NoteFull; onClose:
   const tomorrow = new Date(Date.now() + 86400000).toISOString().slice(0, 10)
   const [f, setF] = useState({ name: n.title, project: n.project?.slug ?? '', cron: '0 9 * * *' })
   const [preset, setPreset] = useState({ kind: 'once', at: '09:00', dow: 'mon', day: 1, every_hours: 6, date: tomorrow })
+  const zone = useScheduleZone()
   const [busy, setBusy] = useState(false)
   useEffect(() => {
     if (preset.kind === 'custom') return
@@ -551,7 +552,7 @@ export function NewReminderFromNoteModal({ n, onClose }: { n: NoteFull; onClose:
             {['once', 'daily', 'weekdays', 'weekly', 'monthly', 'custom'].map(k => <option key={k}>{k}</option>)}
           </SelectInput>
         </Field>
-        <Field label={preset.kind === 'custom' ? 'Cron' : preset.kind === 'once' ? 'On (PKT)' : 'At (PKT)'}>
+        <Field label={preset.kind === 'custom' ? 'Cron' : preset.kind === 'once' ? `On (${zone})` : `At (${zone})`}>
           {preset.kind === 'custom'
             ? <TextInput value={f.cron} onChange={e => setF(x => ({ ...x, cron: e.target.value }))} placeholder="0 9 * * *" />
             : <div className="flex flex-wrap gap-2">
@@ -629,9 +630,9 @@ export function VoiceRecorder({ onDone, disabled }: { onDone: (p: Pending) => vo
       setRec(r)
     } catch (e) {
       // The usual causes are a denied permission and an insecure context —
-      // getUserMedia does not exist over plain http, only over the ts.net URL.
+      // getUserMedia does not exist over plain http, only over https.
       const insecure = !window.isSecureContext
-      toast(insecure ? 'Recording needs the https address — open the ts.net link, not http://'
+      toast(insecure ? 'Recording needs the https address of this app, not http://'
                      : (e instanceof Error ? e.message : String(e)), 'err')
     }
   }

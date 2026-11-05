@@ -42,7 +42,7 @@ class DispatcherLoop:
             hq_cron.minute_pass()
         except Exception:
             log.exception("cron minute pass failed")
-        try:   # scheduled self-update (no-op unless the 05:00 PKT window passed)
+        try:   # scheduled self-update (no-op unless the daily 05:00 window passed)
             from backend import service as hq_service
             res = hq_service.auto_update_pass()
             if res:

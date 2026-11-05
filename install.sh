@@ -74,4 +74,4 @@ else
 fi
 
 green "done — open http://$HOST:$PORT (add agents from templates on the Agents page)"
-cyan  "updates: '$HERE/.venv/bin/hermes-hq service update' (auto-update runs daily at 05:00 PKT; 'service auto-update --off' disables)"
+cyan  "updates: '$HERE/.venv/bin/hermes-hq service update' (auto-update runs daily at 05:00 in ${HERMES_HQ_TZ:-UTC}; 'service auto-update --off' disables)"

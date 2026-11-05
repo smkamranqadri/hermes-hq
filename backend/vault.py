@@ -58,7 +58,7 @@ The unlocked data key NEVER enters `backend/auth.py`'s session dict:
 `Sessions._save()` serialises that dict to `sessions.json` on disk, so a key
 put there would be written out on the next save. Unlocked keys live in
 `KEYS`, a process-memory map keyed by session token with an idle timeout,
-cleared on logout and gone on every restart (including the 05:00 PKT
+cleared on logout and gone on every restart (including the daily 05:00
 auto-update).
 """
 import contextlib

@@ -2,7 +2,7 @@ import { useEffect, useMemo, useState } from 'react'
 import { Link, useSearchParams } from 'react-router-dom'
 import { useQuery, useQueryClient } from '@tanstack/react-query'
 import clsx from 'clsx'
-import { get, post, useRoster, useProjects, ago } from '../api'
+import { get, post, useRoster, useProjects, useScheduleZone, ago } from '../api'
 import { GlassCard, PageHeader } from '../components/GlassCard'
 import { Empty, Skeleton, Chip, Spinner } from '../components/ui'
 import { Modal, Field, TextInput, TextArea, SelectInput, Btn } from '../components/Modal'
@@ -18,7 +18,7 @@ type CronRun = { status: string | null; started_at: number | string | null; fini
 
 const q = (o: Record<string, string | number | undefined>) => Object.entries(o).filter(([, v]) => v !== undefined && v !== '').map(([k, v]) => `${k}=${encodeURIComponent(String(v))}`).join('&')
 const at = (t: number | null) => t == null ? '—' : new Date(t * 1000).toLocaleString([], { weekday: 'short', month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit' })
-const inKhi = (t: number) => new Date(t * 1000).toLocaleString('en-GB', { timeZone: 'Asia/Karachi', weekday: 'short', hour: '2-digit', minute: '2-digit' })
+const inZone = (t: number, zone: string) => new Date(t * 1000).toLocaleString('en-GB', { timeZone: zone, weekday: 'short', hour: '2-digit', minute: '2-digit' })
 const pill = (cls: string) => clsx('rounded-full border px-1.5 py-0.5 font-mono text-[10px]', cls)
 const KIND: Record<string, string> = { fired: 'border-working/50 text-working', late: 'border-needsyou/50 text-needsyou', manual: 'border-accent/50 text-accent-2', skipped: 'border-line text-muted', error: 'border-error/50 text-error' }
 
@@ -51,7 +51,7 @@ function TaskSchedules() {
   return (
     <div className="min-w-0">
       <div className="mb-3 flex flex-wrap items-center justify-between gap-2">
-        <p className="font-mono text-[10px] uppercase tracking-widest text-muted">{rows.length} schedule{rows.length === 1 ? '' : 's'} · times in Asia/Karachi · fired by the dispatcher even while dispatching is paused</p>
+        <p className="font-mono text-[10px] uppercase tracking-widest text-muted">{rows.length} schedule{rows.length === 1 ? '' : 's'} · times in {list.data?.zone ?? 'UTC'} · fired by the dispatcher even while dispatching is paused</p>
         <Btn onClick={() => setEditing('new')}>New schedule</Btn>
       </div>
       {list.isLoading ? <div className="grid gap-3 lg:grid-cols-2"><Skeleton rows={4} card /><Skeleton rows={4} card /></div>
@@ -66,7 +66,7 @@ function TaskSchedules() {
                 {s.open_task && <span className={pill('border-needsyou/50 text-needsyou')} title={`task #${s.last_task_id} is ${s.last_task_status}`}>previous open</span>}
                 <button role="switch" aria-checked={!!s.enabled} aria-label={`${s.enabled ? 'Pause' : 'Resume'} ${s.name}`} disabled={busy === `t:${s.id}`} onClick={() => act(`t:${s.id}`, () => post(`/api/schedules/${s.id}/${s.enabled ? 'pause' : 'resume'}`), s.enabled ? 'Paused' : 'Resumed')} className={clsx('relative ml-auto h-5 w-9 shrink-0 rounded-full border transition', s.enabled ? 'border-accent bg-accent/60' : 'border-line bg-inset')}><span className={clsx('absolute top-0.5 size-3.5 rounded-full bg-fg transition', s.enabled ? 'left-4' : 'left-0.5')} /></button>
               </div>
-              <p className="font-mono text-[11px] text-muted">{s.cron_text} <span className="opacity-60">({s.cron})</span>{s.enabled ? <> · next {s.next_fires[0] ? `${inKhi(s.next_fires[0])} PKT` : '—'}</> : null}</p>
+              <p className="font-mono text-[11px] text-muted">{s.cron_text} <span className="opacity-60">({s.cron})</span>{s.enabled ? <> · next {s.next_fires[0] ? `${inZone(s.next_fires[0], s.zone)} ${s.zone}` : '—'}</> : null}</p>
               <p className="truncate text-xs"><span className="text-muted">creates</span> {s.title} <span className="text-muted">in</span> {s.project_slug}{s.assignee_profile && <> <span className="text-muted">for</span> {s.assignee_profile}</>}</p>
               <div className="flex flex-wrap items-center gap-1 font-mono text-[10px] text-muted">
                 <span className={pill('border-line text-muted')}>{s.overlap === 'skip' ? 'skip when open' : 'always create'}</span>
@@ -96,6 +96,7 @@ function SchedModal({ s, onClose, onDone }: { s: Sched | null; onClose: () => vo
   const [preset, setPreset] = useState({ kind: 'custom', at: '09:00', dow: 'mon', day: 1, every_hours: 6 })
   const [busy, setBusy] = useState(false); const [confirmDel, setConfirmDel] = useState(false)
   const pv = useCronPreview(f.cron)
+  const zone = useScheduleZone()
   useEffect(() => {
     if (preset.kind === 'custom') return
     post<{ cron: string }>('/api/schedules/compile', preset).then(r => setF(x => ({ ...x, cron: r.cron }))).catch(() => undefined)
@@ -119,7 +120,7 @@ function SchedModal({ s, onClose, onDone }: { s: Sched | null; onClose: () => vo
             <option value="custom">custom cron…</option><option value="daily">every day</option><option value="weekdays">weekdays</option><option value="weekly">weekly</option><option value="monthly">monthly</option><option value="hours">every N hours</option>
           </SelectInput>
         </Field>
-        <Field label={preset.kind === 'hours' ? 'Every / minute' : 'At (PKT)'}>
+        <Field label={preset.kind === 'hours' ? 'Every / minute' : `At (${zone})`}>
           <div className="flex gap-2">
             {preset.kind === 'weekly' && <SelectInput value={preset.dow} onChange={e => setPreset(x => ({ ...x, dow: e.target.value }))}>{['mon', 'tue', 'wed', 'thu', 'fri', 'sat', 'sun'].map(d => <option key={d}>{d}</option>)}</SelectInput>}
             {preset.kind === 'monthly' && <TextInput type="number" min={1} max={28} value={preset.day} onChange={e => setPreset(x => ({ ...x, day: Number(e.target.value) }))} className="w-20" aria-label="Day of month" />}
@@ -128,7 +129,7 @@ function SchedModal({ s, onClose, onDone }: { s: Sched | null; onClose: () => vo
             {preset.kind === 'custom' && <TextInput value={f.cron} onChange={e => { setF(x => ({ ...x, cron: e.target.value })) }} placeholder="0 9 * * 1" aria-label="Cron expression" />}
           </div>
         </Field>
-        <p className="text-[11px] text-muted sm:col-span-2">{pv.isError ? <span className="text-error">{(pv.error as Error).message}</span> : pv.data ? <>⟳ {pv.data.text} · next: {pv.data.next_fires.map(t => inKhi(t)).join(' · ')} <span className="opacity-60">PKT</span></> : '…'}</p>
+        <p className="text-[11px] text-muted sm:col-span-2">{pv.isError ? <span className="text-error">{(pv.error as Error).message}</span> : pv.data ? <>⟳ {pv.data.text} · next: {pv.data.next_fires.map(t => inZone(t, zone)).join(' · ')} <span className="opacity-60">{zone}</span></> : '…'}</p>
         <div className="sm:col-span-2"><Field label="Task title" hint="{date} {week} {month} expand at fire time"><TextInput value={f.title} onChange={set('title')} placeholder="Publish weekly brief {week}" /></Field></div>
         <div className="sm:col-span-2"><Field label="Description"><TextArea value={f.description} onChange={set('description')} /></Field></div>
         <div className="sm:col-span-2"><Field label="Definition of done"><TextArea value={f.definition_of_done} onChange={set('definition_of_done')} /></Field></div>
@@ -249,7 +250,7 @@ function CronModal({ j, defaultProfile, onClose, onDone }: { j: CronJob | null; 
         </div></Field>
         <Field label="Deliver to"><SelectInput value={f.deliver} onChange={set('deliver')}>{(targets.data?.targets ?? [{ id: 'local', name: 'Local (save only)', home_target_set: true }]).map(t => <option key={t.id} value={t.id} disabled={!t.home_target_set}>{t.name}{t.home_target_set ? '' : ' — configure first'}</option>)}</SelectInput></Field>
         <div className="sm:col-span-2"><Field label="Prompt" hint="what the agent does each run"><TextArea rows={4} value={f.prompt} onChange={set('prompt')} placeholder="Summarize overnight mentions of …" /></Field></div>
-        {f.mode === 'cron' && <p className="text-[11px] text-muted sm:col-span-2">Hermes cron expressions run in the server clock (UTC) — 04:00 UTC = 09:00 PKT.</p>}
+        {f.mode === 'cron' && <p className="text-[11px] text-muted sm:col-span-2">Hermes cron expressions run in the server clock (UTC), not in the schedule zone.</p>}
       </div>
       <div className="mt-4 flex justify-end gap-2"><Btn kind="ghost" onClick={onClose}>Cancel</Btn><Btn busy={busy} disabled={!f.name.trim() || !f.prompt.trim()} onClick={submit}>{j ? 'Save' : 'Create'}</Btn></div>
     </Modal>
