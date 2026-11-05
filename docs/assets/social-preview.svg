@@ -1,0 +1,51 @@
+<svg xmlns="http://www.w3.org/2000/svg" xmlns:xlink="http://www.w3.org/1999/xlink" viewBox="0 0 1280 640" width="1280" height="640">
+  <title>hermes-hq: a control plane for a Hermes Agent team</title>
+  <defs>
+    <radialGradient id="glow" cx="18%" cy="10%" r="75%">
+      <stop offset="0" stop-color="#3b2370"/>
+      <stop offset="1" stop-color="#0d1117"/>
+    </radialGradient>
+    <linearGradient id="logo" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0" stop-color="#a371f7"/>
+      <stop offset="1" stop-color="#6e40c9"/>
+    </linearGradient>
+    <clipPath id="shot"><rect x="640" y="150" width="600" height="375" rx="14"/></clipPath>
+  </defs>
+  <style>
+    .title { fill: #f0f6fc; font: 700 76px ui-monospace, SFMono-Regular, "JetBrains Mono", Menlo, Consolas, monospace; letter-spacing: -1px; }
+    .lead { fill: #e6edf3; font: 600 26px ui-sans-serif, system-ui, -apple-system, "Segoe UI", sans-serif; }
+    .body { fill: #9198a1; font: 22px ui-sans-serif, system-ui, -apple-system, "Segoe UI", sans-serif; }
+    .pill { font: 600 17px ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; }
+    .foot { fill: #9198a1; font: 18px ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; }
+  </style>
+
+  <rect width="1280" height="640" fill="url(#glow)"/>
+
+  <!-- mark + name -->
+  <rect x="72" y="120" width="72" height="72" rx="16" fill="url(#logo)"/>
+  <text x="90" y="168" fill="#ffffff" style="font: 700 30px ui-monospace, SFMono-Regular, Menlo, monospace">&gt;_</text>
+  <text class="title" x="72" y="290">hermes-hq</text>
+
+  <text class="lead" x="72" y="350">A control plane for a Hermes Agent team.</text>
+  <text class="body" x="72" y="398">Tasks run as real agent sessions, a reviewer</text>
+  <text class="body" x="72" y="430">checks the work, and you only see what needs you.</text>
+
+  <!-- status pills -->
+  <g class="pill">
+    <rect x="72" y="472" width="112" height="38" rx="19" fill="#0c2d6b" stroke="#388bfd"/>
+    <text x="128" y="497" text-anchor="middle" fill="#79c0ff">Queued</text>
+    <rect x="196" y="472" width="124" height="38" rx="19" fill="#0f2d1a" stroke="#3fb950"/>
+    <text x="258" y="497" text-anchor="middle" fill="#56d364">Working</text>
+    <rect x="332" y="472" width="140" height="38" rx="19" fill="#341a00" stroke="#d29922"/>
+    <text x="402" y="497" text-anchor="middle" fill="#e3b341">Needs you</text>
+    <rect x="484" y="472" width="100" height="38" rx="19" fill="#271052" stroke="#a371f7"/>
+    <text x="534" y="497" text-anchor="middle" fill="#d2a8ff">Done</text>
+  </g>
+
+  <!-- product shot -->
+  <rect x="636" y="146" width="608" height="383" rx="17" fill="#30363d"/>
+  <image x="545" y="150" width="960" height="600" preserveAspectRatio="none" clip-path="url(#shot)" href="overview.png" xlink:href="overview.png"/>
+
+  <text class="foot" x="72" y="584">github.com/smkamranqadri/hermes-hq</text>
+  <text class="foot" x="1208" y="584" text-anchor="end">self-hosted · MIT</text>
+</svg>

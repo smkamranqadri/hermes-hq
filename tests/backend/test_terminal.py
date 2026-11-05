@@ -86,7 +86,10 @@ def test_shell_user_resize_reattach_close(env):
         out = _read_until(ws, b"30 100")
         expect_uid = terminal.target_user()[0] if os.geteuid() == 0 else os.geteuid()
         assert f"UID={expect_uid}".encode() in out
-        assert f"HOME={home}".encode() in out
+        # As root the shell drops to the terminal user and gets the configured
+        # terminal home; unprivileged, it keeps the server user's own HOME.
+        expect_home = home if os.geteuid() == 0 else (os.environ.get("HOME") or os.getcwd())
+        assert f"HOME={expect_home}\r\n".encode() in out
         if os.geteuid() == 0:
             assert expect_uid != 0 and expect_uid == 10000
         ws.send_text(json.dumps({"t": "r", "cols": 120, "rows": 40}))
